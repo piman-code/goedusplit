@@ -2071,9 +2071,13 @@ class MainWindow(QMainWindow):
         self.lbl_ai_review_note.setProperty("role", "muted")
         self.lbl_ai_review_note.setWordWrap(True)
         head.addWidget(self.lbl_ai_review_note, 1)
-        btn_load = QPushButton("파일 불러오기")
+        btn_load = QPushButton("문항 PDF/자료")
         btn_load.clicked.connect(self._load_ai_review_file)
         head.addWidget(btn_load)
+        btn_reference = QPushButton("성취기준·수준 자료")
+        btn_reference.setToolTip("성취기준, 성취수준, 최소능력자 설명 자료를 참고자료 칸에 불러옵니다.")
+        btn_reference.clicked.connect(self._load_ai_reference_file)
+        head.addWidget(btn_reference)
         btn_written_example = QPushButton("지필 예시")
         btn_written_example.setToolTip("지필평가 문항 예시를 원문 칸에 넣어 흐름을 테스트합니다.")
         btn_written_example.clicked.connect(lambda: self._insert_ai_review_example("written"))
@@ -2118,14 +2122,29 @@ class MainWindow(QMainWindow):
         split = QSplitter(Qt.Horizontal)
         left = QWidget()
         left_layout = QVBoxLayout(left); left_layout.setContentsMargins(0, 0, 0, 0); left_layout.setSpacing(6)
-        left_title = QLabel("원문 / 붙여넣기")
+        left_title = QLabel("입력 자료")
         left_title.setProperty("role", "title")
         left_layout.addWidget(left_title)
+
+        self.ai_review_input_tabs = QTabWidget()
+        source_panel = QWidget()
+        source_layout = QVBoxLayout(source_panel); source_layout.setContentsMargins(0, 0, 0, 0)
         self.txt_ai_review_source = QPlainTextEdit()
         self.txt_ai_review_source.setPlaceholderText(
-            "문항지, 수행평가 채점기준표, 성취기준별 성취수준, 문항정보표 내용을 붙여 넣거나 파일을 불러오세요."
+            "시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 붙여 넣거나 '문항 PDF/자료'로 불러오세요."
         )
-        left_layout.addWidget(self.txt_ai_review_source, 1)
+        source_layout.addWidget(self.txt_ai_review_source, 1)
+        self.ai_review_input_tabs.addTab(source_panel, "문항 자료")
+
+        reference_panel = QWidget()
+        reference_layout = QVBoxLayout(reference_panel); reference_layout.setContentsMargins(0, 0, 0, 0)
+        self.txt_ai_review_reference = QPlainTextEdit()
+        self.txt_ai_review_reference.setPlaceholderText(
+            "성취기준, 성취수준 A~E 설명, 최소능력자 특성, 평가기준 자료를 붙여 넣거나 '성취기준·수준 자료'로 불러오세요."
+        )
+        reference_layout.addWidget(self.txt_ai_review_reference, 1)
+        self.ai_review_input_tabs.addTab(reference_panel, "성취기준·수준")
+        left_layout.addWidget(self.ai_review_input_tabs, 1)
         split.addWidget(left)
 
         right = QWidget()
@@ -2174,8 +2193,9 @@ class MainWindow(QMainWindow):
         <h2>AI 문항 검토 사용 흐름</h2>
         <p><b>목적</b>: AI가 최종 판단을 대신하는 것이 아니라, 교사가 검토할 표를 먼저 채워 분할점수 산정의 출발점을 빠르게 만드는 것입니다.</p>
         <ol>
-          <li>왼쪽 원문 칸에 문항지, 문항정보표, 수행평가 채점기준표를 붙여 넣습니다.</li>
-          <li><b>검토 초안 생성</b>을 누르면 앱 내부 규칙으로 성취기준, 평가유형, 목표수준, 난이도, A~E 예상값을 만듭니다.</li>
+          <li><b>문항 자료</b> 칸에 시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 넣습니다.</li>
+          <li><b>성취기준·수준</b> 칸에 성취기준, A~E 성취수준 설명, 최소능력자 특성 자료를 넣습니다.</li>
+          <li><b>검토 초안 생성</b>을 누르면 앱 내부 규칙으로 문항을 먼저 나누고, 참고자료와 대조해 성취기준, 평가유형, 목표수준, 난이도, A~E 예상값을 만듭니다.</li>
           <li>로컬 AI를 연결했다면 <b>AI로 보강</b>을 눌러 근거와 판단을 더 정교하게 보강합니다.</li>
           <li>지필 문항은 <b>지필→예상정답률</b>, 수행평가는 <b>수행→재산정</b>으로 보냅니다.</li>
           <li>교사가 문항을 직접 보며 A~E 예상값을 수정하고 최종 분할점수를 확인합니다.</li>
@@ -2184,6 +2204,7 @@ class MainWindow(QMainWindow):
         <h3>지필평가 예시 해석</h3>
         <p><code>C 예상 2/3</code>은 C 수준 최소능력자 3명 중 2명 정도가 맞힐 것 같다는 뜻입니다.</p>
         <p><code>A 수준 문항</code>은 A 학생만 맞히는 문항이라는 뜻이 아니라, A 수준 최소능력자 3명 중 약 2명이 해결할 수 있는 문항이라는 뜻으로 봅니다.</p>
+        <p>AI 보강은 문항 자료만 보지 않고, 성취기준·수준 자료를 기준표로 삼아 어떤 성취기준과 성취수준에 가까운지 다시 판단합니다.</p>
 
         <h3>수행평가 예시 해석</h3>
         <p>수행평가는 O/X가 아니라 평가요소별 예상점수로 봅니다. 예를 들어 <code>B 예상 7.5점</code>은 B 수준 최소능력자가 해당 평가요소에서 대략 7.5점을 받을 것으로 본다는 뜻입니다.</p>
@@ -2430,22 +2451,69 @@ API 키: 비워둠</pre>
             "문항 내용: 실생활 자료를 함수식으로 모델링하고 그래프의 변화율을 해석하여 결론을 정당화한다."
         )
 
+    def _ai_review_reference_example_text(self, kind: str) -> str:
+        if kind == "perform":
+            return (
+                "[10공수1-03-01] 함수의 그래프를 해석하고 상황에 맞게 모델링할 수 있다.\n"
+                "A 수준: 주어진 상황을 수학적 모델로 일반화하고, 그래프의 의미와 한계를 근거와 함께 설명한다.\n"
+                "B 수준: 상황을 함수식이나 그래프로 표현하고 주요 특징을 설명한다.\n"
+                "C 수준: 기본적인 함수식과 그래프의 대응 관계를 설명한다.\n"
+                "D 수준: 안내된 절차에 따라 일부 값의 대응 관계를 찾는다.\n"
+                "E 수준: 도움을 받아 함수식 또는 그래프의 기본 의미를 확인한다.\n"
+                "\n"
+                "[10공수1-02-02] 이차방정식의 실근과 허근을 이해하고 판별식을 활용할 수 있다.\n"
+                "A 수준: 판별식을 근의 구조와 연결하고 이유를 논리적으로 설명한다.\n"
+                "B 수준: 판별식을 계산하여 근의 종류를 정확히 판별한다.\n"
+                "C 수준: 판별식 계산 절차를 알고 기본 문항에 적용한다.\n"
+                "D 수준: 안내에 따라 계수를 대입하고 일부 계산을 수행한다.\n"
+                "E 수준: 도움을 받아 판별식의 형태와 의미를 확인한다."
+            )
+        return (
+            "[10공수1-01-01] 다항식의 사칙연산 원리를 설명하고 계산할 수 있다.\n"
+            "A 수준: 다항식 연산 원리를 일반화하고 여러 표현을 연결해 설명한다.\n"
+            "B 수준: 다항식의 사칙연산 원리를 설명하고 복합 계산을 수행한다.\n"
+            "C 수준: 기본적인 다항식 덧셈, 뺄셈, 곱셈을 수행한다.\n"
+            "D 수준: 안내된 절차에 따라 간단한 다항식 계산을 수행한다.\n"
+            "E 수준: 도움을 받아 동류항과 기본 계산 절차를 확인한다.\n"
+            "\n"
+            "[10공수1-02-03] 이차방정식의 근과 계수의 관계를 설명할 수 있다.\n"
+            "A 수준: 근과 계수의 관계를 여러 상황에 적용하고 식의 의미를 정당화한다.\n"
+            "B 수준: 근과 계수의 관계를 설명하고 표준적인 문항에 적용한다.\n"
+            "C 수준: 두 근의 합과 곱을 계수와 연결해 구한다.\n"
+            "D 수준: 안내에 따라 두 근의 합 또는 곱 일부를 구한다.\n"
+            "E 수준: 도움을 받아 근과 계수 관계의 기본 형태를 확인한다.\n"
+            "\n"
+            "[10공수1-03-01] 함수의 그래프를 해석하고 상황에 맞게 모델링할 수 있다.\n"
+            "A 수준: 실생활 자료를 함수식으로 모델링하고 그래프의 변화율을 해석하여 결론을 정당화한다.\n"
+            "B 수준: 자료의 관계를 함수식이나 그래프로 표현하고 주요 특징을 설명한다.\n"
+            "C 수준: 기본적인 그래프 정보를 읽고 함수식과 연결한다.\n"
+            "D 수준: 안내에 따라 그래프의 일부 정보를 찾는다.\n"
+            "E 수준: 도움을 받아 좌표, 증가·감소 등 기본 정보를 확인한다."
+        )
+
     def _insert_ai_review_example(self, kind: str):
         if not hasattr(self, "txt_ai_review_source"):
             return
-        if self.txt_ai_review_source.toPlainText().strip():
+        source_has_text = self.txt_ai_review_source.toPlainText().strip()
+        reference_has_text = (
+            hasattr(self, "txt_ai_review_reference")
+            and self.txt_ai_review_reference.toPlainText().strip()
+        )
+        if source_has_text or reference_has_text:
             answer = QMessageBox.question(
                 self,
                 "예시 입력",
-                "현재 원문 내용을 예시로 바꿀까요?",
+                "현재 문항 자료와 성취기준·수준 자료를 예시로 바꿀까요?",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             if answer != QMessageBox.Yes:
                 return
         self.txt_ai_review_source.setPlainText(self._ai_review_example_text(kind))
+        if hasattr(self, "txt_ai_review_reference"):
+            self.txt_ai_review_reference.setPlainText(self._ai_review_reference_example_text(kind))
         label = "수행평가" if kind == "perform" else "지필평가"
-        self.statusBar().showMessage(f"{label} AI 검토 예시를 입력했습니다. '검토 초안 생성'을 눌러 확인하세요.", 4500)
+        self.statusBar().showMessage(f"{label} 문항 자료와 성취기준·수준 예시를 입력했습니다. '검토 초안 생성'을 누르세요.", 5000)
 
     def _extract_text_from_review_file(self, path: str) -> str:
         p = Path(path)
@@ -2480,10 +2548,30 @@ API 키: 비워둠</pre>
             return "\n".join(pages)
         raise ValueError("지원 형식: .txt, .md, .csv, .json, .xlsx, .xlsm, .pdf")
 
+    def _set_ai_review_source_text(self, text: str, *, target: str = "source"):
+        if target == "reference" and hasattr(self, "txt_ai_review_reference"):
+            self.txt_ai_review_reference.setPlainText(text[:60000])
+            if hasattr(self, "ai_review_input_tabs"):
+                self.ai_review_input_tabs.setCurrentIndex(1)
+            return
+        self.txt_ai_review_source.setPlainText(text[:60000])
+        if hasattr(self, "ai_review_input_tabs"):
+            self.ai_review_input_tabs.setCurrentIndex(0)
+
+    def _ai_review_source_text(self) -> str:
+        if not hasattr(self, "txt_ai_review_source"):
+            return ""
+        return self.txt_ai_review_source.toPlainText().strip()
+
+    def _ai_review_reference_text(self) -> str:
+        if not hasattr(self, "txt_ai_review_reference"):
+            return ""
+        return self.txt_ai_review_reference.toPlainText().strip()
+
     def _load_ai_review_file(self):
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "문항지 또는 채점기준표 불러오기",
+            "시험 문제 PDF 또는 문항 자료 불러오기",
             "",
             "검토 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
         )
@@ -2494,8 +2582,25 @@ API 키: 비워둠</pre>
         except Exception as e:
             QMessageBox.warning(self, "AI 문항 검토", f"파일을 읽지 못했습니다.\n{e}")
             return
-        self.txt_ai_review_source.setPlainText(text[:60000])
-        self.statusBar().showMessage(f"AI 문항 검토 자료 불러오기 완료 · {Path(path).name}", 4000)
+        self._set_ai_review_source_text(text, target="source")
+        self.statusBar().showMessage(f"문항 자료 불러오기 완료 · {Path(path).name}", 4000)
+
+    def _load_ai_reference_file(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "성취기준·성취수준 참고자료 불러오기",
+            "",
+            "참고 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
+        )
+        if not path:
+            return
+        try:
+            text = self._extract_text_from_review_file(path)
+        except Exception as e:
+            QMessageBox.warning(self, "AI 문항 검토", f"참고자료를 읽지 못했습니다.\n{e}")
+            return
+        self._set_ai_review_source_text(text, target="reference")
+        self.statusBar().showMessage(f"성취기준·수준 자료 불러오기 완료 · {Path(path).name}", 4000)
 
     def _load_ai_review_from_exam(self):
         if self.exam is None:
@@ -2513,7 +2618,7 @@ API 키: 비워둠</pre>
                 f"문항 {item.number} | 유형 {item.item_type} | 난이도 {item.difficulty or '-'} | "
                 f"배점 {item.score:g} | 내용영역 {item.content_area or '-'} | 성취기준 {standard or '-'}"
             )
-        self.txt_ai_review_source.setPlainText("\n".join(lines))
+        self._set_ai_review_source_text("\n".join(lines), target="source")
         self.statusBar().showMessage("현재 문항정보표를 AI 문항 검토 원문으로 가져왔습니다.", 3500)
 
     def _split_ai_review_blocks(self, text: str) -> list[dict]:
@@ -2557,7 +2662,76 @@ API 키: 비워둠</pre>
             blocks.append({"kind": "전체 자료", "label": "전체", "text": text.strip()[:4000]})
         return blocks[:120]
 
-    def _infer_ai_review_row(self, block: dict) -> dict:
+    @staticmethod
+    def _ai_reference_tokens(text: str) -> set[str]:
+        stopwords = {
+            "성취기준", "성취수준", "수준", "문항", "자료", "설명", "확인",
+            "있다", "한다", "대한", "통해", "기본", "도움", "안내",
+        }
+        tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", text or ""))
+        return {token for token in tokens if token not in stopwords}
+
+    def _ai_reference_entries(self, reference_text: str) -> list[dict[str, str | set[str]]]:
+        lines = [re.sub(r"\s+", " ", line).strip() for line in reference_text.splitlines()]
+        lines = [line for line in lines if line]
+        entries: list[dict[str, str | set[str]]] = []
+        current: list[str] = []
+        current_code = ""
+
+        def flush():
+            if not current:
+                return
+            text = " ".join(current).strip()
+            if not text:
+                return
+            entries.append({
+                "code": current_code,
+                "text": text[:900],
+                "tokens": self._ai_reference_tokens(text),
+            })
+
+        for line in lines:
+            codes = re.findall(r"\[[^\]\n]{4,40}\]", line)
+            starts_standard = bool(codes) or line.startswith(("성취기준", "평가기준"))
+            if starts_standard and current:
+                flush()
+                current = []
+                current_code = ""
+            if codes and not current_code:
+                current_code = codes[0]
+            current.append(line)
+        flush()
+        if not entries and reference_text.strip():
+            text = reference_text.strip()[:3000]
+            entries.append({"code": "", "text": text, "tokens": self._ai_reference_tokens(text)})
+        return entries[:120]
+
+    def _match_ai_reference_entry(self, compact_text: str, entries: list[dict[str, str | set[str]]]) -> dict[str, str | set[str]] | None:
+        if not entries:
+            return None
+        codes = re.findall(r"\[[^\]\n]{4,40}\]", compact_text)
+        for code in codes:
+            for entry in entries:
+                if code and code == entry.get("code"):
+                    return entry
+                if code and code in str(entry.get("text", "")):
+                    return entry
+        tokens = self._ai_reference_tokens(compact_text)
+        if not tokens:
+            return None
+        best = None
+        best_score = 0
+        for entry in entries:
+            entry_tokens = entry.get("tokens", set())
+            if not isinstance(entry_tokens, set):
+                continue
+            score = len(tokens & entry_tokens)
+            if score > best_score:
+                best = entry
+                best_score = score
+        return best if best_score >= 2 else None
+
+    def _infer_ai_review_row(self, block: dict, reference_entries: list[dict[str, str | set[str]]] | None = None) -> dict:
         text = block["text"]
         compact = re.sub(r"\s+", " ", text)
         codes = re.findall(r"\[[^\]\n]{4,40}\]", compact)
@@ -2565,6 +2739,12 @@ API 키: 비워둠</pre>
         if standard:
             pos = compact.find(standard)
             standard = compact[pos:pos + 130].strip()
+        matched_reference = self._match_ai_reference_entry(compact, reference_entries or [])
+        if matched_reference:
+            reference_text = str(matched_reference.get("text", "")).strip()
+            reference_code = str(matched_reference.get("code", "")).strip()
+            if reference_text and (not standard or standard == reference_code or (reference_code and reference_code in standard)):
+                standard = reference_text[:130].strip()
 
         explicit_level = ""
         for lv in LEVELS_AE:
@@ -2620,10 +2800,14 @@ API 키: 비워둠</pre>
             review_type = "지필 문항"
 
         evidence_terms = [term for term in high_terms + mid_terms + low_terms if term in compact][:4]
+        if matched_reference:
+            evidence_terms.append("참고자료 매칭")
         evidence = " · ".join(evidence_terms) if evidence_terms else compact[:90]
         warnings = []
-        if not codes:
+        if not codes and not matched_reference:
             warnings.append("성취기준 코드 확인")
+        if reference_entries and not matched_reference:
+            warnings.append("성취기준·수준 자료 대조 확인")
         if block["kind"] == "전체 자료":
             warnings.append("문항/평가요소 분리 확인")
         if review_type == "지필 문항" and "배점" not in compact:
@@ -2693,17 +2877,21 @@ API 키: 비워둠</pre>
             prev = rate
         return values
 
-    def _make_ai_review_prompt(self, rows: list[dict], source_text: str) -> str:
+    def _make_ai_review_prompt(self, rows: list[dict], source_text: str, reference_text: str = "") -> str:
         preview = source_text.strip()
         if len(preview) > 12000:
             preview = preview[:12000] + "\n...(이하 생략)"
+        reference_preview = reference_text.strip()
+        if len(reference_preview) > 10000:
+            reference_preview = reference_preview[:10000] + "\n...(이하 생략)"
         row_lines = "\n".join(
             f"- {row['label']}: 유형={row['review_type']}, 목표={row['target']}, 난이도={row['difficulty']}, 성취기준={row['standard']}"
             for row in rows[:60]
         )
         return (
             "너는 고등학교 성취평가 현장지원단의 문항 검토 보조자다.\n"
-            "아래 자료를 바탕으로 각 문항 또는 수행평가 평가요소의 성취기준, 목표 성취수준 후보, 난이도 후보를 제안하라.\n"
+            "먼저 시험 문제 자료를 문항 단위로 분석한 뒤, 성취기준·성취수준 참고자료와 대조하여 "
+            "각 문항 또는 수행평가 평가요소의 성취기준, 목표 성취수준 후보, 난이도 후보를 제안하라.\n"
             "중요 원칙: 자동 확정하지 말고, 교사가 검토할 수 있도록 근거 문장을 함께 제시한다.\n"
             "A 수준 문항은 A 수준 최소능력자 3명 중 약 2명이 해결할 수 있는 문항이라는 기준으로 판단한다.\n"
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수를 산출할 수 있도록 채점기준표의 행동 표현을 분석한다.\n\n"
@@ -2713,14 +2901,19 @@ API 키: 비워둠</pre>
             "수행평가는 만점 대비 예상점수 또는 90% 같은 비율로 쓴다.\n\n"
             "[로컬 초안]\n"
             f"{row_lines}\n\n"
-            "[원문]\n"
-            f"{preview}"
+            "[시험 문제 자료]\n"
+            f"{preview}\n\n"
+            "[성취기준·성취수준 참고자료]\n"
+            f"{reference_preview or '(참고자료 없음)'}"
         )
 
-    def _make_structured_ai_review_prompt(self, rows: list[dict], source_text: str) -> str:
+    def _make_structured_ai_review_prompt(self, rows: list[dict], source_text: str, reference_text: str = "") -> str:
         preview = source_text.strip()
         if len(preview) > 18000:
             preview = preview[:18000] + "\n...(이하 생략)"
+        reference_preview = reference_text.strip()
+        if len(reference_preview) > 16000:
+            reference_preview = reference_preview[:16000] + "\n...(이하 생략)"
         draft = "\n".join(
             f"- {row.get('label') or row.get('번호/요소')}: 유형={row.get('review_type') or row.get('평가유형')}, "
             f"목표={row.get('target') or row.get('목표수준 후보')}, 난이도={row.get('difficulty') or row.get('난이도 후보')}, "
@@ -2730,7 +2923,9 @@ API 키: 비워둠</pre>
         )
         return (
             "너는 고등학교 성취평가 현장지원단의 문항 검토 보조자다.\n"
-            "아래 원문과 로컬 초안을 바탕으로 문항/수행평가 평가요소를 다시 검토하라.\n"
+            "아래 시험 문제 자료와 로컬 초안, 성취기준·성취수준 참고자료를 바탕으로 문항/수행평가 평가요소를 다시 검토하라.\n"
+            "작업 순서는 반드시 1) 시험 문제 자료를 문항 단위로 읽기, 2) 참고자료에서 가장 가까운 성취기준과 성취수준 설명 찾기, "
+            "3) 그 기준에 맞춰 목표수준·난이도·A~E 예상값 제안하기 순서로 한다.\n"
             "AI 판정은 최종 확정이 아니라 교사가 검토할 초안이다.\n"
             "A 수준 문항은 A 수준 최소능력자 3명 중 약 2명이 해결할 수 있다는 기준으로 본다.\n"
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수 산정에 도움이 되도록 근거를 쓴다.\n\n"
@@ -2746,8 +2941,10 @@ API 키: 비워둠</pre>
             "A에서 E로 갈수록 예상값은 같거나 낮아야 한다.\n\n"
             "[로컬 초안]\n"
             f"{draft}\n\n"
-            "[원문]\n"
-            f"{preview}"
+            "[시험 문제 자료]\n"
+            f"{preview}\n\n"
+            "[성취기준·성취수준 참고자료]\n"
+            f"{reference_preview or '(참고자료 없음)'}"
         )
 
     def _set_ai_review_summary(self, rows: int, standards: int, warnings: int, mode: str = "로컬 초안"):
@@ -2798,34 +2995,38 @@ API 키: 비워둠</pre>
     def _generate_ai_review_draft(self):
         if not hasattr(self, "txt_ai_review_source"):
             return
-        text = self.txt_ai_review_source.toPlainText().strip()
+        text = self._ai_review_source_text()
+        reference_text = self._ai_review_reference_text()
         if not text:
-            QMessageBox.information(self, "AI 문항 검토", "먼저 원문을 붙여 넣거나 파일을 불러와 주세요.")
+            QMessageBox.information(self, "AI 문항 검토", "먼저 문항 자료를 붙여 넣거나 시험 문제 PDF를 불러와 주세요.")
             return
+        reference_entries = self._ai_reference_entries(reference_text)
         blocks = self._split_ai_review_blocks(text)
-        rows = [self._infer_ai_review_row(block) for block in blocks]
+        rows = [self._infer_ai_review_row(block, reference_entries) for block in blocks]
         self._populate_ai_review_table(rows, mode="로컬 초안")
-        self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(rows, text))
+        self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(rows, text, reference_text))
         self.statusBar().showMessage(f"AI 문항 검토 초안 생성 완료 · {len(rows)}개 항목", 3500)
 
     def _run_ai_review_completion(self):
         if not hasattr(self, "txt_ai_review_source"):
             return
-        text = self.txt_ai_review_source.toPlainText().strip()
+        text = self._ai_review_source_text()
+        reference_text = self._ai_review_reference_text()
         if not text:
-            QMessageBox.information(self, "AI 문항 검토", "먼저 원문을 붙여 넣거나 파일을 불러와 주세요.")
+            QMessageBox.information(self, "AI 문항 검토", "먼저 문항 자료를 붙여 넣거나 시험 문제 PDF를 불러와 주세요.")
             return
         config = self._ai_provider_config()
         self._save_ai_settings()
+        reference_entries = self._ai_reference_entries(reference_text)
         blocks = self._split_ai_review_blocks(text)
-        local_rows = [self._infer_ai_review_row(block) for block in blocks]
+        local_rows = [self._infer_ai_review_row(block, reference_entries) for block in blocks]
         if config.provider == "local_draft":
             self._populate_ai_review_table(local_rows, mode="로컬 초안")
-            self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(local_rows, text))
+            self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(local_rows, text, reference_text))
             self.statusBar().showMessage("로컬 초안으로 검토표를 갱신했습니다.", 3500)
             return
 
-        prompt = self._make_structured_ai_review_prompt(local_rows, text)
+        prompt = self._make_structured_ai_review_prompt(local_rows, text, reference_text)
         if hasattr(self, "chk_ai_scrub") and self.chk_ai_scrub.isChecked():
             prompt_to_send = scrub_personal_data(prompt, self._student_names_for_privacy())
         else:
@@ -3279,12 +3480,13 @@ API 키: 비워둠</pre>
         두 기능은 모두 “최소능력자가 어느 정도 수행할 수 있는가”를 숫자로 옮기는 같은 구조입니다.</p>
 
         <h2>AI 문항 검토 방향</h2>
-        <p><b>AI 문항 검토</b> 탭은 문항지, 문항정보표, 수행평가 채점기준표를 읽어 검토 초안을 만드는 작업 공간입니다.</p>
+        <p><b>AI 문항 검토</b> 탭은 시험 문제 자료를 먼저 문항 단위로 읽고, 별도로 넣은 성취기준·성취수준 자료와 대조해 검토 초안을 만드는 작업 공간입니다.</p>
         <ul>
-          <li><b>파일 불러오기</b>: txt, csv, xlsx, pdf 자료를 원문으로 불러옵니다. PDF는 텍스트 추출 가능한 파일이어야 합니다.</li>
+          <li><b>문항 PDF/자료</b>: 시험 문제 PDF, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다. PDF는 텍스트 추출 가능한 파일이어야 합니다.</li>
+          <li><b>성취기준·수준 자료</b>: 성취기준, 성취수준 A~E 설명, 최소능력자 특성 자료를 참고자료 칸으로 불러옵니다.</li>
           <li><b>현재 문항정보표</b>: 이미 분석한 문항정보표를 검토 원문으로 가져옵니다.</li>
-          <li><b>검토 초안 생성</b>: 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, 근거, 추가 확인 질문을 표로 정리합니다.</li>
-          <li><b>AI로 보강</b>: AI 설정에 지정한 로컬/클라우드 모델로 검토표를 다시 제안받습니다. 기본값은 외부 전송이 없는 로컬 초안입니다.</li>
+          <li><b>검토 초안 생성</b>: 문항 자료를 먼저 나누고 참고자료와 대조해 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, 근거, 추가 확인 질문을 표로 정리합니다.</li>
+          <li><b>AI로 보강</b>: AI 설정에 지정한 로컬/클라우드 모델이 문항 자료와 성취기준·수준 자료를 함께 읽고 검토표를 다시 제안합니다. 기본값은 외부 전송이 없는 로컬 초안입니다.</li>
           <li><b>A~E 예상</b>: 지필 문항은 각 수준 대표 3명 중 몇 명이 맞힐지 <code>2/3</code>처럼 표시하고, 수행평가는 <code>80%</code> 또는 <code>8점</code>처럼 예상점수를 표시합니다.</li>
           <li><b>AI 설정</b>: Ollama 로컬, MLX-LM/LM Studio 같은 OpenAI 호환 로컬 서버, 클라우드 API의 엔드포인트와 모델을 저장합니다.</li>
           <li><b>개인정보 제거</b>: 외부 서버로 보낼 때 학생 이름, 반/번호, 전화번호, 이메일을 가능한 한 제거합니다. 그래도 최종 전송 여부는 교사가 확인합니다.</li>
