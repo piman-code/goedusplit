@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+build/
+dist/
+out_test/
+sample_data/
+*.log
+*.spec.bak
+.idea/
+.vscode/
+.DS_Store
+app/__pycache__/
+build_scripts/__pycache__/
