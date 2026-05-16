@@ -1,0 +1,58 @@
+"""
+GUI(Qt) 의존성 없는 색 팔레트.
+theme.py와 charts.py에서 함께 참조한다.
+"""
+
+LIGHT = {
+    "bg":          "#f3f6f7",
+    "panel":       "#ffffff",
+    "card":        "#f8fbfb",
+    "text":        "#202326",
+    "muted":       "#6e7781",
+    "border":      "#dce3e6",
+    "accent":      "#2a7770",
+    "accent_hover":"#246b64",
+    "highlight":   "#fff3a4",
+    "shade":       "#eef7f4",
+    "good":        "#2f7d57",
+    "warn":        "#b8691b",
+    "bad":         "#b94a48",
+    "chart_bg":    "#ffffff",
+    "chart_grid":  "#dce3e6",
+    "chart_text":  "#202326",
+    "level_A":     "#205b7a",
+    "level_B":     "#2a7770",
+    "level_C":     "#69a68f",
+    "level_D":     "#c4d8a7",
+    "level_E":     "#f0d998",
+    "level_미도달": "#9aa3a1",
+    "p_bar":       "#b8d8cf",
+    "d_bar":       "#d7c88f",
+}
+
+DARK = {
+    "bg":          "#12171a",
+    "panel":       "#192125",
+    "card":        "#11181b",
+    "text":        "#eef3f2",
+    "muted":       "#95a19f",
+    "border":      "#2c383d",
+    "accent":      "#67b7a6",
+    "accent_hover":"#8fd3c4",
+    "highlight":   "#facc15",
+    "shade":       "#20302e",
+    "good":        "#78bf8d",
+    "warn":        "#d9a148",
+    "bad":         "#e0716c",
+    "chart_bg":    "#12171a",
+    "chart_grid":  "#2c383d",
+    "chart_text":  "#eef3f2",
+    "level_A":     "#8fd3c4",
+    "level_B":     "#67b7a6",
+    "level_C":     "#4d8f85",
+    "level_D":     "#d9c76f",
+    "level_E":     "#b89355",
+    "level_미도달": "#6d7a79",
+    "p_bar":       "#4d8f85",
+    "d_bar":       "#b89355",
+}

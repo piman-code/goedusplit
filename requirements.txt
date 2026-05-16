@@ -1,0 +1,6 @@
+PySide6>=6.6,<7
+matplotlib>=3.7,<4
+numpy>=1.24,<3
+openpyxl>=3.1,<4
+pypdf>=4,<7
+pyinstaller>=6.6

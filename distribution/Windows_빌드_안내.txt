@@ -1,0 +1,81 @@
+Goedu-Split  성취평가 결과 분석 — Windows 빌드 안내
+제작자: 이준서   버전: 1.0.1
+© 2026 이준서. All rights reserved.
+======================================================
+
+이 zip 파일은 "Windows PC에서 .exe를 빌드"하기 위한 소스 패키지입니다.
+Mac에서는 .exe 파일을 직접 만들 수 없기 때문에 이 절차가 필요합니다.
+
+준비물
+------
+  · Windows 10/11 PC (학교 PC, 동료 PC 모두 가능)
+  · 인터넷 (처음 한 번만 의존성 다운로드용)
+
+
+[1단계] Python 설치 (한 번만)
+-----------------------------------
+  1) https://www.python.org/downloads/windows/ 접속
+  2) "Python 3.11" 다음의 "Windows installer (64-bit)" 다운로드
+  3) 설치 시 ★★★ "Add python.exe to PATH" 체크박스 반드시 켜기 ★★★
+  4) "Install Now" 클릭 → 설치 완료
+
+
+[2단계] zip 압축 풀기
+-----------------------------------
+  1) 받은 "Goedu-Split-1.0.1-source.zip" 파일에 우클릭
+  2) "압축 풀기" 또는 "Extract All..." 선택
+  3) 적당한 곳(예: 바탕 화면)에 풀기
+
+
+[3단계] 빌드 실행 (5~10분)
+-----------------------------------
+  1) 풀린 "Goedu-Split-1.0.1-source" 폴더로 이동
+  2) 폴더 안 빈 곳에서 "Shift + 마우스 우클릭" → "여기에 PowerShell 창 열기"
+     (또는 주소창에 "cmd" 입력 후 Enter)
+  3) 다음 명령어 복사 후 Enter:
+
+       build_scripts\build_windows.bat
+
+  4) "[1/6] 가상환경 생성" 부터 "[6/6] PyInstaller 빌드" 까지 5~10분 대기
+  5) 마지막에 "[OK] 완료" 메시지가 나오면 성공
+
+
+[4단계] 다른 분께 보낼 .zip 만들기
+-----------------------------------
+  같은 창에서 다음 명령:
+
+       build_scripts\pack_windows.bat
+
+  결과 파일:  dist\Goedu-Split-1.0.1-windows.zip
+
+  설치파일(setup.exe)로 만들고 싶다면 Inno Setup 6 설치 후 다음 명령:
+
+       build_scripts\pack_windows_installer.bat
+
+  결과 파일:  dist\Goedu-Split-1.0.1-windows-setup.exe
+
+
+[5단계] 본인 PC에서 실행
+-----------------------------------
+  dist\Goedu-Split\ 폴더 안의 "Goedu-Split.exe" 더블클릭
+
+  ★ 처음 실행 시 파란 SmartScreen 경고가 뜨면:
+    "추가 정보" → "실행" 클릭 (한 번만 하면 다음부터 안 뜸)
+
+
+[자주 묻는 질문]
+-----------------------------------
+Q. "python을 찾을 수 없습니다" 라는 메시지가 떠요.
+  → [1단계]에서 "Add python.exe to PATH" 체크 안 된 채로 설치한 것입니다.
+    Python을 제거하고 다시 설치하면서 그 체크박스를 켜 주세요.
+
+Q. 의존성 설치 단계에서 멈춰요.
+  → 인터넷 연결 확인 / 방화벽이 pip를 막는지 확인.
+    학교 인터넷이라면 잠깐 다른 PC에서 시도해 보세요.
+
+Q. 빌드는 됐는데 더블클릭해도 안 켜져요.
+  → cmd 창에서 dist\Goedu-Split\Goedu-Split.exe 를 직접 실행하면
+    오류 메시지가 보입니다. 그 메시지를 캡처해 제작자에게 전달해 주세요.
+
+
+© 2026 이준서. All rights reserved.
