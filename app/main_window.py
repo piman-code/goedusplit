@@ -12,7 +12,9 @@ from __future__ import annotations
 import csv
 import json
 import math
+import os
 import re
+import shutil
 import sys
 import traceback
 from datetime import datetime
@@ -41,7 +43,8 @@ from .cuts_loader import load_cut_scores
 from .perform_loader import load_perform
 from . import fonts as font_pack
 from .ai_client import (
-    AIProviderConfig, default_endpoint, default_model, parse_review_rows,
+    AIProviderConfig, default_endpoint, default_model, list_ollama_models,
+    list_openai_compatible_models, normalize_endpoint, parse_review_rows,
     run_completion, scrub_personal_data,
 )
 from .widgets import (
@@ -68,6 +71,9 @@ AI_REVIEW_HEADERS = [
     "구분", "번호/요소", "성취기준 후보", "평가유형", "목표수준 후보", "난이도 후보",
     *AI_EXPECTED_HEADERS, "근거", "다음 확인",
 ]
+AI_SOURCE_TEXT_LIMIT = 120_000
+AI_REFERENCE_TEXT_LIMIT = 300_000
+AI_REFERENCE_CACHE_NAME = "_combined_ai_reference_text.txt"
 
 
 def _app_icon_path() -> Path | None:
@@ -2138,6 +2144,17 @@ class MainWindow(QMainWindow):
 
         reference_panel = QWidget()
         reference_layout = QVBoxLayout(reference_panel); reference_layout.setContentsMargins(0, 0, 0, 0)
+        reference_tools = QHBoxLayout()
+        self.lbl_ai_reference_store = QLabel()
+        self.lbl_ai_reference_store.setProperty("role", "muted")
+        self.lbl_ai_reference_store.setWordWrap(True)
+        self.lbl_ai_reference_store.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        reference_tools.addWidget(self.lbl_ai_reference_store, 1)
+        btn_load_saved_reference = QPushButton("저장자료 불러오기")
+        btn_load_saved_reference.setToolTip("앱 자료 폴더에 저장된 성취기준·수준 추출본을 다시 불러옵니다.")
+        btn_load_saved_reference.clicked.connect(self._load_saved_ai_reference_text)
+        reference_tools.addWidget(btn_load_saved_reference)
+        reference_layout.addLayout(reference_tools)
         self.txt_ai_review_reference = QPlainTextEdit()
         self.txt_ai_review_reference.setPlaceholderText(
             "성취기준, 성취수준 A~E 설명, 최소능력자 특성, 평가기준 자료를 붙여 넣거나 '성취기준·수준 자료'로 불러오세요."
@@ -2171,6 +2188,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 2)
         split.setSizes([420, 780])
         layout.addWidget(split, 1)
+        self._refresh_ai_reference_store_label()
         self._set_ai_review_summary(0, 0, 0)
 
     def _build_ai_usage_panel(self) -> QWidget:
@@ -2194,7 +2212,7 @@ class MainWindow(QMainWindow):
         <p><b>목적</b>: AI가 최종 판단을 대신하는 것이 아니라, 교사가 검토할 표를 먼저 채워 분할점수 산정의 출발점을 빠르게 만드는 것입니다.</p>
         <ol>
           <li><b>문항 자료</b> 칸에 시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 넣습니다.</li>
-          <li><b>성취기준·수준</b> 칸에 성취기준, A~E 성취수준 설명, 최소능력자 특성 자료를 넣습니다.</li>
+          <li><b>성취기준·수준</b> 칸에 성취기준, A~E 성취수준 설명, 최소능력자 특성 자료를 넣습니다. 여러 PDF를 한 번에 선택할 수 있고, 불러온 원본은 앱 자료 폴더에 저장됩니다.</li>
           <li><b>검토 초안 생성</b>을 누르면 앱 내부 규칙으로 문항을 먼저 나누고, 참고자료와 대조해 성취기준, 평가유형, 목표수준, 난이도, A~E 예상값을 만듭니다.</li>
           <li>로컬 AI를 연결했다면 <b>AI로 보강</b>을 눌러 근거와 판단을 더 정교하게 보강합니다.</li>
           <li>지필 문항은 <b>지필→예상정답률</b>, 수행평가는 <b>수행→재산정</b>으로 보냅니다.</li>
@@ -2217,7 +2235,8 @@ ollama serve</pre>
 엔드포인트: http://127.0.0.1:11434/api/chat
 모델: qwen2.5:7b
 API 키: 비워둠</pre>
-        <p>MLX-LM, LM Studio처럼 OpenAI 호환 서버를 쓰면 제공자를 <b>OpenAI 호환 API / MLX 서버</b>로 바꾸고, 서버가 알려주는 <code>/v1/chat/completions</code> 주소를 넣습니다.</p>
+        <p>MLX-LM, LM Studio처럼 OpenAI 호환 로컬 서버를 쓰면 제공자를 <b>MLX-LM / LM Studio 로컬</b>로 바꾸고, 서버가 알려주는 <code>/v1/chat/completions</code> 주소를 넣습니다.</p>
+        <p>OpenAI 클라우드는 OAuth 로그인이 아니라 API Key 방식입니다. API Key를 넣고 사용할 수 있는 모델명을 입력해야 합니다.</p>
         """)
         layout.addWidget(browser, 1)
         return panel
@@ -2227,7 +2246,7 @@ API 키: 비워둠</pre>
         layout = QVBoxLayout(panel); layout.setContentsMargins(10, 10, 10, 10); layout.setSpacing(10)
 
         note = QLabel(
-            "기본은 외부 전송이 없는 로컬 초안입니다. Ollama, MLX-LM 서버, LM Studio, OpenAI 호환 API는 "
+            "기본은 외부 전송이 없는 로컬 초안입니다. Ollama, MLX-LM 서버, LM Studio, OpenAI 클라우드 API는 "
             "선생님이 AI로 보강을 누를 때만 호출됩니다."
         )
         note.setProperty("role", "muted")
@@ -2243,7 +2262,9 @@ API 키: 비워둠</pre>
         self.cmb_ai_provider = QComboBox()
         self.cmb_ai_provider.addItem("로컬 초안만 사용", "local_draft")
         self.cmb_ai_provider.addItem("Ollama 로컬", "ollama")
-        self.cmb_ai_provider.addItem("OpenAI 호환 API / MLX 서버", "openai_compatible")
+        self.cmb_ai_provider.addItem("MLX-LM / LM Studio 로컬", "mlx_compatible")
+        self.cmb_ai_provider.addItem("OpenAI 클라우드 API", "openai_cloud")
+        self.cmb_ai_provider.addItem("기타 OpenAI 호환 API", "openai_compatible")
         self.cmb_ai_provider.currentIndexChanged.connect(self._sync_ai_provider_defaults)
         form.addRow("AI 제공자", self.cmb_ai_provider)
 
@@ -2252,7 +2273,7 @@ API 키: 비워둠</pre>
         form.addRow("엔드포인트", self.edit_ai_endpoint)
 
         self.edit_ai_model = QLineEdit()
-        self.edit_ai_model.setPlaceholderText("예: qwen2.5:7b, mlx-community 모델, gpt-4.1-mini")
+        self.edit_ai_model.setPlaceholderText("예: gemma4:e4b, qwen2.5:7b, local-model, gpt-5.5")
         form.addRow("모델", self.edit_ai_model)
 
         self.edit_ai_api_key = QLineEdit()
@@ -2275,7 +2296,8 @@ API 키: 비워둠</pre>
         guide = QLabel(
             "빠른 예: Ollama는 `ollama pull qwen2.5:7b` 후 `ollama serve`를 실행하고, "
             "엔드포인트를 http://127.0.0.1:11434/api/chat 로 둡니다. "
-            "MLX-LM/LM Studio는 OpenAI 호환 서버의 /v1/chat/completions 주소를 사용합니다."
+            "MLX-LM/LM Studio는 OpenAI 호환 서버의 /v1/chat/completions 주소를 사용합니다. "
+            "OpenAI 클라우드는 OAuth가 아니라 API Key가 필요합니다."
         )
         guide.setProperty("role", "muted")
         guide.setWordWrap(True)
@@ -2312,7 +2334,8 @@ API 키: 비워둠</pre>
         provider = str(self.settings.value("ai/provider", "local_draft"))
         idx = self.cmb_ai_provider.findData(provider)
         self.cmb_ai_provider.setCurrentIndex(idx if idx >= 0 else 0)
-        self.edit_ai_endpoint.setText(str(self.settings.value("ai/endpoint", default_endpoint(provider))))
+        endpoint = str(self.settings.value("ai/endpoint", default_endpoint(provider)))
+        self.edit_ai_endpoint.setText(normalize_endpoint(provider, endpoint))
         self.edit_ai_model.setText(str(self.settings.value("ai/model", default_model(provider))))
         self.edit_ai_api_key.setText(str(self.settings.value("ai/api_key", "")))
         try:
@@ -2325,8 +2348,11 @@ API 키: 비워둠</pre>
     def _save_ai_settings(self):
         if not hasattr(self, "cmb_ai_provider"):
             return
-        self.settings.setValue("ai/provider", self._provider_from_combo())
-        self.settings.setValue("ai/endpoint", self.edit_ai_endpoint.text().strip())
+        provider = self._provider_from_combo()
+        endpoint = normalize_endpoint(provider, self.edit_ai_endpoint.text())
+        self.edit_ai_endpoint.setText(endpoint)
+        self.settings.setValue("ai/provider", provider)
+        self.settings.setValue("ai/endpoint", endpoint)
         self.settings.setValue("ai/model", self.edit_ai_model.text().strip())
         self.settings.setValue("ai/api_key", self.edit_ai_api_key.text().strip())
         self.settings.setValue("ai/timeout", int(self.spin_ai_timeout.value()))
@@ -2337,18 +2363,35 @@ API 키: 비워둠</pre>
 
     def _sync_ai_provider_defaults(self, *_args):
         provider = self._provider_from_combo()
-        known_endpoints = {default_endpoint("ollama"), default_endpoint("openai_compatible"), ""}
-        known_models = {default_model("ollama"), default_model("openai_compatible"), ""}
-        if self.edit_ai_endpoint.text().strip() in known_endpoints:
+        known_endpoints = {
+            default_endpoint("ollama"),
+            default_endpoint("mlx_compatible"),
+            default_endpoint("openai_cloud"),
+            default_endpoint("openai_compatible"),
+            "",
+        }
+        known_models = {
+            default_model("ollama"),
+            default_model("mlx_compatible"),
+            default_model("openai_cloud"),
+            default_model("openai_compatible"),
+            "",
+        }
+        current_endpoint = normalize_endpoint(provider, self.edit_ai_endpoint.text())
+        if self.edit_ai_endpoint.text().strip() in known_endpoints or current_endpoint in known_endpoints:
             self.edit_ai_endpoint.setText(default_endpoint(provider))
         if self.edit_ai_model.text().strip() in known_models:
             self.edit_ai_model.setText(default_model(provider))
         if provider == "local_draft":
             self.lbl_ai_settings_status.setText("로컬 초안은 외부 AI를 호출하지 않습니다.")
         elif provider == "ollama":
-            self.lbl_ai_settings_status.setText("Ollama가 실행 중이어야 합니다. 기본 주소는 http://127.0.0.1:11434/api/chat 입니다.")
+            self.lbl_ai_settings_status.setText("Ollama가 실행 중이어야 합니다. 연결 테스트가 설치된 모델을 감지해 모델명을 맞춥니다.")
+        elif provider == "mlx_compatible":
+            self.lbl_ai_settings_status.setText("MLX-LM/LM Studio 로컬 서버의 /v1/chat/completions 주소를 입력하세요.")
+        elif provider == "openai_cloud":
+            self.lbl_ai_settings_status.setText("OpenAI 클라우드는 OAuth가 아니라 API Key 방식입니다. 사용할 수 있는 모델명을 입력하세요.")
         else:
-            self.lbl_ai_settings_status.setText("MLX-LM/LM Studio/OpenAI 호환 서버의 chat completions 엔드포인트를 입력하세요.")
+            self.lbl_ai_settings_status.setText("OpenAI 호환 서버의 chat completions 엔드포인트를 입력하세요.")
 
     def _ai_provider_config(self) -> AIProviderConfig:
         if not hasattr(self, "cmb_ai_provider"):
@@ -2356,11 +2399,43 @@ API 키: 비워둠</pre>
         provider = self._provider_from_combo()
         return AIProviderConfig(
             provider=provider,
-            endpoint=self.edit_ai_endpoint.text().strip() or default_endpoint(provider),
+            endpoint=normalize_endpoint(provider, self.edit_ai_endpoint.text()),
             model=self.edit_ai_model.text().strip() or default_model(provider),
             api_key=self.edit_ai_api_key.text().strip(),
             timeout=int(self.spin_ai_timeout.value()),
         )
+
+    def _prepare_ai_connection_config(self, config: AIProviderConfig) -> tuple[AIProviderConfig, str]:
+        note = ""
+        if config.provider == "openai_cloud" and not config.api_key:
+            raise ValueError("OpenAI 클라우드는 OAuth 로그인이 아니라 API Key가 필요합니다. API 키를 입력해 주세요.")
+        if config.provider == "ollama":
+            models = list_ollama_models(config.endpoint, min(config.timeout, 20))
+            if models and (not config.model or config.model not in models):
+                preferred = next((name for name in models if name.startswith(("gemma", "qwen", "llama"))), models[0])
+                config.model = preferred
+                self.edit_ai_model.setText(preferred)
+                self.settings.setValue("ai/model", preferred)
+                note = f"설치된 Ollama 모델을 감지해 모델을 {preferred}(으)로 맞췄습니다."
+            elif not models:
+                note = "Ollama 서버는 응답했지만 설치된 모델 목록이 비어 있습니다."
+        elif config.provider in {"mlx_compatible", "openai_compatible"}:
+            try:
+                models = list_openai_compatible_models(
+                    config.endpoint,
+                    config.api_key,
+                    config.provider,
+                    min(config.timeout, 20),
+                )
+            except Exception:
+                models = []
+            if models and (not config.model or config.model not in models):
+                config.model = models[0]
+                self.edit_ai_model.setText(config.model)
+                self.settings.setValue("ai/model", config.model)
+                note = f"서버 모델 목록을 감지해 모델을 {config.model}(으)로 맞췄습니다."
+        self.settings.sync()
+        return config, note
 
     def _student_names_for_privacy(self) -> list[str]:
         if self.exam is None:
@@ -2386,6 +2461,7 @@ API 키: 비워둠</pre>
         )
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
+            config, note = self._prepare_ai_connection_config(config)
             output = run_completion(prompt, config)
             parsed = parse_review_rows(output)
         except Exception as exc:
@@ -2405,8 +2481,11 @@ API 키: 비워둠</pre>
                     "모델이 JSON 키 'A 예상'부터 'E 예상'까지 채우도록 설정을 확인해 주세요.",
                 )
                 return
-            self.lbl_ai_settings_status.setText(f"{config.label} 연결 확인 완료.")
-            QMessageBox.information(self, "AI 연결 테스트", f"{config.label} 응답을 정상적으로 읽었습니다.")
+            status = f"{config.label} 연결 확인 완료. 모델: {config.model}"
+            if note:
+                status += f" · {note}"
+            self.lbl_ai_settings_status.setText(status)
+            QMessageBox.information(self, "AI 연결 테스트", f"{config.label} 응답을 정상적으로 읽었습니다.\n{note}".strip())
         else:
             self.lbl_ai_settings_status.setText("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
             QMessageBox.information(self, "AI 연결 테스트", "응답은 받았지만 표 형식으로 해석하지 못했습니다. 모델 출력 형식을 확인해 주세요.")
@@ -2548,13 +2627,84 @@ API 키: 비워둠</pre>
             return "\n".join(pages)
         raise ValueError("지원 형식: .txt, .md, .csv, .json, .xlsx, .xlsm, .pdf")
 
+    def _ai_reference_store_dir(self) -> Path:
+        if sys.platform == "darwin":
+            root = Path.home() / "Library" / "Application Support" / "Goedu-Split"
+        elif sys.platform.startswith("win"):
+            root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Goedu-Split"
+        else:
+            root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "Goedu-Split"
+        out = root / "ai_reference_files"
+        out.mkdir(parents=True, exist_ok=True)
+        return out
+
+    def _ai_reference_cache_path(self) -> Path:
+        return self._ai_reference_store_dir() / AI_REFERENCE_CACHE_NAME
+
+    def _refresh_ai_reference_store_label(self):
+        if not hasattr(self, "lbl_ai_reference_store"):
+            return
+        store = self._ai_reference_store_dir()
+        stored_files = [
+            path for path in store.iterdir()
+            if path.is_file() and path.name != AI_REFERENCE_CACHE_NAME
+        ]
+        self.lbl_ai_reference_store.setText(
+            f"저장 위치: {store} · 저장자료 {len(stored_files)}개"
+        )
+
+    @staticmethod
+    def _unique_store_path(directory: Path, filename: str) -> Path:
+        safe_name = re.sub(r"[\\/:*?\"<>|]+", "_", filename).strip() or "reference"
+        target = directory / safe_name
+        if not target.exists():
+            return target
+        stem = target.stem
+        suffix = target.suffix
+        for i in range(2, 1000):
+            candidate = directory / f"{stem}_{i}{suffix}"
+            if not candidate.exists():
+                return candidate
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        return directory / f"{stem}_{stamp}{suffix}"
+
+    def _store_ai_reference_file(self, path: Path) -> Path:
+        store = self._ai_reference_store_dir()
+        target = self._unique_store_path(store, path.name)
+        shutil.copy2(path, target)
+        self._refresh_ai_reference_store_label()
+        return target
+
+    def _save_ai_reference_cache(self, text: str):
+        cache = self._ai_reference_cache_path()
+        cache.write_text(text[:AI_REFERENCE_TEXT_LIMIT], encoding="utf-8")
+        self._refresh_ai_reference_store_label()
+
+    def _load_saved_ai_reference_text(self):
+        cache = self._ai_reference_cache_path()
+        if not cache.exists():
+            QMessageBox.information(
+                self,
+                "저장자료 불러오기",
+                f"아직 저장된 성취기준·수준 추출본이 없습니다.\n저장 위치: {self._ai_reference_store_dir()}",
+            )
+            return
+        try:
+            text = cache.read_text(encoding="utf-8")
+        except Exception as exc:
+            QMessageBox.warning(self, "저장자료 불러오기", f"저장자료를 읽지 못했습니다.\n{exc}")
+            return
+        self._set_ai_review_source_text(text, target="reference")
+        self._refresh_ai_reference_store_label()
+        self.statusBar().showMessage(f"저장된 성취기준·수준 자료를 불러왔습니다. 위치: {cache}", 5000)
+
     def _set_ai_review_source_text(self, text: str, *, target: str = "source"):
         if target == "reference" and hasattr(self, "txt_ai_review_reference"):
-            self.txt_ai_review_reference.setPlainText(text[:60000])
+            self.txt_ai_review_reference.setPlainText(text[:AI_REFERENCE_TEXT_LIMIT])
             if hasattr(self, "ai_review_input_tabs"):
                 self.ai_review_input_tabs.setCurrentIndex(1)
             return
-        self.txt_ai_review_source.setPlainText(text[:60000])
+        self.txt_ai_review_source.setPlainText(text[:AI_SOURCE_TEXT_LIMIT])
         if hasattr(self, "ai_review_input_tabs"):
             self.ai_review_input_tabs.setCurrentIndex(0)
 
@@ -2586,35 +2736,67 @@ API 키: 비워둠</pre>
         self.statusBar().showMessage(f"문항 자료 불러오기 완료 · {Path(path).name}", 4000)
 
     def _load_ai_reference_file(self):
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
             "성취기준·성취수준 참고자료 불러오기",
             "",
             "참고 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
         )
-        if not path:
-            return
-        try:
-            text = self._extract_text_from_review_file(path)
-        except Exception as e:
-            QMessageBox.warning(self, "AI 문항 검토", f"참고자료를 읽지 못했습니다.\n{e}")
+        if not paths:
             return
         existing = self._ai_review_reference_text().strip()
+        append_existing = False
         if existing:
             choice = QMessageBox.question(
                 self,
                 "성취기준·수준 자료 추가",
-                "이미 참고자료가 들어 있습니다.\n새 자료를 기존 자료 뒤에 추가할까요?\n\n"
+                f"이미 참고자료가 들어 있습니다.\n선택한 {len(paths)}개 자료를 기존 자료 뒤에 추가할까요?\n\n"
                 "예: 추가\n아니오: 기존 자료를 지우고 교체",
                 QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
                 QMessageBox.Yes,
             )
             if choice == QMessageBox.Cancel:
                 return
-            if choice == QMessageBox.Yes:
-                text = f"{existing}\n\n--- 추가 참고자료: {Path(path).name} ---\n{text}"
+            append_existing = choice == QMessageBox.Yes
+        loaded_parts = []
+        failures = []
+        for path_str in paths:
+            path = Path(path_str)
+            try:
+                saved = self._store_ai_reference_file(path)
+                text = self._extract_text_from_review_file(str(path))
+            except Exception as e:
+                failures.append(f"{path.name}: {e}")
+                continue
+            loaded_parts.append(
+                f"--- 참고자료: {path.name} ---\n"
+                f"저장 위치: {saved}\n"
+                f"{text}"
+            )
+        if not loaded_parts:
+            QMessageBox.warning(
+                self,
+                "AI 문항 검토",
+                "선택한 참고자료를 읽지 못했습니다.\n" + "\n".join(failures[:5]),
+            )
+            return
+        text = "\n\n".join(loaded_parts)
+        if append_existing:
+            text = f"{existing}\n\n{text}"
         self._set_ai_review_source_text(text, target="reference")
-        self.statusBar().showMessage(f"성취기준·수준 자료 불러오기 완료 · {Path(path).name}", 4000)
+        self._save_ai_reference_cache(text)
+        message = (
+            f"성취기준·수준 자료 {len(loaded_parts)}개 불러오기 완료 · "
+            f"저장 위치: {self._ai_reference_store_dir()}"
+        )
+        if failures:
+            message += f" · 실패 {len(failures)}개"
+            QMessageBox.warning(
+                self,
+                "일부 참고자료 읽기 실패",
+                "다음 자료는 불러오지 못했습니다.\n" + "\n".join(failures[:8]),
+            )
+        self.statusBar().showMessage(message, 7000)
 
     def _load_ai_review_from_exam(self):
         if self.exam is None:

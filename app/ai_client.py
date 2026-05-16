@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from typing import Any
@@ -45,6 +46,10 @@ class AIProviderConfig:
     def label(self) -> str:
         if self.provider == "ollama":
             return "Ollama 로컬"
+        if self.provider == "mlx_compatible":
+            return "MLX/LM Studio 로컬"
+        if self.provider == "openai_cloud":
+            return "OpenAI 클라우드"
         if self.provider == "openai_compatible":
             return "OpenAI 호환"
         return "로컬 초안"
@@ -53,6 +58,10 @@ class AIProviderConfig:
 def default_endpoint(provider: str) -> str:
     if provider == "ollama":
         return "http://127.0.0.1:11434/api/chat"
+    if provider == "mlx_compatible":
+        return "http://127.0.0.1:8080/v1/chat/completions"
+    if provider == "openai_cloud":
+        return "https://api.openai.com/v1/chat/completions"
     if provider == "openai_compatible":
         return "http://127.0.0.1:8080/v1/chat/completions"
     return ""
@@ -61,9 +70,33 @@ def default_endpoint(provider: str) -> str:
 def default_model(provider: str) -> str:
     if provider == "ollama":
         return "qwen2.5:7b"
+    if provider == "mlx_compatible":
+        return "local-model"
+    if provider == "openai_cloud":
+        return "gpt-5.5"
     if provider == "openai_compatible":
-        return "gpt-4.1-mini"
+        return "local-model"
     return ""
+
+
+def normalize_endpoint(provider: str, endpoint: str = "") -> str:
+    value = (endpoint or "").strip()
+    if not value:
+        return default_endpoint(provider)
+    value = value.replace(" ", "")
+    if value.startswith("0.1:"):
+        value = f"127.0.0.1:{value.split(':', 1)[1]}"
+    if value.startswith(("127.0.0.1", "localhost", "0.0.0.0")):
+        value = f"http://{value}"
+    if provider == "ollama":
+        if "11434" in value and "/api/" not in value:
+            value = value.rstrip("/") + "/api/chat"
+        if value.endswith("/api/generate"):
+            value = value[:-len("/api/generate")] + "/api/chat"
+    elif provider in {"mlx_compatible", "openai_compatible"}:
+        if "/v1/" not in value and not value.endswith("/chat/completions"):
+            value = value.rstrip("/") + "/v1/chat/completions"
+    return value
 
 
 def scrub_personal_data(text: str, student_names: list[str] | None = None) -> str:
@@ -88,9 +121,22 @@ def run_completion(prompt: str, config: AIProviderConfig) -> str:
         return ""
     if config.provider == "ollama":
         return _run_ollama(prompt, config)
-    if config.provider == "openai_compatible":
+    if config.provider in {"openai_compatible", "mlx_compatible", "openai_cloud"}:
         return _run_openai_compatible(prompt, config)
     raise ValueError(f"지원하지 않는 AI 제공자입니다: {config.provider}")
+
+
+def _get_json(url: str, headers: dict[str, str], timeout: int) -> dict[str, Any]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=max(5, int(timeout))) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            return json.loads(body)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"AI 요청 실패 HTTP {exc.code}: {body[:600]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"AI 제공자에 연결하지 못했습니다: {exc.reason}") from exc
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
@@ -107,8 +153,46 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         raise RuntimeError(f"AI 제공자에 연결하지 못했습니다: {exc.reason}") from exc
 
 
+def _ollama_tags_endpoint(endpoint: str) -> str:
+    normalized = normalize_endpoint("ollama", endpoint)
+    if "/api/" in normalized:
+        return normalized.split("/api/", 1)[0].rstrip("/") + "/api/tags"
+    return normalized.rstrip("/") + "/api/tags"
+
+
+def list_ollama_models(endpoint: str = "", timeout: int = 10) -> list[str]:
+    data = _get_json(_ollama_tags_endpoint(endpoint), {}, timeout)
+    models = data.get("models") or []
+    names = [str(item.get("name", "")).strip() for item in models if isinstance(item, dict)]
+    return [name for name in names if name]
+
+
+def _openai_models_endpoint(endpoint: str, provider: str = "openai_compatible") -> str:
+    normalized = normalize_endpoint(provider, endpoint)
+    if "/v1/" in normalized:
+        return normalized.split("/v1/", 1)[0].rstrip("/") + "/v1/models"
+    parsed = urllib.parse.urlparse(normalized)
+    root = f"{parsed.scheme}://{parsed.netloc}" if parsed.scheme and parsed.netloc else normalized.rstrip("/")
+    return root + "/v1/models"
+
+
+def list_openai_compatible_models(
+    endpoint: str = "",
+    api_key: str = "",
+    provider: str = "openai_compatible",
+    timeout: int = 10,
+) -> list[str]:
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    data = _get_json(_openai_models_endpoint(endpoint, provider), headers, timeout)
+    models = data.get("data") or []
+    names = [str(item.get("id", "")).strip() for item in models if isinstance(item, dict)]
+    return [name for name in names if name]
+
+
 def _run_ollama(prompt: str, config: AIProviderConfig) -> str:
-    endpoint = config.endpoint or default_endpoint("ollama")
+    endpoint = normalize_endpoint("ollama", config.endpoint)
     model = config.model or default_model("ollama")
     payload = {
         "model": model,
@@ -125,8 +209,8 @@ def _run_ollama(prompt: str, config: AIProviderConfig) -> str:
 
 
 def _run_openai_compatible(prompt: str, config: AIProviderConfig) -> str:
-    endpoint = config.endpoint or default_endpoint("openai_compatible")
-    model = config.model or default_model("openai_compatible")
+    endpoint = normalize_endpoint(config.provider, config.endpoint)
+    model = config.model or default_model(config.provider)
     headers = {"Content-Type": "application/json"}
     if config.api_key:
         headers["Authorization"] = f"Bearer {config.api_key}"
