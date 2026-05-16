@@ -21,9 +21,16 @@ CANONICAL_HEADERS = [
     "평가유형",
     "목표수준 후보",
     "난이도 후보",
+    "A 예상",
+    "B 예상",
+    "C 예상",
+    "D 예상",
+    "E 예상",
     "근거",
     "다음 확인",
 ]
+
+LEVELS_AE = ["A", "B", "C", "D", "E"]
 
 
 @dataclass
@@ -190,16 +197,38 @@ def _parse_pipe_table(text: str) -> list[dict[str, str]]:
             continue
         if any("성취기준" in part for part in parts[:3]) and any("평가유형" in part for part in parts[:5]):
             continue
-        row = {
-            "구분": parts[0] if len(parts) > 0 else "문항",
-            "번호/요소": parts[1] if len(parts) > 1 else "",
-            "성취기준 후보": parts[2] if len(parts) > 2 else "",
-            "평가유형": parts[3] if len(parts) > 3 else "",
-            "목표수준 후보": parts[4] if len(parts) > 4 else "",
-            "난이도 후보": parts[5] if len(parts) > 5 else "",
-            "근거": parts[6] if len(parts) > 6 else "",
-            "다음 확인": parts[7] if len(parts) > 7 else "",
-        }
+        if len(parts) >= 11:
+            row = {
+                "구분": parts[0] if len(parts) > 0 else "문항",
+                "번호/요소": parts[1] if len(parts) > 1 else "",
+                "성취기준 후보": parts[2] if len(parts) > 2 else "",
+                "평가유형": parts[3] if len(parts) > 3 else "",
+                "목표수준 후보": parts[4] if len(parts) > 4 else "",
+                "난이도 후보": parts[5] if len(parts) > 5 else "",
+                "A 예상": parts[6] if len(parts) > 6 else "",
+                "B 예상": parts[7] if len(parts) > 7 else "",
+                "C 예상": parts[8] if len(parts) > 8 else "",
+                "D 예상": parts[9] if len(parts) > 9 else "",
+                "E 예상": parts[10] if len(parts) > 10 else "",
+                "근거": parts[11] if len(parts) > 11 else "",
+                "다음 확인": parts[12] if len(parts) > 12 else "",
+            }
+        else:
+            row = {
+                "구분": parts[0] if len(parts) > 0 else "문항",
+                "번호/요소": parts[1] if len(parts) > 1 else "",
+                "성취기준 후보": parts[2] if len(parts) > 2 else "",
+                "평가유형": parts[3] if len(parts) > 3 else "",
+                "목표수준 후보": parts[4] if len(parts) > 4 else "",
+                "난이도 후보": parts[5] if len(parts) > 5 else "",
+                "A 예상": "",
+                "B 예상": "",
+                "C 예상": "",
+                "D 예상": "",
+                "E 예상": "",
+                "근거": parts[6] if len(parts) > 6 else "",
+                "다음 확인": parts[7] if len(parts) > 7 else "",
+            }
         rows.append(row)
     return rows
 
@@ -212,6 +241,11 @@ def _normalize_row(item: dict[str, Any]) -> dict[str, str]:
         "평가유형": ["평가유형", "유형", "assessment_type", "review_type"],
         "목표수준 후보": ["목표수준 후보", "목표수준", "성취수준", "target", "target_level"],
         "난이도 후보": ["난이도 후보", "난이도", "difficulty"],
+        "A 예상": ["A 예상", "A", "A예상", "A 정답", "A정답", "A_expected", "a_expected", "expected_A"],
+        "B 예상": ["B 예상", "B", "B예상", "B 정답", "B정답", "B_expected", "b_expected", "expected_B"],
+        "C 예상": ["C 예상", "C", "C예상", "C 정답", "C정답", "C_expected", "c_expected", "expected_C"],
+        "D 예상": ["D 예상", "D", "D예상", "D 정답", "D정답", "D_expected", "d_expected", "expected_D"],
+        "E 예상": ["E 예상", "E", "E예상", "E 정답", "E정답", "E_expected", "e_expected", "expected_E"],
         "근거": ["근거", "evidence", "reason"],
         "다음 확인": ["다음 확인", "추가 확인 질문", "확인", "next_step", "question"],
     }
@@ -223,6 +257,12 @@ def _normalize_row(item: dict[str, Any]) -> dict[str, str]:
                 value = str(item[key]).strip()
                 break
         row[header] = value
+    expected = item.get("예상") or item.get("예상정답") or item.get("expected") or item.get("expected_rates")
+    if isinstance(expected, dict):
+        for level in LEVELS_AE:
+            value = expected.get(level) or expected.get(level.lower())
+            if value is not None:
+                row[f"{level} 예상"] = str(value).strip()
     if not row["구분"]:
         row["구분"] = "수행평가" if "수행" in row["평가유형"] else "문항"
     return row

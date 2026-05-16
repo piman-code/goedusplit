@@ -63,7 +63,11 @@ APP_COPYRIGHT = "© 2026 이준서. All rights reserved."
 DEFAULT_CUTS = {"A": 90.0, "B": 80.0, "C": 70.0, "D": 60.0, "E": 40.0}
 PERFORM_DEFAULT_RATES = {"A": 0.90, "B": 0.80, "C": 0.70, "D": 0.60, "E": 0.40}
 LEVELS_AE = ["A", "B", "C", "D", "E"]
-AI_REVIEW_HEADERS = ["구분", "번호/요소", "성취기준 후보", "평가유형", "목표수준 후보", "난이도 후보", "근거", "다음 확인"]
+AI_EXPECTED_HEADERS = [f"{lv} 예상" for lv in LEVELS_AE]
+AI_REVIEW_HEADERS = [
+    "구분", "번호/요소", "성취기준 후보", "평가유형", "목표수준 후보", "난이도 후보",
+    *AI_EXPECTED_HEADERS, "근거", "다음 확인",
+]
 
 
 def _app_icon_path() -> Path | None:
@@ -2488,6 +2492,10 @@ class MainWindow(QMainWindow):
         if review_type == "지필 문항" and "배점" not in compact:
             warnings.append("배점 확인")
         next_step = " / ".join(warnings) if warnings else "성취기준 진술과 문항 요구 행동을 비교"
+        if review_type == "수행평가":
+            expected = self._ai_default_perform_expected_values(target, difficulty)
+        else:
+            expected = self._ai_default_ox_expected_values(target, difficulty)
         return {
             "kind": block["kind"],
             "label": block["label"],
@@ -2495,9 +2503,58 @@ class MainWindow(QMainWindow):
             "review_type": review_type,
             "target": target,
             "difficulty": difficulty,
+            **expected,
             "evidence": evidence,
             "next_step": next_step,
         }
+
+    def _ai_default_ox_expected_values(self, target: str, difficulty: str) -> dict[str, str]:
+        target = self._ai_review_level(target, "C")
+        difficulty = self._ai_review_difficulty(difficulty)
+        base = {
+            "A": [2, 1, 0, 0, 0],
+            "B": [3, 2, 1, 0, 0],
+            "C": [3, 3, 2, 1, 0],
+            "D": [3, 3, 3, 2, 1],
+            "E": [3, 3, 3, 3, 2],
+        }[target]
+        if difficulty == "쉬움":
+            counts = [min(3, value + 1) for value in base]
+        elif difficulty == "어려움":
+            target_index = LEVELS_AE.index(target)
+            counts = [
+                value if idx <= target_index else max(0, value - 1)
+                for idx, value in enumerate(base)
+            ]
+        else:
+            counts = base
+        prev = 3
+        normalized = []
+        for value in counts:
+            clipped = max(0, min(3, min(prev, int(value))))
+            normalized.append(clipped)
+            prev = clipped
+        return {f"{lv} 예상": f"{count}/3" for lv, count in zip(LEVELS_AE, normalized)}
+
+    def _ai_default_perform_expected_values(self, target: str, difficulty: str) -> dict[str, str]:
+        target = self._ai_review_level(target, "C")
+        target_index = LEVELS_AE.index(target)
+        base_rates = {"A": 90, "B": 80, "C": 70, "D": 60, "E": 40}
+        if difficulty == "쉬움":
+            delta = 5
+        elif difficulty == "어려움":
+            delta = -5
+        else:
+            delta = 0
+        values = {}
+        prev = 100
+        for idx, lv in enumerate(LEVELS_AE):
+            level_adjust = 4 if idx < target_index else (-4 if idx > target_index else 0)
+            rate = max(0, min(100, base_rates[lv] + delta + level_adjust))
+            rate = min(prev, rate)
+            values[f"{lv} 예상"] = f"{rate}%"
+            prev = rate
+        return values
 
     def _make_ai_review_prompt(self, rows: list[dict], source_text: str) -> str:
         preview = source_text.strip()
@@ -2513,7 +2570,10 @@ class MainWindow(QMainWindow):
             "중요 원칙: 자동 확정하지 말고, 교사가 검토할 수 있도록 근거 문장을 함께 제시한다.\n"
             "A 수준 문항은 A 수준 최소능력자 3명 중 약 2명이 해결할 수 있는 문항이라는 기준으로 판단한다.\n"
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수를 산출할 수 있도록 채점기준표의 행동 표현을 분석한다.\n\n"
-            "출력 형식은 표로 한다: 번호/요소 | 성취기준 후보 | 평가유형 | 목표수준 후보 | 난이도 후보 | 근거 | 추가 확인 질문.\n\n"
+            "출력 형식은 표로 한다: 번호/요소 | 성취기준 후보 | 평가유형 | 목표수준 후보 | 난이도 후보 | "
+            "A 예상 | B 예상 | C 예상 | D 예상 | E 예상 | 근거 | 추가 확인 질문.\n"
+            "지필 문항의 A~E 예상은 3명 기준 O/X 개수처럼 3/3, 2/3, 1/3, 0/3으로 쓰고, "
+            "수행평가는 만점 대비 예상점수 또는 90% 같은 비율로 쓴다.\n\n"
             "[로컬 초안]\n"
             f"{row_lines}\n\n"
             "[원문]\n"
@@ -2527,6 +2587,7 @@ class MainWindow(QMainWindow):
         draft = "\n".join(
             f"- {row.get('label') or row.get('번호/요소')}: 유형={row.get('review_type') or row.get('평가유형')}, "
             f"목표={row.get('target') or row.get('목표수준 후보')}, 난이도={row.get('difficulty') or row.get('난이도 후보')}, "
+            f"예상={', '.join(str(row.get(f'{lv} 예상', '')) for lv in LEVELS_AE)}, "
             f"성취기준={row.get('standard') or row.get('성취기준 후보')}"
             for row in rows[:80]
         )
@@ -2537,11 +2598,15 @@ class MainWindow(QMainWindow):
             "A 수준 문항은 A 수준 최소능력자 3명 중 약 2명이 해결할 수 있다는 기준으로 본다.\n"
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수 산정에 도움이 되도록 근거를 쓴다.\n\n"
             "반드시 JSON 배열만 출력하라. 설명 문장, 마크다운, 코드블록을 붙이지 마라.\n"
-            "각 객체의 키는 반드시 다음 8개만 사용한다:\n"
-            '["구분","번호/요소","성취기준 후보","평가유형","목표수준 후보","난이도 후보","근거","다음 확인"]\n'
+            "각 객체의 키는 반드시 다음 13개만 사용한다:\n"
+            '["구분","번호/요소","성취기준 후보","평가유형","목표수준 후보","난이도 후보",'
+            '"A 예상","B 예상","C 예상","D 예상","E 예상","근거","다음 확인"]\n'
             "평가유형은 선택형, 서답형, 수행평가 중 하나를 우선 사용한다.\n"
             "목표수준 후보는 A/B/C/D/E 중 하나를 사용한다.\n"
             "난이도 후보는 쉬움/보통/어려움 중 하나를 사용한다.\n\n"
+            "지필 문항의 A~E 예상은 각 수준 대표학생 3명 중 몇 명이 맞힐지 3/3, 2/3, 1/3, 0/3으로 쓴다.\n"
+            "수행평가의 A~E 예상은 만점 대비 점수나 비율로 쓴다. 예: 9점, 80%, 7.5/10.\n"
+            "A에서 E로 갈수록 예상값은 같거나 낮아야 한다.\n\n"
             "[로컬 초안]\n"
             f"{draft}\n\n"
             "[원문]\n"
@@ -2576,16 +2641,20 @@ class MainWindow(QMainWindow):
                 row.get("review_type") or row.get("평가유형") or "",
                 row.get("target") or row.get("목표수준 후보") or "",
                 row.get("difficulty") or row.get("난이도 후보") or "",
+                *[
+                    row.get(f"{lv} 예상") or row.get(lv) or ""
+                    for lv in LEVELS_AE
+                ],
                 row.get("evidence") or row.get("근거") or "",
                 next_step,
             ]
             for c, value in enumerate(values):
                 bg = None
-                if c == 7 and ("확인" in value or "점검" in value):
+                if c == len(values) - 1 and ("확인" in value or "점검" in value):
                     bg = QColor("#f8dfa3"); bg.setAlpha(140)
-                _set_item(table, r, c, value, align_left=c in (1, 2, 6, 7), bg=bg, tooltip=value)
+                _set_item(table, r, c, value, align_left=c in (1, 2, 11, 12), bg=bg, tooltip=value)
         table.setSortingEnabled(False)
-        for col, width in enumerate([86, 120, 260, 92, 100, 100, 260, 240]):
+        for col, width in enumerate([86, 120, 260, 92, 100, 100, 76, 76, 76, 76, 76, 260, 240]):
             self._set_scaled_column_width(table, col, width)
         self._set_ai_review_summary(len(rows), len(standards), warnings, mode)
 
@@ -2739,6 +2808,115 @@ class MainWindow(QMainWindow):
         except Exception:
             return fallback
 
+    @staticmethod
+    def _parse_expected_count(value: str, default_sample: int = 3) -> tuple[int | None, int]:
+        text = (value or "").strip()
+        if not text:
+            return None, default_sample
+        ox_text = text.upper().replace("○", "O").replace("×", "X")
+        if any(mark in ox_text for mark in ("O", "X")):
+            marks = [ch for ch in ox_text if ch in {"O", "X"}]
+            if marks:
+                return marks.count("O"), max(1, min(10, len(marks)))
+        frac = re.search(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", text)
+        if frac:
+            numerator = float(frac.group(1))
+            denominator = max(1, min(10, round(float(frac.group(2)))))
+            return max(0, min(denominator, round(numerator))), denominator
+        pct = re.search(r"(-?\d+(?:\.\d+)?)\s*%", text)
+        if pct:
+            rate = max(0.0, min(100.0, float(pct.group(1))))
+            return round((rate / 100.0) * default_sample), default_sample
+        number = re.search(r"-?\d+(?:\.\d+)?", text)
+        if number:
+            value_num = float(number.group(0))
+            if 0 <= value_num <= 1:
+                return round(value_num * default_sample), default_sample
+            if 0 <= value_num <= default_sample:
+                return round(value_num), default_sample
+            if 0 <= value_num <= 100:
+                return round((value_num / 100.0) * default_sample), default_sample
+        return None, default_sample
+
+    def _ai_expected_counts_for_row(self, row: dict) -> tuple[dict[str, int], int]:
+        parsed: dict[str, int] = {}
+        sample_size = 3
+        for lv in LEVELS_AE:
+            count, denominator = self._parse_expected_count(row.get(f"{lv} 예상", ""), sample_size)
+            if count is not None:
+                sample_size = denominator
+                parsed[lv] = max(0, min(sample_size, count))
+        if len(parsed) != len(LEVELS_AE):
+            fallback = self._ai_default_ox_expected_values(
+                row.get("목표수준 후보", "C"),
+                row.get("난이도 후보", "보통"),
+            )
+            for lv in LEVELS_AE:
+                if lv not in parsed:
+                    count, denominator = self._parse_expected_count(fallback.get(f"{lv} 예상", ""), sample_size)
+                    sample_size = denominator
+                    parsed[lv] = 0 if count is None else count
+        prev = sample_size
+        for lv in LEVELS_AE:
+            parsed[lv] = max(0, min(sample_size, min(prev, parsed[lv])))
+            prev = parsed[lv]
+        return parsed, sample_size
+
+    @staticmethod
+    def _judgments_from_expected_counts(counts: dict[str, int], sample_size: int) -> dict:
+        judgments = {}
+        sample_size = max(1, min(10, int(sample_size)))
+        for lv in LEVELS_AE:
+            count = max(0, min(sample_size, int(counts.get(lv, 0))))
+            rate = round((count / sample_size) * 100, 2)
+            judgments[lv] = {
+                "correct": [idx < count for idx in range(sample_size)],
+                "targetRate": rate,
+                "overrideRate": None,
+            }
+        return judgments
+
+    @staticmethod
+    def _parse_expected_score(value: str, max_score: float) -> float | None:
+        text = (value or "").strip()
+        if not text:
+            return None
+        frac = re.search(r"(\d+(?:\.\d+)?)\s*/\s*(\d+(?:\.\d+)?)", text)
+        if frac:
+            denominator = float(frac.group(2))
+            if denominator > 0:
+                return max_score * (float(frac.group(1)) / denominator)
+        pct = re.search(r"(-?\d+(?:\.\d+)?)\s*%", text)
+        if pct:
+            return max_score * (float(pct.group(1)) / 100.0)
+        number = re.search(r"-?\d+(?:\.\d+)?", text)
+        if not number:
+            return None
+        value_num = float(number.group(0))
+        if 0 <= value_num <= 1:
+            return max_score * value_num
+        if 0 <= value_num <= max_score:
+            return value_num
+        if 0 <= value_num <= 100:
+            return max_score * (value_num / 100.0)
+        return None
+
+    def _ai_review_expected_scores_for_perform_row(self, row: dict, max_score: float) -> dict:
+        parsed = {}
+        for lv in LEVELS_AE:
+            score = self._parse_expected_score(row.get(f"{lv} 예상", ""), max_score)
+            if score is not None:
+                parsed[lv] = max(0.0, min(float(max_score), score))
+        if not parsed:
+            return {}
+        prev = float(max_score)
+        for lv in LEVELS_AE:
+            if lv not in parsed:
+                parsed[lv] = prev
+            parsed[lv] = max(0.0, min(prev, parsed[lv]))
+            prev = parsed[lv]
+        return parsed
+
     def _build_ai_review_spliter_project(self) -> dict | None:
         rows = self._ai_review_table_rows()
         items = []
@@ -2755,16 +2933,22 @@ class MainWindow(QMainWindow):
             standard = row.get("성취기준 후보", "")
             evidence = row.get("근거", "")
             next_step = row.get("다음 확인", "")
+            counts, sample_size = self._ai_expected_counts_for_row(row)
+            judgments = self._judgments_from_expected_counts(counts, sample_size)
             items.append({
                 "id": f"ai-review-{idx}-{number}",
                 "number": number,
                 "title": row.get("번호/요소", "") or f"{number}번",
                 "standard": "" if standard == "(후보 없음)" else standard,
                 "points": self._ai_review_points_for_item(number, item_type, 5.0),
-                "sampleSize": 3,
+                "sampleSize": sample_size,
                 "type": item_type,
                 "difficulty": difficulty,
                 "targetLevel": target,
+                "judgmentsByJudge": {
+                    "teacher-1": judgments,
+                    "teacher-2": judgments,
+                },
                 "evidence": ["AI 검토 초안"],
                 "note": " · ".join(part for part in [evidence, next_step] if part),
             })
@@ -2841,14 +3025,16 @@ class MainWindow(QMainWindow):
             max_score = self._extract_perform_max_score_from_review(
                 name, row.get("성취기준 후보", ""), row.get("근거", ""), row.get("다음 확인", "")
             )
-            self._add_perform_recalc_row({
+            values = {
                 "name": name,
                 "max_score": max_score,
                 "memo": "AI 검토 초안 · " + " · ".join(
                     part for part in [row.get("목표수준 후보", ""), row.get("난이도 후보", ""), row.get("근거", "")]
                     if part
                 ),
-            })
+            }
+            values.update(self._ai_review_expected_scores_for_perform_row(row, max_score))
+            self._add_perform_recalc_row(values)
         self._render_perform_recalc_results()
         self.tabs.setCurrentWidget(self.tab_perform)
         if hasattr(self, "perform_table_tabs"):
@@ -2962,10 +3148,11 @@ class MainWindow(QMainWindow):
           <li><b>현재 문항정보표</b>: 이미 분석한 문항정보표를 검토 원문으로 가져옵니다.</li>
           <li><b>검토 초안 생성</b>: 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, 근거, 추가 확인 질문을 표로 정리합니다.</li>
           <li><b>AI로 보강</b>: AI 설정에 지정한 로컬/클라우드 모델로 검토표를 다시 제안받습니다. 기본값은 외부 전송이 없는 로컬 초안입니다.</li>
+          <li><b>A~E 예상</b>: 지필 문항은 각 수준 대표 3명 중 몇 명이 맞힐지 <code>2/3</code>처럼 표시하고, 수행평가는 <code>80%</code> 또는 <code>8점</code>처럼 예상점수를 표시합니다.</li>
           <li><b>AI 설정</b>: Ollama 로컬, MLX-LM/LM Studio 같은 OpenAI 호환 로컬 서버, 클라우드 API의 엔드포인트와 모델을 저장합니다.</li>
           <li><b>개인정보 제거</b>: 외부 서버로 보낼 때 학생 이름, 반/번호, 전화번호, 이메일을 가능한 한 제거합니다. 그래도 최종 전송 여부는 교사가 확인합니다.</li>
-          <li><b>지필→예상정답률</b>: 선택형·서답형 문항 초안을 예상정답률 계산기로 보내 문항별 O/X 판단을 이어갑니다.</li>
-          <li><b>수행→재산정</b>: 수행평가 평가요소 초안을 수행평가 분할점수 재산정 표로 보내 예상점수 합산을 이어갑니다.</li>
+          <li><b>지필→예상정답률</b>: 선택형·서답형 문항 초안과 A~E 예상 O/X 값을 예상정답률 계산기로 보내 문항별 판단을 이어갑니다.</li>
+          <li><b>수행→재산정</b>: 수행평가 평가요소 초안과 A~E 예상점수를 수행평가 분할점수 재산정 표로 보내 합산을 이어갑니다.</li>
           <li><b>AI 프롬프트</b>: 향후 AI 연결 또는 별도 AI 검토에 바로 사용할 수 있는 안전한 검토 요청문을 만듭니다.</li>
         </ul>
         <p>AI 판정은 자동 확정이 아니라, 근거 문장과 함께 제안하고 교사가 최종 수정하는 방식으로 사용합니다.</p>
