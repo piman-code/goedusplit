@@ -2599,6 +2599,20 @@ API 키: 비워둠</pre>
         except Exception as e:
             QMessageBox.warning(self, "AI 문항 검토", f"참고자료를 읽지 못했습니다.\n{e}")
             return
+        existing = self._ai_review_reference_text().strip()
+        if existing:
+            choice = QMessageBox.question(
+                self,
+                "성취기준·수준 자료 추가",
+                "이미 참고자료가 들어 있습니다.\n새 자료를 기존 자료 뒤에 추가할까요?\n\n"
+                "예: 추가\n아니오: 기존 자료를 지우고 교체",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if choice == QMessageBox.Cancel:
+                return
+            if choice == QMessageBox.Yes:
+                text = f"{existing}\n\n--- 추가 참고자료: {Path(path).name} ---\n{text}"
         self._set_ai_review_source_text(text, target="reference")
         self.statusBar().showMessage(f"성취기준·수준 자료 불러오기 완료 · {Path(path).name}", 4000)
 
@@ -2626,8 +2640,25 @@ API 키: 비워둠</pre>
         lines = [line for line in lines if line]
         blocks = []
         current = None
+        section_type = ""
         item_re = re.compile(r"^(?:문항\s*)?(\d{1,3})\s*(?:번|[.)]|[|])?\s*(.*)$")
-        for line in lines:
+        for raw_line in lines:
+            line = raw_line
+            for marker, marker_type in (
+                ("[선택형 문제]", "선택형"),
+                ("[선택형]", "선택형"),
+                ("[서답형 문제]", "서답형"),
+                ("[서답형]", "서답형"),
+                ("[논술형 문제]", "서답형"),
+                ("[논술형]", "서답형"),
+            ):
+                if marker in line:
+                    section_type = marker_type
+                    before, after = line.split(marker, 1)
+                    line = after.strip() or before.strip()
+                    break
+            if not line:
+                continue
             m = item_re.match(line)
             looks_like_item = False
             if m:
@@ -2647,11 +2678,11 @@ API 키: 비워둠</pre>
                 else:
                     if current:
                         blocks.append(current)
-                    current = {"kind": "문항", "label": label, "text": line}
+                    current = {"kind": "문항", "label": label, "text": line, "section_type": section_type}
             elif any(key in line for key in ("평가요소", "채점기준", "수행 수준", "수행수준")):
                 if current:
                     blocks.append(current)
-                current = {"kind": "수행평가", "label": line[:32], "text": line}
+                current = {"kind": "수행평가", "label": line[:32], "text": line, "section_type": "수행평가"}
             elif current:
                 current["text"] += "\n" + line
             elif re.search(r"\[[^\]\n]{4,40}\]", line):
@@ -2667,11 +2698,14 @@ API 키: 비워둠</pre>
         stopwords = {
             "성취기준", "성취수준", "수준", "문항", "자료", "설명", "확인",
             "있다", "한다", "대한", "통해", "기본", "도움", "안내",
+            "서로", "다른", "대하여", "다음", "값은", "경우", "단", "각각",
+            "옳은", "것은", "실수", "자연수", "만족", "때의",
         }
         tokens = set(re.findall(r"[가-힣A-Za-z0-9]{2,}", text or ""))
         return {token for token in tokens if token not in stopwords}
 
     def _ai_reference_entries(self, reference_text: str) -> list[dict[str, str | set[str]]]:
+        reference_text = re.sub(r"(?=\[(?:10공수|10기수)[^\]\n]{1,40}\])", "\n", reference_text)
         lines = [re.sub(r"\s+", " ", line).strip() for line in reference_text.splitlines()]
         lines = [line for line in lines if line]
         entries: list[dict[str, str | set[str]]] = []
@@ -2706,6 +2740,34 @@ API 키: 비워둠</pre>
             entries.append({"code": "", "text": text, "tokens": self._ai_reference_tokens(text)})
         return entries[:120]
 
+    @staticmethod
+    def _clean_ai_reference_standard_text(reference_text: str, reference_code: str = "") -> str:
+        text = re.sub(r"\s+", " ", reference_text or "").strip()
+        if not text:
+            return ""
+        if reference_code and reference_code in text:
+            text = text[text.find(reference_code):]
+        cut_positions = []
+        for pattern in (
+            r"\sA\s",
+            r"\sB\s",
+            r"\sC\s",
+            r"\sD\s",
+            r"\sE\s",
+            r"\s프로젝트\s",
+            r"\s공통수학\d+-\d+",
+            r"\s예시문항\s",
+            r"\s평가도구\s",
+        ):
+            match = re.search(pattern, text)
+            if match and match.start() > 0:
+                cut_positions.append(match.start())
+        if cut_positions:
+            text = text[:min(cut_positions)].strip()
+        if reference_code and reference_code not in text:
+            text = f"{reference_code} {text}".strip()
+        return text[:240].strip()
+
     def _match_ai_reference_entry(self, compact_text: str, entries: list[dict[str, str | set[str]]]) -> dict[str, str | set[str]] | None:
         if not entries:
             return None
@@ -2716,12 +2778,19 @@ API 키: 비워둠</pre>
                     return entry
                 if code and code in str(entry.get("text", "")):
                     return entry
+        keyword_match = self._match_ai_reference_by_keywords(compact_text, entries)
+        if keyword_match:
+            return keyword_match
         tokens = self._ai_reference_tokens(compact_text)
         if not tokens:
             return None
         best = None
         best_score = 0
         for entry in entries:
+            code = str(entry.get("code", ""))
+            text = str(entry.get("text", ""))
+            if not code.startswith("[10공수") or "예시 답안" in text:
+                continue
             entry_tokens = entry.get("tokens", set())
             if not isinstance(entry_tokens, set):
                 continue
@@ -2730,6 +2799,38 @@ API 키: 비워둠</pre>
                 best = entry
                 best_score = score
         return best if best_score >= 2 else None
+
+    @staticmethod
+    def _entry_for_standard_code(entries: list[dict[str, str | set[str]]], code: str) -> dict[str, str | set[str]] | None:
+        target = f"[{code}]"
+        for entry in entries:
+            if entry.get("code") == target or target in str(entry.get("text", "")):
+                return entry
+        return None
+
+    def _match_ai_reference_by_keywords(self, compact_text: str, entries: list[dict[str, str | set[str]]]) -> dict[str, str | set[str]] | None:
+        text = compact_text or ""
+        keyword_rules = [
+            ("10공수1-04-02", ("행렬", "행과 열", "")),
+            ("10공수1-02-01", ("복소수", "허수", "켤레복소수", "")),
+            ("10공수1-03-03", ("조합", "C", "nCr")),
+            ("10공수1-03-02", ("순열", "일렬", "나열")),
+            ("10공수1-03-01", ("경우의 수", "주사위", "메뉴판", "동시에 던져", "선택하는 경우", "자연수의 개수")),
+            ("10공수1-01-03", ("인수분해",)),
+            ("10공수1-01-02", ("나머지정리", "인수정리", "조립제법", "나누었을 때", "나누어떨어")),
+            ("10공수1-01-01", ("다항식", "동류항", "사칙연산")),
+            ("10공수1-02-06", ("최대", "최소")),
+            ("10공수1-02-05", ("그래프와 직선", "위치 관계")),
+            ("10공수1-02-04", ("이차방정식과 이차함수", "판별식", "그래프")),
+            ("10공수1-02-03", ("근과 계수",)),
+            ("10공수1-02-02", ("실근", "허근", "이차방정식")),
+        ]
+        for code, keywords in keyword_rules:
+            if any(keyword in text for keyword in keywords):
+                entry = self._entry_for_standard_code(entries, code)
+                if entry:
+                    return entry
+        return None
 
     def _infer_ai_review_row(self, block: dict, reference_entries: list[dict[str, str | set[str]]] | None = None) -> dict:
         text = block["text"]
@@ -2743,8 +2844,9 @@ API 키: 비워둠</pre>
         if matched_reference:
             reference_text = str(matched_reference.get("text", "")).strip()
             reference_code = str(matched_reference.get("code", "")).strip()
+            cleaned_reference = self._clean_ai_reference_standard_text(reference_text, reference_code)
             if reference_text and (not standard or standard == reference_code or (reference_code and reference_code in standard)):
-                standard = reference_text[:130].strip()
+                standard = cleaned_reference or reference_text[:130].strip()
 
         explicit_level = ""
         for lv in LEVELS_AE:
@@ -2759,6 +2861,11 @@ API 키: 비워둠</pre>
         mid = sum(1 for term in mid_terms if term in compact)
         low = sum(1 for term in low_terms if term in compact)
         score = high * 2 + mid - low
+        point_values = [
+            float(match.group(1))
+            for match in re.finditer(r"(\d+(?:\.\d+)?)\s*점", compact)
+        ]
+        inferred_points = max(point_values) if point_values else 0.0
 
         if "어려" in compact or re.search(r"\b상\b", compact):
             difficulty = "어려움"
@@ -2766,6 +2873,12 @@ API 키: 비워둠</pre>
             difficulty = "쉬움"
         elif "보통" in compact or re.search(r"\b중\b", compact):
             difficulty = "보통"
+        elif inferred_points >= 8:
+            difficulty = "어려움"
+        elif inferred_points >= 7:
+            difficulty = "보통"
+        elif inferred_points > 0:
+            difficulty = "쉬움"
         elif score >= 4:
             difficulty = "어려움"
         elif score <= 0:
@@ -2775,6 +2888,12 @@ API 키: 비워둠</pre>
 
         if explicit_level:
             target = explicit_level
+        elif inferred_points >= 8:
+            target = "B"
+        elif inferred_points >= 7:
+            target = "C"
+        elif 0 < inferred_points <= 5:
+            target = "E"
         elif score >= 5:
             target = "A"
         elif score >= 3:
@@ -2786,7 +2905,10 @@ API 키: 비워둠</pre>
         else:
             target = "D"
 
-        if any(term in compact for term in ("수행평가", "평가요소", "채점기준", "수행 수준", "수행수준")):
+        block_section_type = str(block.get("section_type", ""))
+        if block_section_type in {"선택형", "서답형"}:
+            review_type = block_section_type
+        elif any(term in compact for term in ("수행평가", "평가요소", "채점기준", "수행 수준", "수행수준")):
             review_type = "수행평가"
         elif "유형 선택형" in compact:
             review_type = "선택형"
