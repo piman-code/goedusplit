@@ -2074,6 +2074,14 @@ class MainWindow(QMainWindow):
         btn_load = QPushButton("파일 불러오기")
         btn_load.clicked.connect(self._load_ai_review_file)
         head.addWidget(btn_load)
+        btn_written_example = QPushButton("지필 예시")
+        btn_written_example.setToolTip("지필평가 문항 예시를 원문 칸에 넣어 흐름을 테스트합니다.")
+        btn_written_example.clicked.connect(lambda: self._insert_ai_review_example("written"))
+        head.addWidget(btn_written_example)
+        btn_perform_example = QPushButton("수행 예시")
+        btn_perform_example.setToolTip("수행평가 채점기준표 예시를 원문 칸에 넣어 흐름을 테스트합니다.")
+        btn_perform_example.clicked.connect(lambda: self._insert_ai_review_example("perform"))
+        head.addWidget(btn_perform_example)
         btn_exam = QPushButton("현재 문항정보표")
         btn_exam.clicked.connect(self._load_ai_review_from_exam)
         head.addWidget(btn_exam)
@@ -2136,6 +2144,7 @@ class MainWindow(QMainWindow):
         self.txt_ai_review_prompt.setReadOnly(True)
         self.txt_ai_review_prompt.setPlaceholderText("검토 초안을 만들면 AI 연결용 프롬프트가 여기에 생성됩니다.")
         self.ai_review_tabs.addTab(self.txt_ai_review_prompt, "AI 프롬프트")
+        self.ai_review_tabs.addTab(self._build_ai_usage_panel(), "사용 예시")
         self.ai_review_tabs.addTab(self._build_ai_settings_panel(), "AI 설정")
         right_layout.addWidget(self.ai_review_tabs, 1)
         split.addWidget(right)
@@ -2144,6 +2153,53 @@ class MainWindow(QMainWindow):
         split.setSizes([420, 780])
         layout.addWidget(split, 1)
         self._set_ai_review_summary(0, 0, 0)
+
+    def _build_ai_usage_panel(self) -> QWidget:
+        panel = QWidget()
+        layout = QVBoxLayout(panel); layout.setContentsMargins(10, 10, 10, 10)
+        browser = QTextBrowser()
+        browser.setReadOnly(True)
+        browser.setOpenExternalLinks(False)
+        browser.setHtml("""
+        <style>
+          body { line-height: 1.55; }
+          h2 { margin: 0 0 8px; font-size: 18px; }
+          h3 { margin: 16px 0 6px; font-size: 15px; }
+          p { margin: 5px 0; }
+          ol, ul { margin-top: 5px; }
+          li { margin: 4px 0; }
+          pre { padding: 10px; border: 1px solid #789; border-radius: 6px; white-space: pre-wrap; }
+          code { padding: 1px 4px; border-radius: 4px; }
+        </style>
+        <h2>AI 문항 검토 사용 흐름</h2>
+        <p><b>목적</b>: AI가 최종 판단을 대신하는 것이 아니라, 교사가 검토할 표를 먼저 채워 분할점수 산정의 출발점을 빠르게 만드는 것입니다.</p>
+        <ol>
+          <li>왼쪽 원문 칸에 문항지, 문항정보표, 수행평가 채점기준표를 붙여 넣습니다.</li>
+          <li><b>검토 초안 생성</b>을 누르면 앱 내부 규칙으로 성취기준, 평가유형, 목표수준, 난이도, A~E 예상값을 만듭니다.</li>
+          <li>로컬 AI를 연결했다면 <b>AI로 보강</b>을 눌러 근거와 판단을 더 정교하게 보강합니다.</li>
+          <li>지필 문항은 <b>지필→예상정답률</b>, 수행평가는 <b>수행→재산정</b>으로 보냅니다.</li>
+          <li>교사가 문항을 직접 보며 A~E 예상값을 수정하고 최종 분할점수를 확인합니다.</li>
+        </ol>
+
+        <h3>지필평가 예시 해석</h3>
+        <p><code>C 예상 2/3</code>은 C 수준 최소능력자 3명 중 2명 정도가 맞힐 것 같다는 뜻입니다.</p>
+        <p><code>A 수준 문항</code>은 A 학생만 맞히는 문항이라는 뜻이 아니라, A 수준 최소능력자 3명 중 약 2명이 해결할 수 있는 문항이라는 뜻으로 봅니다.</p>
+
+        <h3>수행평가 예시 해석</h3>
+        <p>수행평가는 O/X가 아니라 평가요소별 예상점수로 봅니다. 예를 들어 <code>B 예상 7.5점</code>은 B 수준 최소능력자가 해당 평가요소에서 대략 7.5점을 받을 것으로 본다는 뜻입니다.</p>
+
+        <h3>로컬 AI 연결 예시</h3>
+        <pre>ollama pull qwen2.5:7b
+ollama serve</pre>
+        <p>그 뒤 <b>AI 설정</b>에서 다음처럼 입력합니다.</p>
+        <pre>AI 제공자: Ollama 로컬
+엔드포인트: http://127.0.0.1:11434/api/chat
+모델: qwen2.5:7b
+API 키: 비워둠</pre>
+        <p>MLX-LM, LM Studio처럼 OpenAI 호환 서버를 쓰면 제공자를 <b>OpenAI 호환 API / MLX 서버</b>로 바꾸고, 서버가 알려주는 <code>/v1/chat/completions</code> 주소를 넣습니다.</p>
+        """)
+        layout.addWidget(browser, 1)
+        return panel
 
     def _build_ai_settings_panel(self) -> QWidget:
         panel = QWidget()
@@ -2194,6 +2250,15 @@ class MainWindow(QMainWindow):
         form.addRow("개인정보", self.chk_ai_scrub)
 
         layout.addWidget(form_card)
+
+        guide = QLabel(
+            "빠른 예: Ollama는 `ollama pull qwen2.5:7b` 후 `ollama serve`를 실행하고, "
+            "엔드포인트를 http://127.0.0.1:11434/api/chat 로 둡니다. "
+            "MLX-LM/LM Studio는 OpenAI 호환 서버의 /v1/chat/completions 주소를 사용합니다."
+        )
+        guide.setProperty("role", "muted")
+        guide.setWordWrap(True)
+        layout.addWidget(guide)
 
         row = QHBoxLayout()
         btn_save = QPushButton("설정 저장")
@@ -2288,9 +2353,14 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "AI 연결 테스트", "로컬 초안 모드는 외부 연결 없이 바로 사용할 수 있습니다.")
             return
         prompt = (
-            "연결 테스트입니다. JSON 배열만 반환하세요.\n"
-            "[{\"구분\":\"테스트\",\"번호/요소\":\"1\",\"성취기준 후보\":\"-\","
+            "연결 테스트입니다. 설명 없이 JSON 배열만 반환하세요.\n"
+            "각 객체는 반드시 다음 13개 키를 모두 포함해야 합니다: "
+            "구분, 번호/요소, 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, "
+            "A 예상, B 예상, C 예상, D 예상, E 예상, 근거, 다음 확인.\n"
+            "[{\"구분\":\"문항\",\"번호/요소\":\"1번\",\"성취기준 후보\":\"[테스트] 성취기준\","
             "\"평가유형\":\"선택형\",\"목표수준 후보\":\"C\",\"난이도 후보\":\"보통\","
+            "\"A 예상\":\"3/3\",\"B 예상\":\"3/3\",\"C 예상\":\"2/3\","
+            "\"D 예상\":\"1/3\",\"E 예상\":\"0/3\","
             "\"근거\":\"연결 확인\",\"다음 확인\":\"없음\"}]"
         )
         QApplication.setOverrideCursor(Qt.WaitCursor)
@@ -2304,11 +2374,78 @@ class MainWindow(QMainWindow):
         finally:
             QApplication.restoreOverrideCursor()
         if parsed:
+            missing_expected = [header for header in AI_EXPECTED_HEADERS if not parsed[0].get(header)]
+            if missing_expected:
+                self.lbl_ai_settings_status.setText("응답은 받았지만 A~E 예상값이 비어 있습니다.")
+                QMessageBox.warning(
+                    self,
+                    "AI 연결 테스트",
+                    "AI 응답은 읽었지만 A~E 예상값을 확인하지 못했습니다.\n"
+                    "모델이 JSON 키 'A 예상'부터 'E 예상'까지 채우도록 설정을 확인해 주세요.",
+                )
+                return
             self.lbl_ai_settings_status.setText(f"{config.label} 연결 확인 완료.")
             QMessageBox.information(self, "AI 연결 테스트", f"{config.label} 응답을 정상적으로 읽었습니다.")
         else:
             self.lbl_ai_settings_status.setText("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
             QMessageBox.information(self, "AI 연결 테스트", "응답은 받았지만 표 형식으로 해석하지 못했습니다. 모델 출력 형식을 확인해 주세요.")
+
+    def _ai_review_example_text(self, kind: str) -> str:
+        if kind == "perform":
+            return (
+                "평가요소: 수학적 모델링\n"
+                "만점 10점\n"
+                "성취기준 [10공수1-03-01] 함수의 그래프를 해석하고 상황에 맞게 모델링할 수 있다.\n"
+                "목표수준 A\n"
+                "난이도 어려움\n"
+                "A: 주어진 상황을 함수로 일반화하고 그래프의 의미를 정확히 해석한다.\n"
+                "B: 상황을 함수로 표현하고 그래프의 주요 특징을 설명한다.\n"
+                "C: 기본적인 함수식과 그래프를 연결한다.\n"
+                "D: 일부 값의 대응 관계를 찾는다.\n"
+                "E: 안내를 받아 함수식의 의미를 확인한다.\n"
+                "\n"
+                "평가요소: 풀이 과정 설명\n"
+                "만점 8점\n"
+                "성취기준 [10공수1-02-02] 이차방정식의 실근과 허근을 이해하고 판별식을 활용할 수 있다.\n"
+                "목표수준 B\n"
+                "난이도 보통\n"
+                "A: 판별식의 의미를 근의 개수와 연결해 논리적으로 설명한다.\n"
+                "B: 판별식을 계산하고 근의 종류를 정확히 판별한다.\n"
+                "C: 판별식 계산 절차를 수행한다.\n"
+                "D: 일부 항을 대입해 계산한다.\n"
+                "E: 안내를 받아 판별식의 형태를 확인한다."
+            )
+        return (
+            "문항 1 | 유형 선택형 | 난이도 쉬움 | 목표수준 E | 배점 4 | "
+            "성취기준 [10공수1-01-01] 다항식의 사칙연산 원리를 설명하고 계산할 수 있다.\n"
+            "문항 내용: 두 다항식의 합을 계산하는 기본 문항이다. 보기 5개 중 정답을 고른다.\n"
+            "\n"
+            "문항 2 | 유형 서답형 | 난이도 보통 | 목표수준 C | 배점 5 | "
+            "성취기준 [10공수1-02-03] 이차방정식의 근과 계수의 관계를 설명할 수 있다.\n"
+            "문항 내용: 이차방정식 x^2 - 5x + 6 = 0의 두 근을 alpha, beta라 할 때 "
+            "alpha+beta와 alpha beta를 구하고 근과 계수의 관계를 설명한다.\n"
+            "\n"
+            "문항 3 | 유형 서답형 | 난이도 어려움 | 목표수준 A | 배점 6 | "
+            "성취기준 [10공수1-03-01] 함수의 그래프를 해석하고 상황에 맞게 모델링할 수 있다.\n"
+            "문항 내용: 실생활 자료를 함수식으로 모델링하고 그래프의 변화율을 해석하여 결론을 정당화한다."
+        )
+
+    def _insert_ai_review_example(self, kind: str):
+        if not hasattr(self, "txt_ai_review_source"):
+            return
+        if self.txt_ai_review_source.toPlainText().strip():
+            answer = QMessageBox.question(
+                self,
+                "예시 입력",
+                "현재 원문 내용을 예시로 바꿀까요?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        self.txt_ai_review_source.setPlainText(self._ai_review_example_text(kind))
+        label = "수행평가" if kind == "perform" else "지필평가"
+        self.statusBar().showMessage(f"{label} AI 검토 예시를 입력했습니다. '검토 초안 생성'을 눌러 확인하세요.", 4500)
 
     def _extract_text_from_review_file(self, path: str) -> str:
         p = Path(path)
