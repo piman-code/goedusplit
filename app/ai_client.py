@@ -307,7 +307,7 @@ def probe_openai_compatible_chat(
         timeout=max(5, int(timeout)),
     )
     return _run_openai_compatible(
-        "연결 확인입니다. 설명 없이 OK만 답하세요.",
+        '다음 JSON만 반환하세요: {"status":"ok"}',
         config,
         max_tokens=128,
     )

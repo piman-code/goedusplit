@@ -604,8 +604,8 @@ class MainWindow(QMainWindow):
         action_row.addWidget(export_btn)
         v.addLayout(action_row)
 
-        spliter_btn = QPushButton("예상정답률 근거 JSON 내보내기…")
-        spliter_btn.setToolTip("분석된 학생 성취수준과 선택형 문항 정오 데이터를 예상정답률 계산기 추천 근거로 저장합니다.")
+        spliter_btn = QPushButton("예상정답률 근거 엑셀 내보내기…")
+        spliter_btn.setToolTip("분석된 학생 성취수준과 문항 정오 데이터를 예상정답률 계산기 추천 근거 엑셀로 저장합니다.")
         spliter_btn.clicked.connect(self.export_spliter_evidence)
         v.addWidget(spliter_btn)
 
@@ -1055,7 +1055,7 @@ class MainWindow(QMainWindow):
         btn_send.setProperty("role", "primary")
         btn_send.clicked.connect(self.send_spliter_evidence_to_web)
         toolbar_layout.addWidget(btn_send)
-        btn_export = QPushButton("예상정답률 근거 JSON 내보내기…")
+        btn_export = QPushButton("예상정답률 근거 엑셀 내보내기…")
         btn_export.clicked.connect(self.export_spliter_evidence)
         toolbar_layout.addWidget(btn_export)
         btn_reload = QPushButton("새로고침")
@@ -1066,7 +1066,7 @@ class MainWindow(QMainWindow):
         if QWebEngineView is None:
             self.lbl_spliter_web = QLabel(
                 "이 Python 환경에는 Qt WebEngine이 없어 내장 계산기를 표시할 수 없습니다. "
-                "근거 JSON을 내보내 예상정답률 계산기에서 불러와 주세요."
+                "근거 엑셀을 내보내 자료를 확인해 주세요."
             )
             self.lbl_spliter_web.setProperty("role", "muted")
             self.lbl_spliter_web.setWordWrap(True)
@@ -2375,7 +2375,7 @@ API 키: 비워둠</pre>
         self.cmb_ai_provider.addItem("로컬 초안만 사용", "local_draft")
         self.cmb_ai_provider.addItem("Ollama 로컬", "ollama")
         self.cmb_ai_provider.addItem("MLX-LM / LM Studio 로컬", "mlx_compatible")
-        self.cmb_ai_provider.addItem("OpenAI 클라우드 API", "openai_cloud")
+        self.cmb_ai_provider.addItem("OpenAI 클라우드 API (API Key)", "openai_cloud")
         self.cmb_ai_provider.addItem("기타 OpenAI 호환 API", "openai_compatible")
         self.cmb_ai_provider.currentIndexChanged.connect(self._sync_ai_provider_defaults)
         form.addRow("AI 제공자", self.cmb_ai_provider)
@@ -2460,22 +2460,101 @@ API 키: 비워둠</pre>
         data = self.cmb_ai_provider.currentData()
         return str(data or "local_draft")
 
+    def _provider_setting_value(self, provider: str, key: str, default: str = "") -> str:
+        provider_key = f"ai/providers/{provider}/{key}"
+        value = self.settings.value(provider_key, None)
+        if value is None and str(self.settings.value("ai/provider", "")) == provider:
+            value = self.settings.value(f"ai/{key}", default)
+        if value is None:
+            value = default
+        return str(value)
+
+    def _store_current_ai_provider_settings(self, provider: str | None = None):
+        if not hasattr(self, "cmb_ai_provider"):
+            return
+        provider = provider or self._provider_from_combo()
+        endpoint = normalize_endpoint(provider, self.edit_ai_endpoint.text())
+        model = self._ai_model_text() or default_model(provider)
+        model = self._sanitize_ai_model_for_provider(provider, model)
+        api_key = self.edit_ai_api_key.text().strip()
+        self.settings.setValue(f"ai/providers/{provider}/endpoint", endpoint)
+        self.settings.setValue(f"ai/providers/{provider}/model", model)
+        self.settings.setValue(f"ai/providers/{provider}/api_key", api_key)
+
+    def _provider_model_note(self, provider: str) -> str:
+        if provider == "local_draft":
+            return "로컬 초안은 모델 선택이 필요하지 않습니다."
+        if provider == "ollama":
+            return "모델 새로고침을 누르면 설치된 Ollama 모델을 자동 감지하고 추천값을 선택합니다."
+        if provider == "mlx_compatible":
+            return "MLX 찾기 또는 모델 새로고침을 누르면 감지된 모델과 추천값이 표시됩니다."
+        if provider == "openai_cloud":
+            return "OpenAI API는 API Key 방식입니다. OAuth 로그인은 이 데스크톱 API 호출에 사용하지 않습니다."
+        return "모델 새로고침을 누르면 서버의 모델 목록을 선택할 수 있습니다."
+
+    @staticmethod
+    def _sanitize_ai_model_for_provider(provider: str, model: str) -> str:
+        model = (model or "").strip()
+        lowered = model.lower()
+        if not model:
+            return default_model(provider)
+        if provider == "ollama" and any(term in lowered for term in ("mlx-community/", "lmstudio-community/")):
+            return default_model(provider)
+        if provider == "mlx_compatible" and model == default_model("ollama"):
+            return default_model(provider)
+        if provider == "openai_cloud" and (
+            any(term in lowered for term in ("mlx-community/", "lmstudio-community/"))
+            or lowered in {default_model("ollama").lower(), default_model("openai_compatible").lower()}
+        ):
+            return default_model(provider)
+        return model
+
+    def _update_ai_provider_help(self, provider: str):
+        if not hasattr(self, "lbl_ai_settings_status"):
+            return
+        if provider == "local_draft":
+            status = "로컬 초안은 외부 AI를 호출하지 않습니다."
+        elif provider == "ollama":
+            status = "Ollama가 실행 중이어야 합니다. 모델 새로고침/연결 테스트가 설치된 채팅 모델을 감지합니다."
+        elif provider == "mlx_compatible":
+            status = "MLX-LM/LM Studio 로컬 서버의 /v1/chat/completions 주소를 사용합니다."
+        elif provider == "openai_cloud":
+            status = "OpenAI 클라우드는 OAuth가 아니라 API Key 방식입니다. 모델명과 API 키를 입력하세요."
+        else:
+            status = "OpenAI 호환 서버의 chat completions 엔드포인트를 입력하세요."
+        self.lbl_ai_settings_status.setText(status)
+        if hasattr(self, "lbl_ai_model_hint"):
+            self.lbl_ai_model_hint.setText(self._provider_model_note(provider))
+
     def _load_ai_settings(self):
         if not hasattr(self, "cmb_ai_provider"):
             return
         provider = str(self.settings.value("ai/provider", "local_draft"))
         idx = self.cmb_ai_provider.findData(provider)
+        self._loading_ai_settings = True
+        self.cmb_ai_provider.blockSignals(True)
         self.cmb_ai_provider.setCurrentIndex(idx if idx >= 0 else 0)
-        endpoint = str(self.settings.value("ai/endpoint", default_endpoint(provider)))
+        self.cmb_ai_provider.blockSignals(False)
+        provider = self._provider_from_combo()
+        endpoint = self._provider_setting_value(provider, "endpoint", default_endpoint(provider))
+        model = self._sanitize_ai_model_for_provider(
+            provider,
+            self._provider_setting_value(provider, "model", default_model(provider)),
+        )
+        api_key = self._provider_setting_value(provider, "api_key", "")
         self.edit_ai_endpoint.setText(normalize_endpoint(provider, endpoint))
-        self._set_ai_model_text(str(self.settings.value("ai/model", default_model(provider))))
-        self.edit_ai_api_key.setText(str(self.settings.value("ai/api_key", "")))
+        self._set_ai_model_choices([], provider, recommended=model, select_recommended=True, note=self._provider_model_note(provider))
+        self._set_ai_model_text(model or default_model(provider))
+        self.edit_ai_api_key.setText(api_key)
         try:
             self.spin_ai_timeout.setValue(float(self.settings.value("ai/timeout", 120)))
         except Exception:
             self.spin_ai_timeout.setValue(120)
         scrub = self.settings.value("ai/scrub_personal_data", True)
         self.chk_ai_scrub.setChecked(str(scrub).lower() not in {"false", "0", "no"})
+        self._ai_active_provider = provider
+        self._loading_ai_settings = False
+        self._update_ai_provider_help(provider)
 
     def _ai_model_text(self) -> str:
         if hasattr(self, "cmb_ai_model"):
@@ -2584,59 +2663,46 @@ API 키: 비워둠</pre>
         provider = self._provider_from_combo()
         endpoint = normalize_endpoint(provider, self.edit_ai_endpoint.text())
         self.edit_ai_endpoint.setText(endpoint)
+        model = self._ai_model_text() or default_model(provider)
+        model = self._sanitize_ai_model_for_provider(provider, model)
+        self._set_ai_model_text(model)
+        api_key = self.edit_ai_api_key.text().strip()
         self.settings.setValue("ai/provider", provider)
         self.settings.setValue("ai/endpoint", endpoint)
-        self.settings.setValue("ai/model", self._ai_model_text())
-        self.settings.setValue("ai/api_key", self.edit_ai_api_key.text().strip())
+        self.settings.setValue("ai/model", model)
+        self.settings.setValue("ai/api_key", api_key)
         self.settings.setValue("ai/timeout", int(self.spin_ai_timeout.value()))
         self.settings.setValue("ai/scrub_personal_data", self.chk_ai_scrub.isChecked())
+        self.settings.setValue(f"ai/providers/{provider}/endpoint", endpoint)
+        self.settings.setValue(f"ai/providers/{provider}/model", model)
+        self.settings.setValue(f"ai/providers/{provider}/api_key", api_key)
         self.settings.sync()
+        self._ai_active_provider = provider
         self.lbl_ai_settings_status.setText("AI 설정을 저장했습니다.")
         self.statusBar().showMessage("AI 설정 저장 완료", 3000)
 
     def _sync_ai_provider_defaults(self, *_args):
         provider = self._provider_from_combo()
-        known_endpoints = {
-            default_endpoint("ollama"),
-            default_endpoint("mlx_compatible"),
-            default_endpoint("openai_cloud"),
-            default_endpoint("openai_compatible"),
-            "",
-        }
-        known_models = {
-            default_model("ollama"),
-            default_model("mlx_compatible"),
-            default_model("openai_cloud"),
-            default_model("openai_compatible"),
-            "",
-        }
-        current_endpoint = normalize_endpoint(provider, self.edit_ai_endpoint.text())
-        if self.edit_ai_endpoint.text().strip() in known_endpoints or current_endpoint in known_endpoints:
-            self.edit_ai_endpoint.setText(default_endpoint(provider))
-        if self._ai_model_text() in known_models:
-            self._set_ai_model_text(default_model(provider))
-        if hasattr(self, "cmb_ai_model") and self.cmb_ai_model.count() == 0:
-            self.cmb_ai_model.addItem(default_model(provider))
-        if provider == "local_draft":
-            self.lbl_ai_settings_status.setText("로컬 초안은 외부 AI를 호출하지 않습니다.")
-            if hasattr(self, "lbl_ai_model_hint"):
-                self.lbl_ai_model_hint.setText("로컬 초안은 모델 선택이 필요하지 않습니다.")
-        elif provider == "ollama":
-            self.lbl_ai_settings_status.setText("Ollama가 실행 중이어야 합니다. 연결 테스트가 설치된 모델을 감지해 모델명을 맞춥니다.")
-            if hasattr(self, "lbl_ai_model_hint"):
-                self.lbl_ai_model_hint.setText("모델 새로고침을 누르면 설치된 Ollama 모델을 선택할 수 있습니다.")
-        elif provider == "mlx_compatible":
-            self.lbl_ai_settings_status.setText("MLX-LM/LM Studio 로컬 서버의 /v1/chat/completions 주소를 입력하세요.")
-            if hasattr(self, "lbl_ai_model_hint"):
-                self.lbl_ai_model_hint.setText("MLX 찾기 또는 모델 새로고침을 누르면 감지된 모델과 추천값이 표시됩니다.")
-        elif provider == "openai_cloud":
-            self.lbl_ai_settings_status.setText("OpenAI 클라우드는 OAuth가 아니라 API Key 방식입니다. 사용할 수 있는 모델명을 입력하세요.")
-            if hasattr(self, "lbl_ai_model_hint"):
-                self.lbl_ai_model_hint.setText("클라우드 모델명은 직접 입력합니다.")
-        else:
-            self.lbl_ai_settings_status.setText("OpenAI 호환 서버의 chat completions 엔드포인트를 입력하세요.")
-            if hasattr(self, "lbl_ai_model_hint"):
-                self.lbl_ai_model_hint.setText("모델 새로고침을 누르면 서버의 모델 목록을 선택할 수 있습니다.")
+        if getattr(self, "_loading_ai_settings", False):
+            self._update_ai_provider_help(provider)
+            return
+        previous = getattr(self, "_ai_active_provider", None)
+        if previous and previous != provider:
+            self._store_current_ai_provider_settings(previous)
+        endpoint = self._provider_setting_value(provider, "endpoint", default_endpoint(provider))
+        model = self._sanitize_ai_model_for_provider(
+            provider,
+            self._provider_setting_value(provider, "model", default_model(provider)),
+        )
+        api_key = self._provider_setting_value(provider, "api_key", "")
+        self.edit_ai_endpoint.setText(normalize_endpoint(provider, endpoint))
+        self._set_ai_model_choices([], provider, recommended=model, select_recommended=True, note=self._provider_model_note(provider))
+        self._set_ai_model_text(model or default_model(provider))
+        self.edit_ai_api_key.setText(api_key)
+        self._ai_active_provider = provider
+        self.settings.setValue("ai/provider", provider)
+        self.settings.sync()
+        self._update_ai_provider_help(provider)
 
     def _ai_provider_config(self) -> AIProviderConfig:
         if not hasattr(self, "cmb_ai_provider"):
@@ -2645,7 +2711,7 @@ API 키: 비워둠</pre>
         return AIProviderConfig(
             provider=provider,
             endpoint=normalize_endpoint(provider, self.edit_ai_endpoint.text()),
-            model=self._ai_model_text() or default_model(provider),
+            model=self._sanitize_ai_model_for_provider(provider, self._ai_model_text() or default_model(provider)),
             api_key=self.edit_ai_api_key.text().strip(),
             timeout=int(self.spin_ai_timeout.value()),
         )
@@ -3019,11 +3085,55 @@ API 키: 비워둠</pre>
         if config.provider == "ollama":
             tell("Ollama 서버 모델 목록 확인 중")
             models = list_ollama_models(config.endpoint, min(config.timeout, 20))
-            if models and (not config.model or config.model not in models):
-                preferred = next((name for name in models if name.startswith(("gemma", "qwen", "llama"))), models[0])
-                config.model = preferred
-                note = f"설치된 Ollama 모델을 감지해 모델을 {preferred}(으)로 맞췄습니다."
-            elif not models:
+            if models:
+                recommended = MainWindow._recommend_ai_model(models, "ollama")
+                ordered = []
+                for name in (config.model, recommended, *models):
+                    name = (name or "").strip()
+                    lowered = name.lower()
+                    if not name or name in ordered:
+                        continue
+                    if name not in models:
+                        continue
+                    if any(term in lowered for term in ("embed", "rerank", "whisper")):
+                        continue
+                    ordered.append(name)
+                probe_errors = []
+                selected = ""
+                for name in ordered[:5]:
+                    tell(f"Ollama 짧은 실제 응답 확인 중: {name}")
+                    probe_config = AIProviderConfig(
+                        provider="ollama",
+                        endpoint=config.endpoint,
+                        model=name,
+                        api_key=config.api_key,
+                        timeout=min(max(config.timeout, 45), 120),
+                    )
+                    try:
+                        output = run_completion(
+                            '다음 JSON만 반환하세요: {"status":"ok"}',
+                            probe_config,
+                            max_tokens=96,
+                        )
+                    except Exception as exc:
+                        probe_errors.append(f"{name}: {exc}")
+                        continue
+                    if output.strip():
+                        selected = name
+                        break
+                    probe_errors.append(f"{name}: 빈 응답")
+                if not selected:
+                    detail = "\n".join(probe_errors[:5])
+                    raise ValueError(
+                        "Ollama 서버와 모델 목록은 확인했지만 실제 답변 가능한 채팅 모델을 찾지 못했습니다.\n"
+                        "임베딩 모델은 문항 검토에 사용할 수 없습니다. `ollama pull qwen2.5:7b` 또는 "
+                        "`ollama pull gemma3:12b` 같은 채팅 모델을 받은 뒤 다시 시도하세요.\n\n"
+                        f"점검 내용:\n{detail}"
+                    )
+                if config.model != selected:
+                    note = f"설치된 Ollama 모델을 감지해 모델을 {selected}(으)로 맞췄습니다."
+                config.model = selected
+            else:
                 note = "Ollama 서버는 응답했지만 설치된 모델 목록이 비어 있습니다."
         elif config.provider == "mlx_compatible":
             errors = []
@@ -3114,7 +3224,11 @@ API 키: 비워둠</pre>
         self.settings.setValue("ai/provider", config.provider)
         self.settings.setValue("ai/endpoint", config.endpoint)
         self.settings.setValue("ai/model", config.model)
+        self.settings.setValue(f"ai/providers/{config.provider}/endpoint", config.endpoint)
+        self.settings.setValue(f"ai/providers/{config.provider}/model", config.model)
+        self.settings.setValue(f"ai/providers/{config.provider}/api_key", config.api_key)
         self.settings.sync()
+        self._ai_active_provider = config.provider
         if note:
             self._append_ai_progress(note)
 
@@ -3139,12 +3253,14 @@ API 키: 비워둠</pre>
             QMessageBox.information(self, "AI 연결 테스트", "로컬 초안 모드는 외부 연결 없이 바로 사용할 수 있습니다.")
             return
         endpoints = self._candidate_mlx_endpoints()
-        prompt = "연결 확인입니다. 설명 없이 OK만 답하세요."
+        prompt = '다음 JSON만 반환하세요: {"status":"ok"}'
 
         def work(progress):
             prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
             progress(f"{prepared.label}에 최종 짧은 테스트 요청 전송 중")
-            output = run_completion(prompt, prepared, max_tokens=16)
+            output = run_completion(prompt, prepared, max_tokens=96)
+            if not output.strip():
+                raise ValueError("AI 서버가 빈 응답을 보냈습니다. 모델 새로고침으로 다른 채팅 모델을 선택해 주세요.")
             progress("AI 응답 수신 완료")
             return {"config": prepared, "note": note, "output": output}
 
@@ -4871,7 +4987,7 @@ API 키: 비워둠</pre>
         a_run.triggered.connect(self.run_analysis); m_file.addAction(a_run)
         a_exp = QAction("결과 CSV 내보내기…", self); a_exp.setShortcut("Ctrl+E")
         a_exp.triggered.connect(self.export_csv); m_file.addAction(a_exp)
-        a_spliter = QAction("예상정답률 근거 JSON 내보내기…", self)
+        a_spliter = QAction("예상정답률 근거 엑셀 내보내기…", self)
         a_spliter.triggered.connect(self.export_spliter_evidence); m_file.addAction(a_spliter)
         m_file.addSeparator()
         a_quit = QAction("종료", self); a_quit.setShortcut("Ctrl+Q")
@@ -5672,6 +5788,139 @@ API 키: 비워둠</pre>
         }
         return payload
 
+    @staticmethod
+    def _excel_cell_value(value):
+        if value is None:
+            return ""
+        if isinstance(value, (str, int, float, bool)):
+            return value
+        return json.dumps(value, ensure_ascii=False)
+
+    def _write_spliter_evidence_xlsx(self, path: str, payload: dict):
+        import openpyxl
+        from openpyxl.styles import Alignment, Font, PatternFill
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "요약"
+        header_fill = PatternFill("solid", fgColor="DDEDEA")
+        title_font = Font(bold=True)
+
+        def append(ws_, row):
+            ws_.append([self._excel_cell_value(value) for value in row])
+
+        append(ws, ["항목", "값"])
+        append(ws, ["내보낸 시각", payload.get("exportedAt", "")])
+        append(ws, ["과목", payload.get("subject", "")])
+        append(ws, ["학년", payload.get("grade", "")])
+        append(ws, ["학기", payload.get("semester", "")])
+        append(ws, ["학생 수", len(payload.get("students", []))])
+        append(ws, ["근거 문항 수", len(payload.get("items", []))])
+        append(ws, ["지필 반영비율", payload.get("weights", {}).get("pencil", "")])
+        append(ws, ["수행 반영비율", payload.get("weights", {}).get("perform", "")])
+        for lv, label in [("A", "A/B"), ("B", "B/C"), ("C", "C/D"), ("D", "D/E"), ("E", "E/미도달")]:
+            append(ws, [f"{label} 분할점수", payload.get("cuts", {}).get(lv, "")])
+        ws.freeze_panes = "A2"
+
+        ws_levels = wb.create_sheet("성취수준 요약")
+        append(ws_levels, ["성취수준", "인원"])
+        for lv in LEVELS:
+            append(ws_levels, [lv, payload.get("levelSummary", {}).get(lv, 0)])
+        ws_levels.freeze_panes = "A2"
+
+        ws_items = wb.create_sheet("문항 근거")
+        item_headers = [
+            "문항", "유형", "난이도", "배점", "정답", "내용영역", "성취기준 코드", "성취기준",
+            "전체 정답률(%)", "변별도", "A(%)", "B(%)", "C(%)", "D(%)", "E(%)", "미도달(%)", "서답형 집계",
+        ]
+        append(ws_items, item_headers)
+        for item in payload.get("items", []):
+            p_by_level = item.get("pByLevel") or {}
+            append(ws_items, [
+                item.get("number", ""),
+                item.get("type", ""),
+                item.get("difficulty", ""),
+                item.get("score", ""),
+                item.get("answer", ""),
+                item.get("contentArea", ""),
+                item.get("standardCode", ""),
+                item.get("standard", ""),
+                item.get("pValue", ""),
+                item.get("discrimination", ""),
+                p_by_level.get("A", ""),
+                p_by_level.get("B", ""),
+                p_by_level.get("C", ""),
+                p_by_level.get("D", ""),
+                p_by_level.get("E", ""),
+                p_by_level.get("미도달", ""),
+                "예" if item.get("isAggregate") else "",
+            ])
+        ws_items.freeze_panes = "A2"
+
+        ws_students = wb.create_sheet("학생")
+        student_headers = ["학생ID", "반/번호", "학년반", "이름", "성취도", "환산점수", "지필점수", "수행점수"]
+        append(ws_students, student_headers)
+        for st in payload.get("students", []):
+            append(ws_students, [
+                st.get("id", ""),
+                st.get("classNo", ""),
+                st.get("gradeClass", ""),
+                st.get("name", ""),
+                st.get("level", ""),
+                st.get("finalScore", ""),
+                st.get("pencilScore", ""),
+                st.get("performScore", ""),
+            ])
+        ws_students.freeze_panes = "A2"
+
+        ws_responses = wb.create_sheet("학생 응답")
+        response_headers = [
+            "학생ID", "반/번호", "이름", "성취도", "문항", "정오", "점수율(%)", "응답", "정답",
+            "유형", "난이도", "배점", "성취기준 코드", "성취기준", "서답형 집계",
+        ]
+        append(ws_responses, response_headers)
+        for st in payload.get("students", []):
+            for result in st.get("itemResults", []):
+                append(ws_responses, [
+                    st.get("id", ""),
+                    st.get("classNo", ""),
+                    st.get("name", ""),
+                    st.get("level", ""),
+                    result.get("number", ""),
+                    "정답" if result.get("correct") else "오답",
+                    result.get("scoreRate", ""),
+                    result.get("choice", ""),
+                    result.get("answer", ""),
+                    result.get("type", ""),
+                    result.get("difficulty", ""),
+                    result.get("score", ""),
+                    result.get("standardCode", ""),
+                    result.get("standard", ""),
+                    "예" if result.get("isAggregate") else "",
+                ])
+        ws_responses.freeze_panes = "A2"
+
+        ws_meta = wb.create_sheet("_앱내부데이터")
+        append(ws_meta, ["이 시트는 앱 내부 복원용 원본 데이터입니다. 일반 사용자는 요약/문항/학생 시트를 보시면 됩니다."])
+        append(ws_meta, [json.dumps(payload, ensure_ascii=False, indent=2)])
+        ws_meta.sheet_state = "hidden"
+
+        for sheet in wb.worksheets:
+            for cell in sheet[1]:
+                cell.font = title_font
+                cell.fill = header_fill
+                cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            for row in sheet.iter_rows(min_row=2):
+                for cell in row:
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+            for col in sheet.columns:
+                letter = col[0].column_letter
+                max_len = max(len(str(cell.value or "")) for cell in col[:80])
+                sheet.column_dimensions[letter].width = min(max(max_len + 2, 10), 42)
+        ws_items.column_dimensions["H"].width = 60
+        ws_responses.column_dimensions["N"].width = 60
+        wb.save(path)
+
     def export_spliter_evidence(self):
         if self.exam is None or self.overall is None:
             QMessageBox.warning(self, "예상정답률 계산기", "먼저 분석을 실행해 주세요.")
@@ -5680,15 +5929,17 @@ API 키: 비워둠</pre>
         safe_subject = "".join(
             "_" if ch in "\\/:*?\"<>|" else ch for ch in (self.exam.subject or "goedusplit")
         ).strip() or "goedusplit"
-        default_name = f"{safe_subject}_expected_rate_근거.json"
+        default_name = f"{safe_subject}_expected_rate_근거.xlsx"
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "예상정답률 근거 JSON 저장",
+            "예상정답률 근거 엑셀 저장",
             str(Path.home() / "Desktop" / default_name),
-            "JSON (*.json)",
+            "Excel 통합문서 (*.xlsx)",
         )
         if not path:
             return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
 
         payload = self._build_spliter_evidence_payload()
         students = payload["students"]
@@ -5698,17 +5949,16 @@ API 키: 비워둠</pre>
         serdap_text = f" · 서답형 {serdap_count}문항은 전체 점수율로 반영" if serdap_count else ""
 
         try:
-            with open(path, "w", encoding="utf-8") as f:
-                json.dump(payload, f, ensure_ascii=False, indent=2)
+            self._write_spliter_evidence_xlsx(path, payload)
         except Exception as e:
-            QMessageBox.critical(self, "예상정답률 계산기", f"근거 JSON 저장 중 오류가 발생했습니다.\n{e}")
+            QMessageBox.critical(self, "예상정답률 계산기", f"근거 엑셀 저장 중 오류가 발생했습니다.\n{e}")
             return
 
-        self.statusBar().showMessage(f"예상정답률 근거 JSON 저장 완료 · {path}", 8000)
+        self.statusBar().showMessage(f"예상정답률 근거 엑셀 저장 완료 · {path}", 8000)
         QMessageBox.information(
             self,
             "예상정답률 계산기",
-            f"근거 JSON을 저장했습니다.\n학생 {len(students)}명 · 근거 문항 {len(evidence_items)}개"
+            f"근거 엑셀을 저장했습니다.\n학생 {len(students)}명 · 근거 문항 {len(evidence_items)}개"
             f" (선택형 {select_count}개{serdap_text})\n\n{path}",
         )
 
