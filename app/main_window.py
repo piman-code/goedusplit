@@ -17,11 +17,12 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import traceback
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer
+from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer, QObject, QThread, Signal, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -74,7 +75,25 @@ AI_REVIEW_HEADERS = [
 ]
 AI_SOURCE_TEXT_LIMIT = 120_000
 AI_REFERENCE_TEXT_LIMIT = 300_000
+AI_SOURCE_CACHE_NAME = "_combined_ai_source_text.txt"
 AI_REFERENCE_CACHE_NAME = "_combined_ai_reference_text.txt"
+
+
+class _CallableWorker(QObject):
+    progress = Signal(str)
+    finished = Signal(object)
+    failed = Signal(str)
+
+    def __init__(self, func):
+        super().__init__()
+        self._func = func
+
+    @Slot()
+    def run(self):
+        try:
+            self.finished.emit(self._func(self.progress.emit))
+        except Exception:
+            self.failed.emit(traceback.format_exc())
 
 
 def _app_icon_path() -> Path | None:
@@ -2078,9 +2097,9 @@ class MainWindow(QMainWindow):
         self.lbl_ai_review_note.setProperty("role", "muted")
         self.lbl_ai_review_note.setWordWrap(True)
         head.addWidget(self.lbl_ai_review_note, 1)
-        btn_load = QPushButton("문항 PDF/자료")
-        btn_load.clicked.connect(self._load_ai_review_file)
-        head.addWidget(btn_load)
+        self.btn_ai_load_source = QPushButton("문항 PDF/자료")
+        self.btn_ai_load_source.clicked.connect(self._load_ai_review_file)
+        head.addWidget(self.btn_ai_load_source)
         btn_reference = QPushButton("성취기준·수준 자료")
         btn_reference.setToolTip("성취기준, 성취수준, 최소능력자 설명 자료를 참고자료 칸에 불러옵니다.")
         btn_reference.clicked.connect(self._load_ai_reference_file)
@@ -2096,14 +2115,14 @@ class MainWindow(QMainWindow):
         btn_exam = QPushButton("현재 문항정보표")
         btn_exam.clicked.connect(self._load_ai_review_from_exam)
         head.addWidget(btn_exam)
-        btn_generate = QPushButton("검토 초안 생성")
-        btn_generate.setProperty("role", "primary")
-        btn_generate.clicked.connect(self._generate_ai_review_draft)
-        head.addWidget(btn_generate)
-        btn_ai_enrich = QPushButton("AI로 보강")
-        btn_ai_enrich.setToolTip("AI 설정에 지정한 로컬/클라우드 모델로 검토 초안을 보강합니다.")
-        btn_ai_enrich.clicked.connect(self._run_ai_review_completion)
-        head.addWidget(btn_ai_enrich)
+        self.btn_ai_generate = QPushButton("검토 초안 생성")
+        self.btn_ai_generate.setProperty("role", "primary")
+        self.btn_ai_generate.clicked.connect(self._generate_ai_review_draft)
+        head.addWidget(self.btn_ai_generate)
+        self.btn_ai_enrich = QPushButton("AI로 보강")
+        self.btn_ai_enrich.setToolTip("AI 설정에 지정한 로컬/클라우드 모델로 검토 초안을 보강합니다.")
+        self.btn_ai_enrich.clicked.connect(self._run_ai_review_completion)
+        head.addWidget(self.btn_ai_enrich)
         btn_to_spliter = QPushButton("지필→예상정답률")
         btn_to_spliter.clicked.connect(self._send_ai_review_to_spliter)
         head.addWidget(btn_to_spliter)
@@ -2136,6 +2155,21 @@ class MainWindow(QMainWindow):
         self.ai_review_input_tabs = QTabWidget()
         source_panel = QWidget()
         source_layout = QVBoxLayout(source_panel); source_layout.setContentsMargins(0, 0, 0, 0)
+        source_tools = QHBoxLayout()
+        self.lbl_ai_source_store = QLabel()
+        self.lbl_ai_source_store.setProperty("role", "muted")
+        self.lbl_ai_source_store.setWordWrap(True)
+        self.lbl_ai_source_store.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        source_tools.addWidget(self.lbl_ai_source_store, 1)
+        btn_load_saved_source = QPushButton("저장자료 불러오기")
+        btn_load_saved_source.setToolTip("앱 자료 폴더에 저장된 문항 자료를 선택해 다시 불러옵니다.")
+        btn_load_saved_source.clicked.connect(self._load_saved_ai_source_text)
+        source_tools.addWidget(btn_load_saved_source)
+        btn_save_source_text = QPushButton("현재 내용 저장")
+        btn_save_source_text.setToolTip("현재 문항 자료 칸의 내용을 앱 자료 폴더에 저장합니다.")
+        btn_save_source_text.clicked.connect(lambda: self._save_current_ai_text("source"))
+        source_tools.addWidget(btn_save_source_text)
+        source_layout.addLayout(source_tools)
         self.txt_ai_review_source = QPlainTextEdit()
         self.txt_ai_review_source.setPlaceholderText(
             "시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 붙여 넣거나 '문항 PDF/자료'로 불러오세요."
@@ -2152,9 +2186,13 @@ class MainWindow(QMainWindow):
         self.lbl_ai_reference_store.setTextInteractionFlags(Qt.TextSelectableByMouse)
         reference_tools.addWidget(self.lbl_ai_reference_store, 1)
         btn_load_saved_reference = QPushButton("저장자료 불러오기")
-        btn_load_saved_reference.setToolTip("앱 자료 폴더에 저장된 성취기준·수준 추출본을 다시 불러옵니다.")
+        btn_load_saved_reference.setToolTip("앱 자료 폴더에 저장된 성취기준·수준 자료를 선택해 다시 불러옵니다.")
         btn_load_saved_reference.clicked.connect(self._load_saved_ai_reference_text)
         reference_tools.addWidget(btn_load_saved_reference)
+        btn_save_reference_text = QPushButton("현재 내용 저장")
+        btn_save_reference_text.setToolTip("현재 성취기준·수준 칸의 내용을 앱 자료 폴더에 저장합니다.")
+        btn_save_reference_text.clicked.connect(lambda: self._save_current_ai_text("reference"))
+        reference_tools.addWidget(btn_save_reference_text)
         reference_layout.addLayout(reference_tools)
         self.txt_ai_review_reference = QPlainTextEdit()
         self.txt_ai_review_reference.setPlaceholderText(
@@ -2181,6 +2219,10 @@ class MainWindow(QMainWindow):
         self.txt_ai_review_prompt.setReadOnly(True)
         self.txt_ai_review_prompt.setPlaceholderText("검토 초안을 만들면 AI 연결용 프롬프트가 여기에 생성됩니다.")
         self.ai_review_tabs.addTab(self.txt_ai_review_prompt, "AI 프롬프트")
+        self.txt_ai_progress = QPlainTextEdit()
+        self.txt_ai_progress.setReadOnly(True)
+        self.txt_ai_progress.setPlaceholderText("AI 연결, 서버 탐색, 보강 요청의 진행 상황이 여기에 표시됩니다.")
+        self.ai_review_tabs.addTab(self.txt_ai_progress, "진행 로그")
         self.ai_review_tabs.addTab(self._build_ai_usage_panel(), "사용 예시")
         self.ai_review_tabs.addTab(self._build_ai_settings_panel(), "AI 설정")
         right_layout.addWidget(self.ai_review_tabs, 1)
@@ -2189,6 +2231,7 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 2)
         split.setSizes([420, 780])
         layout.addWidget(split, 1)
+        self._refresh_ai_source_store_label()
         self._refresh_ai_reference_store_label()
         self._set_ai_review_summary(0, 0, 0)
 
@@ -2310,17 +2353,17 @@ API 키: 비워둠</pre>
         btn_save.setProperty("role", "primary")
         btn_save.clicked.connect(self._save_ai_settings)
         row.addWidget(btn_save)
-        btn_test = QPushButton("연결 테스트")
-        btn_test.clicked.connect(self._test_ai_connection)
-        row.addWidget(btn_test)
-        btn_find_mlx = QPushButton("MLX 찾기")
-        btn_find_mlx.setToolTip("실행 중인 MLX-LM/LM Studio 로컬 서버를 자동으로 찾아 설정합니다.")
-        btn_find_mlx.clicked.connect(self._find_local_mlx_server)
-        row.addWidget(btn_find_mlx)
-        btn_start_mlx = QPushButton("MLX 서버 시작")
-        btn_start_mlx.setToolTip("로컬에 설치된 mlx_lm.server를 실행합니다. 모델이 없으면 다운로드가 필요할 수 있습니다.")
-        btn_start_mlx.clicked.connect(self._start_local_mlx_server)
-        row.addWidget(btn_start_mlx)
+        self.btn_ai_test = QPushButton("연결 테스트")
+        self.btn_ai_test.clicked.connect(self._test_ai_connection)
+        row.addWidget(self.btn_ai_test)
+        self.btn_find_mlx = QPushButton("MLX 찾기")
+        self.btn_find_mlx.setToolTip("실행 중인 MLX-LM/LM Studio 로컬 서버를 자동으로 찾아 설정합니다.")
+        self.btn_find_mlx.clicked.connect(self._find_local_mlx_server)
+        row.addWidget(self.btn_find_mlx)
+        self.btn_start_mlx = QPushButton("MLX 서버 시작")
+        self.btn_start_mlx.setToolTip("로컬에 설치된 mlx_lm.server를 실행합니다. 모델이 없으면 다운로드가 필요할 수 있습니다.")
+        self.btn_start_mlx.clicked.connect(self._start_local_mlx_server)
+        row.addWidget(self.btn_start_mlx)
         row.addStretch(1)
         layout.addLayout(row)
 
@@ -2415,6 +2458,78 @@ API 키: 비워둠</pre>
             timeout=int(self.spin_ai_timeout.value()),
         )
 
+    def _append_ai_progress(self, message: str):
+        stamp = datetime.now().strftime("%H:%M:%S")
+        line = f"[{stamp}] {message}"
+        if hasattr(self, "txt_ai_progress"):
+            self.txt_ai_progress.appendPlainText(line)
+            self.ai_review_tabs.setCurrentWidget(self.txt_ai_progress)
+        if hasattr(self, "lbl_ai_settings_status"):
+            self.lbl_ai_settings_status.setText(message)
+        self.statusBar().showMessage(message, 5000)
+
+    def _set_ai_busy(self, busy: bool, label: str = ""):
+        for attr in (
+            "btn_ai_enrich",
+            "btn_ai_generate",
+            "btn_ai_test",
+            "btn_find_mlx",
+            "btn_start_mlx",
+            "btn_ai_load_source",
+        ):
+            widget = getattr(self, attr, None)
+            if widget is not None:
+                widget.setEnabled(not busy)
+        if busy:
+            QApplication.setOverrideCursor(Qt.WaitCursor)
+        else:
+            while QApplication.overrideCursor() is not None:
+                QApplication.restoreOverrideCursor()
+        if busy and label:
+            self._append_ai_progress(label)
+
+    def _run_ai_background_task(self, title: str, func, on_success):
+        if getattr(self, "_ai_worker_thread", None) is not None:
+            QMessageBox.information(self, title, "이미 AI 작업이 진행 중입니다. 진행 로그를 확인해 주세요.")
+            return
+        self._set_ai_busy(True, f"{title} 시작")
+        thread = QThread(self)
+        worker = _CallableWorker(func)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.progress.connect(self._append_ai_progress)
+
+        def cleanup():
+            thread.quit()
+            thread.wait()
+            worker.deleteLater()
+            thread.deleteLater()
+            self._ai_worker_thread = None
+            self._ai_worker = None
+            self._set_ai_busy(False)
+
+        def handle_success(result):
+            try:
+                on_success(result)
+            finally:
+                cleanup()
+
+        def handle_failure(trace: str):
+            try:
+                short = trace.strip().splitlines()[-1] if trace.strip() else "알 수 없는 오류"
+                self._append_ai_progress(f"{title} 실패: {short}")
+                QMessageBox.warning(self, title, f"작업 중 오류가 발생했습니다.\n{short}\n\n자세한 내용은 진행 로그를 확인해 주세요.")
+                if hasattr(self, "txt_ai_progress"):
+                    self.txt_ai_progress.appendPlainText(trace)
+            finally:
+                cleanup()
+
+        worker.finished.connect(handle_success)
+        worker.failed.connect(handle_failure)
+        self._ai_worker_thread = thread
+        self._ai_worker = worker
+        thread.start()
+
     def _candidate_mlx_endpoints(self) -> list[str]:
         current = self.edit_ai_endpoint.text().strip() if hasattr(self, "edit_ai_endpoint") else ""
         raw = [
@@ -2453,30 +2568,28 @@ API 키: 비워둠</pre>
         return "", [], errors
 
     def _find_local_mlx_server(self):
-        endpoint, models, errors = self._probe_mlx_models()
-        if not endpoint:
-            detail = "\n".join(errors[:5])
-            QMessageBox.warning(
-                self,
-                "MLX 서버 찾기",
-                "실행 중인 MLX-LM/LM Studio 서버를 찾지 못했습니다.\n\n"
-                "1. MLX 서버가 켜져 있는지 확인하세요.\n"
-                "2. 보통 주소는 http://127.0.0.1:8080/v1/chat/completions 입니다.\n"
-                "3. 앱의 'MLX 서버 시작' 버튼으로 직접 시작할 수도 있습니다.\n\n"
-                f"점검 내용:\n{detail}",
-            )
-            if hasattr(self, "lbl_ai_settings_status"):
-                self.lbl_ai_settings_status.setText("MLX 서버를 찾지 못했습니다. 서버 실행 후 다시 시도하세요.")
-            return
-        idx = self.cmb_ai_provider.findData("mlx_compatible")
-        if idx >= 0:
-            self.cmb_ai_provider.setCurrentIndex(idx)
-        self.edit_ai_endpoint.setText(endpoint)
-        self.edit_ai_model.setText(models[0])
-        self._save_ai_settings()
-        message = f"MLX 서버 감지 완료 · {endpoint} · 모델 {models[0]}"
-        self.lbl_ai_settings_status.setText(message)
-        self.statusBar().showMessage(message, 6000)
+        config = AIProviderConfig(
+            provider="mlx_compatible",
+            endpoint=normalize_endpoint("mlx_compatible", self.edit_ai_endpoint.text()),
+            model=self.edit_ai_model.text().strip() or default_model("mlx_compatible"),
+            timeout=int(self.spin_ai_timeout.value()),
+        )
+        endpoints = self._candidate_mlx_endpoints()
+
+        def work(progress):
+            progress("MLX/LM Studio 로컬 서버 자동 탐색 시작")
+            prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
+            return {"config": prepared, "note": note}
+
+        def success(result):
+            prepared = result["config"]
+            note = result.get("note", "")
+            self._apply_prepared_ai_config(prepared, note)
+            message = f"MLX 서버 감지 완료 · {prepared.endpoint} · 모델 {prepared.model}"
+            self.lbl_ai_settings_status.setText(message)
+            self.statusBar().showMessage(message, 6000)
+
+        self._run_ai_background_task("MLX 서버 찾기", work, success)
 
     def _start_local_mlx_server(self):
         exe = shutil.which("mlx_lm.server")
@@ -2518,6 +2631,7 @@ API 키: 비워둠</pre>
             QMessageBox.warning(self, "MLX 서버 시작", f"MLX 서버를 시작하지 못했습니다.\n{exc}")
             return
         self.mlx_server_process = process
+        self.mlx_server_log_file = log_file
         idx = self.cmb_ai_provider.findData("mlx_compatible")
         if idx >= 0:
             self.cmb_ai_provider.setCurrentIndex(idx)
@@ -2527,24 +2641,52 @@ API 키: 비워둠</pre>
         self.lbl_ai_settings_status.setText(
             f"MLX 서버 시작 요청 완료. 5~20초 뒤 'MLX 찾기' 또는 '연결 테스트'를 누르세요. 로그: {log_path}"
         )
+        self._append_ai_progress(f"MLX 서버 시작 요청 완료 · PID {process.pid} · 로그 {log_path}")
         QTimer.singleShot(7000, self._find_local_mlx_server)
 
-    def _prepare_ai_connection_config(self, config: AIProviderConfig) -> tuple[AIProviderConfig, str]:
+    @staticmethod
+    def _prepare_ai_connection_config_for_worker(
+        config: AIProviderConfig,
+        mlx_endpoints: list[str] | None = None,
+        progress=None,
+    ) -> tuple[AIProviderConfig, str]:
+        def tell(message: str):
+            if progress:
+                progress(message)
+
         note = ""
         if config.provider == "openai_cloud" and not config.api_key:
             raise ValueError("OpenAI 클라우드는 OAuth 로그인이 아니라 API Key가 필요합니다. API 키를 입력해 주세요.")
         if config.provider == "ollama":
+            tell("Ollama 서버 모델 목록 확인 중")
             models = list_ollama_models(config.endpoint, min(config.timeout, 20))
             if models and (not config.model or config.model not in models):
                 preferred = next((name for name in models if name.startswith(("gemma", "qwen", "llama"))), models[0])
                 config.model = preferred
-                self.edit_ai_model.setText(preferred)
-                self.settings.setValue("ai/model", preferred)
                 note = f"설치된 Ollama 모델을 감지해 모델을 {preferred}(으)로 맞췄습니다."
             elif not models:
                 note = "Ollama 서버는 응답했지만 설치된 모델 목록이 비어 있습니다."
         elif config.provider == "mlx_compatible":
-            endpoint, models, errors = self._probe_mlx_models()
+            errors = []
+            endpoint = ""
+            models = []
+            for candidate in mlx_endpoints or []:
+                tell(f"MLX 서버 확인 중: {candidate}")
+                try:
+                    found = list_openai_compatible_models(
+                        candidate,
+                        "",
+                        "mlx_compatible",
+                        min(config.timeout, 15),
+                    )
+                except Exception as exc:
+                    errors.append(f"{candidate}: {exc}")
+                    continue
+                if found:
+                    endpoint = candidate
+                    models = found
+                    break
+                errors.append(f"{candidate}: 모델 목록이 비어 있습니다.")
             if not endpoint:
                 detail = "\n".join(errors[:4])
                 raise ValueError(
@@ -2556,12 +2698,9 @@ API 키: 비워둠</pre>
             config.endpoint = endpoint
             if models and (not config.model or config.model not in models):
                 config.model = models[0]
-                self.edit_ai_endpoint.setText(endpoint)
-                self.edit_ai_model.setText(config.model)
-                self.settings.setValue("ai/endpoint", endpoint)
-                self.settings.setValue("ai/model", config.model)
                 note = f"MLX 서버 모델 목록을 감지해 모델을 {config.model}(으)로 맞췄습니다."
         elif config.provider == "openai_compatible":
+            tell("OpenAI 호환 서버 모델 목록 확인 중")
             try:
                 models = list_openai_compatible_models(
                     config.endpoint,
@@ -2573,11 +2712,32 @@ API 키: 비워둠</pre>
                 models = []
             if models and (not config.model or config.model not in models):
                 config.model = models[0]
-                self.edit_ai_model.setText(config.model)
-                self.settings.setValue("ai/model", config.model)
                 note = f"서버 모델 목록을 감지해 모델을 {config.model}(으)로 맞췄습니다."
-        self.settings.sync()
         return config, note
+
+    def _apply_prepared_ai_config(self, config: AIProviderConfig, note: str = ""):
+        if not hasattr(self, "cmb_ai_provider"):
+            return
+        idx = self.cmb_ai_provider.findData(config.provider)
+        if idx >= 0:
+            self.cmb_ai_provider.setCurrentIndex(idx)
+        self.edit_ai_endpoint.setText(config.endpoint)
+        self.edit_ai_model.setText(config.model)
+        self.settings.setValue("ai/provider", config.provider)
+        self.settings.setValue("ai/endpoint", config.endpoint)
+        self.settings.setValue("ai/model", config.model)
+        self.settings.sync()
+        if note:
+            self._append_ai_progress(note)
+
+    def _prepare_ai_connection_config(self, config: AIProviderConfig) -> tuple[AIProviderConfig, str]:
+        prepared, note = self._prepare_ai_connection_config_for_worker(
+            config,
+            self._candidate_mlx_endpoints(),
+            self._append_ai_progress,
+        )
+        self._apply_prepared_ai_config(prepared, note)
+        return prepared, note
 
     def _student_names_for_privacy(self) -> list[str]:
         if self.exam is None:
@@ -2590,6 +2750,7 @@ API 키: 비워둠</pre>
         if config.provider == "local_draft":
             QMessageBox.information(self, "AI 연결 테스트", "로컬 초안 모드는 외부 연결 없이 바로 사용할 수 있습니다.")
             return
+        endpoints = self._candidate_mlx_endpoints()
         prompt = (
             "연결 테스트입니다. 설명 없이 JSON 배열만 반환하세요.\n"
             "각 객체는 반드시 다음 13개 키를 모두 포함해야 합니다: "
@@ -2601,18 +2762,25 @@ API 키: 비워둠</pre>
             "\"D 예상\":\"1/3\",\"E 예상\":\"0/3\","
             "\"근거\":\"연결 확인\",\"다음 확인\":\"없음\"}]"
         )
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            config, note = self._prepare_ai_connection_config(config)
-            output = run_completion(prompt, config)
+
+        def work(progress):
+            prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
+            progress(f"{prepared.label}에 짧은 테스트 요청 전송 중")
+            output = run_completion(prompt, prepared)
+            progress("AI 응답 수신, 표 형식 해석 중")
             parsed = parse_review_rows(output)
-        except Exception as exc:
-            QMessageBox.warning(self, "AI 연결 테스트", f"연결하지 못했습니다.\n{exc}")
-            self.lbl_ai_settings_status.setText(f"연결 실패: {exc}")
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
-        if parsed:
+            return {"config": prepared, "note": note, "output": output, "parsed": parsed}
+
+        def success(result):
+            prepared = result["config"]
+            note = result.get("note", "")
+            parsed = result.get("parsed") or []
+            self._apply_prepared_ai_config(prepared, note)
+            if not parsed:
+                self.lbl_ai_settings_status.setText("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
+                self._append_ai_progress("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
+                QMessageBox.information(self, "AI 연결 테스트", "응답은 받았지만 표 형식으로 해석하지 못했습니다. 모델 출력 형식을 확인해 주세요.")
+                return
             missing_expected = [header for header in AI_EXPECTED_HEADERS if not parsed[0].get(header)]
             if missing_expected:
                 self.lbl_ai_settings_status.setText("응답은 받았지만 A~E 예상값이 비어 있습니다.")
@@ -2623,14 +2791,14 @@ API 키: 비워둠</pre>
                     "모델이 JSON 키 'A 예상'부터 'E 예상'까지 채우도록 설정을 확인해 주세요.",
                 )
                 return
-            status = f"{config.label} 연결 확인 완료. 모델: {config.model}"
+            status = f"{prepared.label} 연결 확인 완료. 모델: {prepared.model}"
             if note:
                 status += f" · {note}"
             self.lbl_ai_settings_status.setText(status)
-            QMessageBox.information(self, "AI 연결 테스트", f"{config.label} 응답을 정상적으로 읽었습니다.\n{note}".strip())
-        else:
-            self.lbl_ai_settings_status.setText("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
-            QMessageBox.information(self, "AI 연결 테스트", "응답은 받았지만 표 형식으로 해석하지 못했습니다. 모델 출력 형식을 확인해 주세요.")
+            self._append_ai_progress(status)
+            QMessageBox.information(self, "AI 연결 테스트", f"{prepared.label} 응답을 정상적으로 읽었습니다.\n{note}".strip())
+
+        self._run_ai_background_task("AI 연결 테스트", work, success)
 
     def _ai_review_example_text(self, kind: str) -> str:
         if kind == "perform":
@@ -2882,19 +3050,56 @@ API 키: 비워둠</pre>
             levels.append(f"{lv}: {body}")
         return levels
 
-    def _ai_reference_store_dir(self) -> Path:
+    def _ai_material_root_dir(self) -> Path:
         if sys.platform == "darwin":
             root = Path.home() / "Library" / "Application Support" / "Goedu-Split"
         elif sys.platform.startswith("win"):
             root = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Goedu-Split"
         else:
             root = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")) / "Goedu-Split"
-        out = root / "ai_reference_files"
-        out.mkdir(parents=True, exist_ok=True)
-        return out
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            root = Path(tempfile.gettempdir()) / "Goedu-Split"
+            root.mkdir(parents=True, exist_ok=True)
+        return root
+
+    @staticmethod
+    def _ensure_writable_dir(path: Path, fallback_name: str) -> Path:
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            probe = path / ".__goedusplit_write_test__"
+            probe.write_text("ok", encoding="utf-8")
+            probe.unlink(missing_ok=True)
+            return path
+        except OSError:
+            fallback = Path(tempfile.gettempdir()) / "Goedu-Split" / fallback_name
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback
+
+    def _ai_source_store_dir(self) -> Path:
+        return self._ensure_writable_dir(self._ai_material_root_dir() / "ai_source_files", "ai_source_files")
+
+    def _ai_reference_store_dir(self) -> Path:
+        return self._ensure_writable_dir(self._ai_material_root_dir() / "ai_reference_files", "ai_reference_files")
+
+    def _ai_source_cache_path(self) -> Path:
+        return self._ai_source_store_dir() / AI_SOURCE_CACHE_NAME
 
     def _ai_reference_cache_path(self) -> Path:
         return self._ai_reference_store_dir() / AI_REFERENCE_CACHE_NAME
+
+    def _refresh_ai_source_store_label(self):
+        if not hasattr(self, "lbl_ai_source_store"):
+            return
+        store = self._ai_source_store_dir()
+        stored_files = [
+            path for path in store.iterdir()
+            if path.is_file() and path.name != AI_SOURCE_CACHE_NAME
+        ]
+        self.lbl_ai_source_store.setText(
+            f"저장 위치: {store} · 저장자료 {len(stored_files)}개"
+        )
 
     def _refresh_ai_reference_store_label(self):
         if not hasattr(self, "lbl_ai_reference_store"):
@@ -2930,30 +3135,127 @@ API 키: 비워둠</pre>
         self._refresh_ai_reference_store_label()
         return target
 
+    def _store_ai_source_file(self, path: Path) -> Path:
+        store = self._ai_source_store_dir()
+        target = self._unique_store_path(store, path.name)
+        shutil.copy2(path, target)
+        self._refresh_ai_source_store_label()
+        return target
+
+    def _save_ai_source_cache(self, text: str):
+        cache = self._ai_source_cache_path()
+        cache.write_text(text[:AI_SOURCE_TEXT_LIMIT], encoding="utf-8")
+        self._refresh_ai_source_store_label()
+
     def _save_ai_reference_cache(self, text: str):
         cache = self._ai_reference_cache_path()
         cache.write_text(text[:AI_REFERENCE_TEXT_LIMIT], encoding="utf-8")
         self._refresh_ai_reference_store_label()
 
-    def _load_saved_ai_reference_text(self):
-        cache = self._ai_reference_cache_path()
-        if not cache.exists():
-            QMessageBox.information(
-                self,
-                "저장자료 불러오기",
-                f"아직 저장된 성취기준·수준 추출본이 없습니다.\n저장 위치: {self._ai_reference_store_dir()}",
-            )
+    def _save_current_ai_text(self, kind: str):
+        if kind == "source":
+            text = self._ai_review_source_text()
+            store = self._ai_source_store_dir()
+            label = "문항 자료"
+            suffix = "source"
+            limit = AI_SOURCE_TEXT_LIMIT
+        else:
+            text = self._ai_review_reference_text()
+            store = self._ai_reference_store_dir()
+            label = "성취기준·수준 자료"
+            suffix = "reference"
+            limit = AI_REFERENCE_TEXT_LIMIT
+        if not text:
+            QMessageBox.information(self, "현재 내용 저장", f"저장할 {label}가 없습니다.")
+            return
+        default = store / f"{datetime.now().strftime('%Y%m%d_%H%M%S')}_{suffix}.txt"
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            f"{label} 저장",
+            str(default),
+            "텍스트 파일 (*.txt);;모든 파일 (*.*)",
+        )
+        if not path:
             return
         try:
-            text = cache.read_text(encoding="utf-8")
+            Path(path).write_text(text[:limit], encoding="utf-8")
+            if kind == "source":
+                self._save_ai_source_cache(text)
+            else:
+                self._save_ai_reference_cache(text)
         except Exception as exc:
-            QMessageBox.warning(self, "저장자료 불러오기", f"저장자료를 읽지 못했습니다.\n{exc}")
+            QMessageBox.warning(self, "현재 내용 저장", f"저장하지 못했습니다.\n{exc}")
             return
-        text = self._compact_ai_reference_text(text)
+        self.statusBar().showMessage(f"{label} 저장 완료 · {path}", 5000)
+
+    def _choose_saved_ai_files(self, kind: str) -> list[str]:
+        if kind == "source":
+            store = self._ai_source_store_dir()
+            title = "저장된 문항 자료 선택"
+        else:
+            store = self._ai_reference_store_dir()
+            title = "저장된 성취기준·수준 자료 선택"
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            title,
+            str(store),
+            "저장 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
+        )
+        return paths
+
+    def _load_saved_ai_source_text(self):
+        paths = self._choose_saved_ai_files("source")
+        if not paths:
+            return
+        parts = []
+        failures = []
+        for path_str in paths:
+            path = Path(path_str)
+            try:
+                text = self._extract_text_from_review_file(str(path))
+            except Exception as exc:
+                failures.append(f"{path.name}: {exc}")
+                continue
+            parts.append(f"--- 문항 자료: {path.name} ---\n저장 위치: {path}\n{text}")
+        if not parts:
+            QMessageBox.warning(self, "저장자료 불러오기", "선택한 문항 자료를 읽지 못했습니다.\n" + "\n".join(failures[:5]))
+            return
+        text = "\n\n".join(parts)
+        self._set_ai_review_source_text(text, target="source")
+        self._save_ai_source_cache(text)
+        self._refresh_ai_source_store_label()
+        self.statusBar().showMessage(f"저장된 문항 자료 {len(parts)}개를 불러왔습니다.", 5000)
+        if failures:
+            QMessageBox.warning(self, "일부 문항 자료 읽기 실패", "\n".join(failures[:8]))
+
+    def _load_saved_ai_reference_text(self):
+        paths = self._choose_saved_ai_files("reference")
+        if not paths:
+            return
+        parts = []
+        failures = []
+        for path_str in paths:
+            path = Path(path_str)
+            try:
+                text = self._compact_ai_reference_text(self._extract_text_from_review_file(str(path)))
+            except Exception as exc:
+                failures.append(f"{path.name}: {exc}")
+                continue
+            parts.append(f"--- 성취기준·수준 자료: {path.name} ---\n저장 위치: {path}\n{text}")
+        if not parts:
+            QMessageBox.warning(
+                self,
+                "저장자료 불러오기",
+                "선택한 성취기준·수준 자료를 읽지 못했습니다.\n" + "\n".join(failures[:5]),
+            )
+            return
+        text = "\n\n".join(parts)
         self._set_ai_review_source_text(text, target="reference")
         self._save_ai_reference_cache(text)
         self._refresh_ai_reference_store_label()
-        self.statusBar().showMessage(f"저장된 성취기준·수준 자료를 불러왔습니다. 위치: {cache}", 5000)
+        self.statusBar().showMessage(f"저장된 성취기준·수준 자료 {len(parts)}개를 불러왔습니다.", 5000)
+        if failures:
+            QMessageBox.warning(self, "일부 참고자료 읽기 실패", "\n".join(failures[:8]))
 
     def _set_ai_review_source_text(self, text: str, *, target: str = "source"):
         if target == "reference" and hasattr(self, "txt_ai_review_reference"):
@@ -2976,21 +3278,67 @@ API 키: 비워둠</pre>
         return self.txt_ai_review_reference.toPlainText().strip()
 
     def _load_ai_review_file(self):
-        path, _ = QFileDialog.getOpenFileName(
+        paths, _ = QFileDialog.getOpenFileNames(
             self,
             "시험 문제 PDF 또는 문항 자료 불러오기",
             "",
             "검토 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
         )
-        if not path:
+        if not paths:
             return
-        try:
-            text = self._extract_text_from_review_file(path)
-        except Exception as e:
-            QMessageBox.warning(self, "AI 문항 검토", f"파일을 읽지 못했습니다.\n{e}")
+        existing = self._ai_review_source_text().strip()
+        append_existing = False
+        if existing:
+            choice = QMessageBox.question(
+                self,
+                "문항 자료 추가",
+                f"이미 문항 자료가 들어 있습니다.\n선택한 {len(paths)}개 자료를 기존 자료 뒤에 추가할까요?\n\n"
+                "예: 추가\n아니오: 기존 자료를 지우고 교체",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if choice == QMessageBox.Cancel:
+                return
+            append_existing = choice == QMessageBox.Yes
+        parts = []
+        failures = []
+        for path_str in paths:
+            path = Path(path_str)
+            try:
+                saved = self._store_ai_source_file(path)
+                text = self._extract_text_from_review_file(str(path))
+            except Exception as e:
+                failures.append(f"{path.name}: {e}")
+                continue
+            parts.append(
+                f"--- 문항 자료: {path.name} ---\n"
+                f"저장 위치: {saved}\n"
+                f"{text}"
+            )
+        if not parts:
+            QMessageBox.warning(
+                self,
+                "AI 문항 검토",
+                "선택한 문항 자료를 읽지 못했습니다.\n" + "\n".join(failures[:5]),
+            )
             return
+        text = "\n\n".join(parts)
+        if append_existing:
+            text = f"{existing}\n\n{text}"
         self._set_ai_review_source_text(text, target="source")
-        self.statusBar().showMessage(f"문항 자료 불러오기 완료 · {Path(path).name}", 4000)
+        self._save_ai_source_cache(text)
+        message = (
+            f"문항 자료 {len(parts)}개 불러오기 완료 · "
+            f"저장 위치: {self._ai_source_store_dir()}"
+        )
+        if failures:
+            message += f" · 실패 {len(failures)}개"
+            QMessageBox.warning(
+                self,
+                "일부 문항 자료 읽기 실패",
+                "다음 자료는 불러오지 못했습니다.\n" + "\n".join(failures[:8]),
+            )
+        self.statusBar().showMessage(message, 7000)
 
     def _load_ai_reference_file(self):
         paths, _ = QFileDialog.getOpenFileNames(
@@ -3586,12 +3934,6 @@ API 키: 비워둠</pre>
             self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(local_rows, text, reference_text))
             self.statusBar().showMessage("로컬 초안으로 검토표를 갱신했습니다.", 3500)
             return
-        try:
-            config, note = self._prepare_ai_connection_config(config)
-        except Exception as exc:
-            QMessageBox.warning(self, "AI 문항 검토", f"AI 연결 설정을 확인하지 못했습니다.\n{exc}")
-            self.statusBar().showMessage("AI 연결 확인 실패", 5000)
-            return
 
         prompt = self._make_structured_ai_review_prompt(local_rows, text, reference_text)
         if hasattr(self, "chk_ai_scrub") and self.chk_ai_scrub.isChecked():
@@ -3599,36 +3941,44 @@ API 키: 비워둠</pre>
         else:
             prompt_to_send = prompt
         self.txt_ai_review_prompt.setPlainText(prompt_to_send)
-        QApplication.setOverrideCursor(Qt.WaitCursor)
-        try:
-            output = run_completion(prompt_to_send, config)
-            ai_rows = parse_review_rows(output)
-        except Exception as exc:
-            QMessageBox.warning(self, "AI 문항 검토", f"AI 보강 중 오류가 발생했습니다.\n{exc}")
-            self.statusBar().showMessage("AI 보강 실패", 5000)
-            return
-        finally:
-            QApplication.restoreOverrideCursor()
+        endpoints = self._candidate_mlx_endpoints()
 
-        if not ai_rows:
+        def work(progress):
+            prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
+            progress(f"{prepared.label}에 문항 검토 요청 전송 중")
+            progress("문항 수가 많거나 모델이 크면 1~5분 걸릴 수 있습니다.")
+            output = run_completion(prompt_to_send, prepared)
+            progress("AI 응답 수신, 검토표로 변환 중")
+            ai_rows = parse_review_rows(output)
+            return {"config": prepared, "note": note, "output": output, "rows": ai_rows}
+
+        def success(result):
+            prepared = result["config"]
+            note = result.get("note", "")
+            output = result.get("output") or ""
+            ai_rows = result.get("rows") or []
+            self._apply_prepared_ai_config(prepared, note)
+            if not ai_rows:
+                self.txt_ai_review_prompt.setPlainText(
+                    prompt_to_send + "\n\n[AI 원문 출력]\n" + (output or "(빈 응답)")[:20000]
+                )
+                QMessageBox.information(
+                    self,
+                    "AI 문항 검토",
+                    "AI 응답은 받았지만 검토표로 해석하지 못했습니다.\nAI 프롬프트 탭의 원문 출력을 확인해 주세요.",
+                )
+                return
+            self._populate_ai_review_table(ai_rows, mode=f"{prepared.label} 보강")
             self.txt_ai_review_prompt.setPlainText(
-                prompt_to_send + "\n\n[AI 원문 출력]\n" + (output or "(빈 응답)")[:20000]
+                prompt_to_send + "\n\n[AI 원문 출력]\n" + output[:20000]
             )
-            QMessageBox.information(
-                self,
-                "AI 문항 검토",
-                "AI 응답은 받았지만 검토표로 해석하지 못했습니다.\nAI 프롬프트 탭의 원문 출력을 확인해 주세요.",
-            )
-            return
-        self._populate_ai_review_table(ai_rows, mode=f"{config.label} 보강")
-        self.txt_ai_review_prompt.setPlainText(
-            prompt_to_send + "\n\n[AI 원문 출력]\n" + (output or "")[:20000]
-        )
-        self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
-        done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목"
-        if note:
-            done_message += f" · {note}"
-        self.statusBar().showMessage(done_message, 5000)
+            self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
+            done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목"
+            if note:
+                done_message += f" · {note}"
+            self._append_ai_progress(done_message)
+
+        self._run_ai_background_task("AI 문항 검토", work, success)
 
     def _export_ai_review_csv(self):
         if not hasattr(self, "table_ai_review") or self.table_ai_review.rowCount() == 0:
