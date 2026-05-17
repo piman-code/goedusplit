@@ -80,6 +80,10 @@ AI_SOURCE_TEXT_LIMIT = 120_000
 AI_REFERENCE_TEXT_LIMIT = 300_000
 AI_SOURCE_CACHE_NAME = "_combined_ai_source_text.txt"
 AI_REFERENCE_CACHE_NAME = "_combined_ai_reference_text.txt"
+AI_REVIEW_LOCAL_CHUNK_SIZE = 3
+AI_REVIEW_CLOUD_CHUNK_SIZE = 5
+AI_REVIEW_CHUNK_SOURCE_LIMIT = 9_000
+AI_REVIEW_CHUNK_REFERENCE_LIMIT = 8_000
 
 
 def _app_icon_path() -> Path | None:
@@ -2075,15 +2079,11 @@ class MainWindow(QMainWindow):
         layout.setSpacing(8)
 
         head = QHBoxLayout()
-        self.lbl_ai_review_note = QLabel(
-            "문항지·수행평가 채점기준표·문항정보표를 불러오거나 텍스트를 붙여 넣으면 "
-            "성취기준, 평가유형, 목표 성취수준, 난이도 후보를 검토 초안으로 정리합니다. "
-            "현재 단계는 로컬 초안 생성이며, AI 최종 판정이 아니라 교사 검토 보조입니다."
-        )
-        self.lbl_ai_review_note.setProperty("role", "muted")
-        self.lbl_ai_review_note.setWordWrap(True)
-        head.addWidget(self.lbl_ai_review_note, 1)
+        head.addStretch(1)
         self.btn_ai_load_source = QPushButton("문항 PDF/자료")
+        self.btn_ai_load_source.setToolTip(
+            "시험 문제 PDF, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다."
+        )
         self.btn_ai_load_source.clicked.connect(self._load_ai_review_file)
         head.addWidget(self.btn_ai_load_source)
         btn_reference = QPushButton("성취기준·수준 자료")
@@ -2144,9 +2144,12 @@ class MainWindow(QMainWindow):
         source_tools = QHBoxLayout()
         self.lbl_ai_source_store = QLabel()
         self.lbl_ai_source_store.setProperty("role", "muted")
-        self.lbl_ai_source_store.setWordWrap(True)
-        self.lbl_ai_source_store.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_ai_source_store.setWordWrap(False)
         source_tools.addWidget(self.lbl_ai_source_store, 1)
+        btn_source_store_location = QPushButton("위치")
+        btn_source_store_location.setToolTip("문항 자료가 저장되는 앱 자료 폴더 위치를 확인합니다.")
+        btn_source_store_location.clicked.connect(lambda: self._show_ai_store_location("source"))
+        source_tools.addWidget(btn_source_store_location)
         btn_load_saved_source = QPushButton("저장자료 불러오기")
         btn_load_saved_source.setToolTip("앱 자료 폴더에 저장된 문항 자료를 선택해 다시 불러옵니다.")
         btn_load_saved_source.clicked.connect(self._load_saved_ai_source_text)
@@ -2178,9 +2181,12 @@ class MainWindow(QMainWindow):
         reference_tools = QHBoxLayout()
         self.lbl_ai_reference_store = QLabel()
         self.lbl_ai_reference_store.setProperty("role", "muted")
-        self.lbl_ai_reference_store.setWordWrap(True)
-        self.lbl_ai_reference_store.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.lbl_ai_reference_store.setWordWrap(False)
         reference_tools.addWidget(self.lbl_ai_reference_store, 1)
+        btn_reference_store_location = QPushButton("위치")
+        btn_reference_store_location.setToolTip("성취기준·수준 자료가 저장되는 앱 자료 폴더 위치를 확인합니다.")
+        btn_reference_store_location.clicked.connect(lambda: self._show_ai_store_location("reference"))
+        reference_tools.addWidget(btn_reference_store_location)
         btn_load_saved_reference = QPushButton("저장자료 불러오기")
         btn_load_saved_reference.setToolTip("앱 자료 폴더에 저장된 성취기준·수준 자료를 선택해 다시 불러옵니다.")
         btn_load_saved_reference.clicked.connect(self._load_saved_ai_reference_text)
@@ -2237,6 +2243,12 @@ class MainWindow(QMainWindow):
         split.setStretchFactor(1, 2)
         split.setSizes([420, 780])
         layout.addWidget(split, 1)
+        self.lbl_ai_review_footer = QLabel(
+            "AI 문항 검토는 교사 검토를 돕는 초안입니다. 자세한 흐름과 예시는 오른쪽 '사용 예시' 탭에서 확인하세요."
+        )
+        self.lbl_ai_review_footer.setProperty("role", "muted")
+        self.lbl_ai_review_footer.setWordWrap(True)
+        layout.addWidget(self.lbl_ai_review_footer, 0)
         self._refresh_ai_source_store_label()
         self._refresh_ai_reference_store_label()
         self._set_ai_review_summary(0, 0, 0)
@@ -3616,9 +3628,8 @@ API 키: 비워둠</pre>
             path for path in store.iterdir()
             if path.is_file() and path.name != AI_SOURCE_CACHE_NAME
         ]
-        self.lbl_ai_source_store.setText(
-            f"저장 위치: {store} · 저장자료 {len(stored_files)}개"
-        )
+        self.lbl_ai_source_store.setText(f"저장자료 {len(stored_files)}개")
+        self.lbl_ai_source_store.setToolTip(f"저장 위치: {store}")
 
     def _refresh_ai_reference_store_label(self):
         if not hasattr(self, "lbl_ai_reference_store"):
@@ -3628,8 +3639,20 @@ API 키: 비워둠</pre>
             path for path in store.iterdir()
             if path.is_file() and path.name != AI_REFERENCE_CACHE_NAME
         ]
-        self.lbl_ai_reference_store.setText(
-            f"저장 위치: {store} · 저장자료 {len(stored_files)}개"
+        self.lbl_ai_reference_store.setText(f"저장자료 {len(stored_files)}개")
+        self.lbl_ai_reference_store.setToolTip(f"저장 위치: {store}")
+
+    def _show_ai_store_location(self, kind: str):
+        if kind == "reference":
+            title = "성취기준·수준 자료 저장 위치"
+            store = self._ai_reference_store_dir()
+        else:
+            title = "문항 자료 저장 위치"
+            store = self._ai_source_store_dir()
+        QMessageBox.information(
+            self,
+            title,
+            f"불러온 자료와 직접 저장한 텍스트는 아래 폴더에 보관됩니다.\n\n{store}",
         )
 
     @staticmethod
@@ -4353,23 +4376,40 @@ API 키: 비워둠</pre>
             f"{reference_preview or '(참고자료 없음)'}"
         )
 
-    def _make_structured_ai_review_prompt(self, rows: list[dict], source_text: str, reference_text: str = "") -> str:
+    def _make_structured_ai_review_prompt(
+        self,
+        rows: list[dict],
+        source_text: str,
+        reference_text: str = "",
+        *,
+        source_limit: int = 18_000,
+        reference_limit: int = 16_000,
+        row_limit: int = 80,
+        scope_note: str = "",
+    ) -> str:
         preview = source_text.strip()
-        if len(preview) > 18000:
-            preview = preview[:18000] + "\n...(이하 생략)"
+        if len(preview) > source_limit:
+            preview = preview[:source_limit] + "\n...(이하 생략)"
         reference_preview = reference_text.strip()
-        if len(reference_preview) > 16000:
-            reference_preview = reference_preview[:16000] + "\n...(이하 생략)"
+        if len(reference_preview) > reference_limit:
+            reference_preview = reference_preview[:reference_limit] + "\n...(이하 생략)"
         draft = "\n".join(
             f"- {row.get('label') or row.get('번호/요소')}: 유형={row.get('review_type') or row.get('평가유형')}, "
             f"목표={row.get('target') or row.get('목표수준 후보')}, 난이도={row.get('difficulty') or row.get('난이도 후보')}, "
             f"예상={', '.join(str(row.get(f'{lv} 예상', '')) for lv in LEVELS_AE)}, "
             f"성취기준={row.get('standard') or row.get('성취기준 후보')}"
-            for row in rows[:80]
+            for row in rows[:row_limit]
         )
+        scope = ""
+        if scope_note:
+            scope = (
+                f"이번 요청 범위: {scope_note}\n"
+                "반드시 이번 범위에 있는 항목만 출력하고, 빠진 항목 없이 같은 순서로 JSON 배열을 작성한다.\n\n"
+            )
         return (
             "너는 고등학교 성취평가 현장지원단의 문항 검토 보조자다.\n"
             "아래 시험 문제 자료와 로컬 초안, 성취기준·성취수준 참고자료를 바탕으로 문항/수행평가 평가요소를 다시 검토하라.\n"
+            f"{scope}"
             "작업 순서는 반드시 1) 시험 문제 자료를 문항 단위로 읽기, 2) 참고자료에서 가장 가까운 성취기준과 성취수준 설명 찾기, "
             "3) 그 기준에 맞춰 목표수준·난이도·A~E 예상값 제안하기 순서로 한다.\n"
             "AI 판정은 최종 확정이 아니라 교사가 검토할 초안이다.\n"
@@ -4392,6 +4432,90 @@ API 키: 비워둠</pre>
             "[성취기준·성취수준 참고자료]\n"
             f"{reference_preview or '(참고자료 없음)'}"
         )
+
+    @staticmethod
+    def _ai_review_source_for_blocks(blocks: list[dict], limit_per_block: int = 2400) -> str:
+        parts = []
+        for block in blocks:
+            label = str(block.get("label", "")).strip()
+            kind = str(block.get("kind", "문항")).strip()
+            text = str(block.get("text", "")).strip()
+            if len(text) > limit_per_block:
+                text = text[:limit_per_block] + "\n...(문항 일부 생략)"
+            parts.append(f"### {kind} {label}\n{text}")
+        return "\n\n".join(parts)
+
+    def _ai_reference_text_for_review_chunk(
+        self,
+        rows: list[dict],
+        reference_entries: list[dict[str, str | set[str]]],
+        fallback_reference_text: str,
+    ) -> str:
+        if not reference_entries:
+            return fallback_reference_text[:AI_REVIEW_CHUNK_REFERENCE_LIMIT]
+        row_text = " ".join(
+            " ".join(str(row.get(key, "")) for key in ("label", "번호/요소", "standard", "성취기준 후보", "evidence", "근거"))
+            for row in rows
+        )
+        row_tokens = self._ai_reference_tokens(row_text)
+        selected = []
+        for entry in reference_entries:
+            text = str(entry.get("text", ""))
+            code = str(entry.get("code", ""))
+            tokens = entry.get("tokens", set())
+            token_overlap = len(row_tokens & tokens) if isinstance(tokens, set) else 0
+            if (code and code in row_text) or token_overlap >= 2:
+                selected.append(text)
+            if len(selected) >= 8:
+                break
+        if not selected:
+            selected = [str(entry.get("text", "")) for entry in reference_entries[:4]]
+        joined = "\n\n".join(part for part in selected if part)
+        return joined[:AI_REVIEW_CHUNK_REFERENCE_LIMIT] or fallback_reference_text[:AI_REVIEW_CHUNK_REFERENCE_LIMIT]
+
+    @staticmethod
+    def _ai_review_row_key(row: dict, fallback_index: int = 0) -> str:
+        label = str(row.get("label") or row.get("번호/요소") or row.get("번호") or "").strip()
+        number = re.search(r"\d+", label)
+        if number:
+            return f"no:{int(number.group(0))}"
+        return f"idx:{fallback_index}"
+
+    def _ai_review_merge_chunk_rows(self, local_rows: list[dict], ai_rows: list[dict]) -> list[dict]:
+        if len(ai_rows) == len(local_rows):
+            return ai_rows
+        by_key = {
+            self._ai_review_row_key(row, idx): row
+            for idx, row in enumerate(ai_rows)
+        }
+        merged = []
+        used_ids = set()
+        for idx, local in enumerate(local_rows):
+            key = self._ai_review_row_key(local, idx)
+            candidate = by_key.get(key)
+            if candidate is not None:
+                merged.append(candidate)
+                used_ids.add(id(candidate))
+            else:
+                fallback = dict(local)
+                next_step = fallback.get("next_step") or fallback.get("다음 확인") or ""
+                fallback["next_step"] = (next_step + " / AI 보강 항목 확인").strip(" /")
+                merged.append(fallback)
+        for row in ai_rows:
+            if id(row) not in used_ids:
+                merged.append(row)
+        return merged
+
+    @staticmethod
+    def _ai_review_failed_chunk_rows(local_rows: list[dict], reason: str) -> list[dict]:
+        failed = []
+        short_reason = str(reason).splitlines()[0][:90]
+        for row in local_rows:
+            fallback = dict(row)
+            next_step = fallback.get("next_step") or fallback.get("다음 확인") or ""
+            fallback["next_step"] = (next_step + f" / AI 보강 실패: {short_reason}").strip(" /")
+            failed.append(fallback)
+        return failed
 
     def _set_ai_review_summary(self, rows: int, standards: int, warnings: int, mode: str = "로컬 초안"):
         if not hasattr(self, "ai_review_cards"):
@@ -4472,40 +4596,120 @@ API 키: 비워둠</pre>
             self.statusBar().showMessage("로컬 초안으로 검토표를 갱신했습니다.", 3500)
             return
 
-        prompt = self._make_structured_ai_review_prompt(local_rows, text, reference_text)
+        preview_prompt = self._make_structured_ai_review_prompt(
+            local_rows[: min(5, len(local_rows))],
+            self._ai_review_source_for_blocks(blocks[: min(5, len(blocks))]),
+            reference_text,
+            source_limit=AI_REVIEW_CHUNK_SOURCE_LIMIT,
+            reference_limit=AI_REVIEW_CHUNK_REFERENCE_LIMIT,
+            row_limit=5,
+            scope_note="미리보기용 일부 항목",
+        )
         if hasattr(self, "chk_ai_scrub") and self.chk_ai_scrub.isChecked():
-            prompt_to_send = scrub_personal_data(prompt, self._student_names_for_privacy())
-        else:
-            prompt_to_send = prompt
-        self.txt_ai_review_prompt.setPlainText(prompt_to_send)
+            preview_prompt = scrub_personal_data(preview_prompt, self._student_names_for_privacy())
+        self.txt_ai_review_prompt.setPlainText(
+            preview_prompt
+            + "\n\n※ 실제 AI 보강은 시간초과를 줄이기 위해 문항을 작은 묶음으로 나누어 전송합니다."
+        )
         endpoints = self._candidate_mlx_endpoints()
+        scrub_enabled = hasattr(self, "chk_ai_scrub") and self.chk_ai_scrub.isChecked()
+        student_names = self._student_names_for_privacy()
 
         def work(progress):
             prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
-            if prepared.provider in {"mlx_compatible", "ollama"} and prepared.timeout < 180:
-                prepared.timeout = 180
-                progress("문항 검토는 응답이 길어 대기 시간을 이번 요청에 한해 180초로 적용합니다.")
+            if prepared.provider in {"mlx_compatible", "ollama"} and prepared.timeout < 240:
+                prepared.timeout = 240
+                progress("문항 검토는 묶음별 요청으로 나누고, 대기 시간을 이번 요청에 한해 240초로 적용합니다.")
             size = self._model_size_hint(prepared.model)
             if 0 < size < 3:
                 progress("현재 선택 모델은 빠른 확인용에 가까워 검토 품질이 낮을 수 있습니다. 품질이 중요하면 7B~15B급 모델을 선택해 보세요.")
             elif size >= 20:
                 progress("현재 선택 모델은 큰 모델이라 품질은 좋아질 수 있지만 응답이 오래 걸릴 수 있습니다.")
-            progress(f"{prepared.label}에 문항 검토 요청 전송 중")
-            progress("문항 수가 많거나 모델이 크면 1~5분 걸릴 수 있습니다.")
-            output = run_completion(prompt_to_send, prepared, max_tokens=6000)
+            chunk_size = AI_REVIEW_CLOUD_CHUNK_SIZE
+            if prepared.provider in {"mlx_compatible", "ollama"}:
+                chunk_size = AI_REVIEW_LOCAL_CHUNK_SIZE
+                if size >= 20:
+                    chunk_size = 2
+            chunks = [
+                (idx, local_rows[idx: idx + chunk_size], blocks[idx: idx + chunk_size])
+                for idx in range(0, len(local_rows), chunk_size)
+            ]
+            reference_entries_for_chunks = reference_entries
+            progress(
+                f"{prepared.label}에 문항 검토 요청 전송 중 · "
+                f"{len(local_rows)}개 항목을 {len(chunks)}개 묶음으로 처리합니다."
+            )
+            merged_rows = []
+            outputs = []
+            sent_prompts = []
+            failures = []
+            for chunk_no, (start, chunk_rows, chunk_blocks) in enumerate(chunks, start=1):
+                end = start + len(chunk_rows)
+                source_chunk = self._ai_review_source_for_blocks(chunk_blocks)
+                reference_chunk = self._ai_reference_text_for_review_chunk(
+                    chunk_rows,
+                    reference_entries_for_chunks,
+                    reference_text,
+                )
+                scope = f"{start + 1}-{end}번째 항목"
+                chunk_prompt = self._make_structured_ai_review_prompt(
+                    chunk_rows,
+                    source_chunk,
+                    reference_chunk,
+                    source_limit=AI_REVIEW_CHUNK_SOURCE_LIMIT,
+                    reference_limit=AI_REVIEW_CHUNK_REFERENCE_LIMIT,
+                    row_limit=len(chunk_rows),
+                    scope_note=scope,
+                )
+                if scrub_enabled:
+                    chunk_prompt = scrub_personal_data(chunk_prompt, student_names)
+                sent_prompts.append(f"===== 묶음 {chunk_no}/{len(chunks)} · {scope} =====\n{chunk_prompt}")
+                progress(f"묶음 {chunk_no}/{len(chunks)} 전송 중 · {scope}")
+                try:
+                    output = run_completion(
+                        chunk_prompt,
+                        prepared,
+                        max_tokens=max(1200, min(2600, len(chunk_rows) * 750)),
+                    )
+                except Exception as exc:
+                    message = f"묶음 {chunk_no}/{len(chunks)} 실패 · 로컬 초안 유지 · {exc}"
+                    progress(message)
+                    failures.append(message)
+                    outputs.append(f"===== 묶음 {chunk_no} 실패 =====\n{exc}")
+                    merged_rows.extend(self._ai_review_failed_chunk_rows(chunk_rows, str(exc)))
+                    continue
+                outputs.append(f"===== 묶음 {chunk_no}/{len(chunks)} 응답 =====\n{output}")
+                ai_rows = parse_review_rows(output)
+                if not ai_rows:
+                    message = f"묶음 {chunk_no}/{len(chunks)} 응답 해석 실패 · 로컬 초안 유지"
+                    progress(message)
+                    failures.append(message)
+                    merged_rows.extend(self._ai_review_failed_chunk_rows(chunk_rows, "응답 해석 실패"))
+                    continue
+                merged_rows.extend(self._ai_review_merge_chunk_rows(chunk_rows, ai_rows))
+                progress(f"묶음 {chunk_no}/{len(chunks)} 완료 · {len(ai_rows)}개 응답")
             progress("AI 응답 수신, 검토표로 변환 중")
-            ai_rows = parse_review_rows(output)
-            return {"config": prepared, "note": note, "output": output, "rows": ai_rows}
+            return {
+                "config": prepared,
+                "note": note,
+                "output": "\n\n".join(outputs),
+                "prompts": "\n\n".join(sent_prompts),
+                "rows": merged_rows,
+                "failures": failures,
+                "chunk_count": len(chunks),
+            }
 
         def success(result):
             prepared = result["config"]
             note = result.get("note", "")
             output = result.get("output") or ""
+            prompts = result.get("prompts") or ""
             ai_rows = result.get("rows") or []
+            failures = result.get("failures") or []
             self._apply_prepared_ai_config(prepared, note)
             if not ai_rows:
                 self.txt_ai_review_prompt.setPlainText(
-                    prompt_to_send + "\n\n[AI 원문 출력]\n" + (output or "(빈 응답)")[:20000]
+                    prompts[:30000] + "\n\n[AI 원문 출력]\n" + (output or "(빈 응답)")[:20000]
                 )
                 QMessageBox.information(
                     self,
@@ -4513,15 +4717,26 @@ API 키: 비워둠</pre>
                     "AI 응답은 받았지만 검토표로 해석하지 못했습니다.\nAI 프롬프트 탭의 원문 출력을 확인해 주세요.",
                 )
                 return
-            self._populate_ai_review_table(ai_rows, mode=f"{prepared.label} 보강")
+            mode = f"{prepared.label} 보강" if not failures else f"{prepared.label} 일부 보강"
+            self._populate_ai_review_table(ai_rows, mode=mode)
             self.txt_ai_review_prompt.setPlainText(
-                prompt_to_send + "\n\n[AI 원문 출력]\n" + output[:20000]
+                prompts[:30000] + "\n\n[AI 원문 출력]\n" + output[:30000]
             )
             self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
-            done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목"
+            done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목 · 묶음 {result.get('chunk_count', 1)}개"
+            if failures:
+                done_message += f" · 일부 로컬 초안 유지 {len(failures)}개"
             if note:
                 done_message += f" · {note}"
             self._append_ai_progress(done_message)
+            self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
+            if failures:
+                QMessageBox.information(
+                    self,
+                    "AI 문항 검토",
+                    "일부 묶음은 시간초과 또는 응답 해석 실패로 로컬 초안을 유지했습니다.\n"
+                    "표의 '다음 확인' 열과 진행 로그를 확인해 주세요.",
+                )
 
         self._run_ai_background_task("AI 문항 검토", work, success)
 
