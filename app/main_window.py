@@ -16,6 +16,7 @@ import os
 import queue
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -49,7 +50,7 @@ from . import fonts as font_pack
 from .ai_client import (
     AIProviderConfig, default_endpoint, default_model, list_ollama_models,
     list_openai_compatible_models, normalize_endpoint, parse_review_rows,
-    run_completion, scrub_personal_data,
+    probe_openai_compatible_chat, run_completion, scrub_personal_data,
 )
 from .widgets import (
     StepperSpinBox, ItemBarDelegate, attach_wheel_zoom, NaturalItem,
@@ -2312,9 +2313,9 @@ API 키: 비워둠</pre>
         form.addRow("API 키", self.edit_ai_api_key)
 
         self.spin_ai_timeout = QDoubleSpinBox()
-        self.spin_ai_timeout.setRange(5, 180)
+        self.spin_ai_timeout.setRange(5, 600)
         self.spin_ai_timeout.setDecimals(0)
-        self.spin_ai_timeout.setSingleStep(5)
+        self.spin_ai_timeout.setSingleStep(15)
         self.spin_ai_timeout.setSuffix(" 초")
         form.addRow("대기 시간", self.spin_ai_timeout)
 
@@ -2377,9 +2378,9 @@ API 키: 비워둠</pre>
         self.edit_ai_model.setText(str(self.settings.value("ai/model", default_model(provider))))
         self.edit_ai_api_key.setText(str(self.settings.value("ai/api_key", "")))
         try:
-            self.spin_ai_timeout.setValue(float(self.settings.value("ai/timeout", 60)))
+            self.spin_ai_timeout.setValue(float(self.settings.value("ai/timeout", 120)))
         except Exception:
-            self.spin_ai_timeout.setValue(60)
+            self.spin_ai_timeout.setValue(120)
         scrub = self.settings.value("ai/scrub_personal_data", True)
         self.chk_ai_scrub.setChecked(str(scrub).lower() not in {"false", "0", "no"})
 
@@ -2563,10 +2564,12 @@ API 키: 비워둠</pre>
     def _candidate_mlx_endpoints(self) -> list[str]:
         current = self.edit_ai_endpoint.text().strip() if hasattr(self, "edit_ai_endpoint") else ""
         raw = [
+            "http://127.0.0.1:18080/v1/chat/completions",
             current,
             "http://127.0.0.1:8080/v1/chat/completions",
             "http://127.0.0.1:8000/v1/chat/completions",
             "http://127.0.0.1:1234/v1/chat/completions",
+            "http://localhost:18080/v1/chat/completions",
             "http://localhost:8080/v1/chat/completions",
             "http://localhost:8000/v1/chat/completions",
             "http://localhost:1234/v1/chat/completions",
@@ -2596,6 +2599,20 @@ API 키: 비워둠</pre>
                 return endpoint, models, errors
             errors.append(f"{endpoint}: 모델 목록이 비어 있습니다.")
         return "", [], errors
+
+    @staticmethod
+    def _is_local_port_open(port: int, timeout: float = 0.25) -> bool:
+        try:
+            with socket.create_connection(("127.0.0.1", int(port)), timeout=timeout):
+                return True
+        except OSError:
+            return False
+
+    def _preferred_mlx_port(self) -> int:
+        for port in (18080, 8080, 8000, 1234):
+            if not self._is_local_port_open(port):
+                return port
+        return 18080
 
     def _find_local_mlx_server(self):
         config = AIProviderConfig(
@@ -2638,21 +2655,43 @@ API 키: 비워둠</pre>
             )
             return
         current_model = self.edit_ai_model.text().strip() if hasattr(self, "edit_ai_model") else ""
-        default_model_id = current_model if current_model and current_model != "local-model" else "mlx-community/Qwen2.5-7B-Instruct-4bit"
+        default_model_id = (
+            current_model
+            if current_model and current_model not in {"local-model", default_model("openai_compatible")}
+            else default_model("mlx_compatible")
+        )
         model, ok = QInputDialog.getText(
             self,
             "MLX 서버 시작",
-            "사용할 MLX 모델 ID를 입력하세요.\n처음 사용하는 모델은 다운로드가 필요할 수 있습니다.",
+            "사용할 MLX 모델 ID를 입력하세요.\n"
+            "처음 사용하는 모델은 다운로드가 필요할 수 있습니다.\n"
+            "연결 확인이 목적이면 작은 모델(Qwen3-0.6B-4bit)을 권장합니다.",
             text=default_model_id,
         )
         if not ok or not model.strip():
             return
         model = model.strip()
+        open_ports = [port for port in (18080, 8080, 8000, 1234) if self._is_local_port_open(port)]
+        if open_ports:
+            port = open_ports[0]
+            endpoint = f"http://127.0.0.1:{port}/v1/chat/completions"
+            idx = self.cmb_ai_provider.findData("mlx_compatible")
+            if idx >= 0:
+                self.cmb_ai_provider.setCurrentIndex(idx)
+            self.edit_ai_endpoint.setText(endpoint)
+            self.edit_ai_model.setText(model)
+            self._save_ai_settings()
+            self._append_ai_progress(
+                f"이미 열린 로컬 서버 포트 {port}를 발견했습니다. 새 서버를 띄우지 않고 연결 확인을 진행합니다."
+            )
+            QTimer.singleShot(300, self._find_local_mlx_server)
+            return
+        port = self._preferred_mlx_port()
         log_path = self._ai_reference_store_dir().parent / "mlx_server.log"
         try:
             log_file = open(log_path, "a", encoding="utf-8")
             process = subprocess.Popen(
-                [exe, "--model", model, "--host", "127.0.0.1", "--port", "8080"],
+                [exe, "--model", model, "--host", "127.0.0.1", "--port", str(port)],
                 stdout=log_file,
                 stderr=log_file,
                 start_new_session=True,
@@ -2665,13 +2704,13 @@ API 키: 비워둠</pre>
         idx = self.cmb_ai_provider.findData("mlx_compatible")
         if idx >= 0:
             self.cmb_ai_provider.setCurrentIndex(idx)
-        self.edit_ai_endpoint.setText("http://127.0.0.1:8080/v1/chat/completions")
+        self.edit_ai_endpoint.setText(f"http://127.0.0.1:{port}/v1/chat/completions")
         self.edit_ai_model.setText(model)
         self._save_ai_settings()
         self.lbl_ai_settings_status.setText(
             f"MLX 서버 시작 요청 완료. 5~20초 뒤 'MLX 찾기' 또는 '연결 테스트'를 누르세요. 로그: {log_path}"
         )
-        self._append_ai_progress(f"MLX 서버 시작 요청 완료 · PID {process.pid} · 로그 {log_path}")
+        self._append_ai_progress(f"MLX 서버 시작 요청 완료 · PID {process.pid} · 포트 {port} · 로그 {log_path}")
         QTimer.singleShot(7000, self._find_local_mlx_server)
 
     @staticmethod
@@ -2700,6 +2739,7 @@ API 키: 비워둠</pre>
             errors = []
             endpoint = ""
             models = []
+            selected_model = ""
             for candidate in mlx_endpoints or []:
                 tell(f"MLX 서버 확인 중: {candidate}")
                 try:
@@ -2712,22 +2752,50 @@ API 키: 비워둠</pre>
                 except Exception as exc:
                     errors.append(f"{candidate}: {exc}")
                     continue
-                if found:
-                    endpoint = candidate
-                    models = found
-                    break
-                errors.append(f"{candidate}: 모델 목록이 비어 있습니다.")
+                if not found:
+                    errors.append(f"{candidate}: 모델 목록이 비어 있습니다.")
+                    continue
+                models = found
+                preferred = (
+                    config.model
+                    if config.model and config.model in found
+                    else next((name for name in found if "Qwen3-0.6B" in name), found[0])
+                )
+                tell(f"모델 목록 확인 성공: {preferred}")
+                tell("짧은 실제 응답 확인 중")
+                probe_config_timeout = min(max(config.timeout, 20), 45)
+                try:
+                    probe_openai_compatible_chat(
+                        candidate,
+                        "",
+                        "mlx_compatible",
+                        preferred,
+                        probe_config_timeout,
+                    )
+                except Exception as exc:
+                    errors.append(f"{candidate}: 모델 목록은 확인됐지만 짧은 응답 실패 - {exc}")
+                    tell(f"응답 지연 또는 실패, 다음 서버 후보로 이동: {candidate}")
+                    continue
+                endpoint = candidate
+                selected_model = preferred
+                tell(f"실제 응답 확인 완료: {candidate}")
+                break
             if not endpoint:
                 detail = "\n".join(errors[:4])
                 raise ValueError(
-                    "MLX-LM/LM Studio 로컬 서버에 연결하지 못했습니다.\n"
-                    "AI 설정에서 'MLX 서버 시작'을 누르거나, 터미널에서 다음처럼 실행하세요.\n"
-                    "mlx_lm.server --model mlx-community/Qwen2.5-7B-Instruct-4bit --host 127.0.0.1 --port 8080\n\n"
+                    "MLX-LM/LM Studio 로컬 서버가 실제 응답 가능한 상태인지 확인하지 못했습니다.\n"
+                    "서버 주소만 열려 있어도 큰 모델이 로딩 중이면 시간초과가 날 수 있습니다.\n"
+                    "작은 모델로 먼저 확인하려면 터미널에서 다음처럼 실행하세요.\n"
+                    "mlx_lm.server --model mlx-community/Qwen3-0.6B-4bit --host 127.0.0.1 --port 18080\n\n"
                     f"점검 내용:\n{detail}"
                 )
             config.endpoint = endpoint
-            if models and (not config.model or config.model not in models):
-                config.model = models[0]
+            if selected_model:
+                if config.model != selected_model:
+                    note = f"MLX 서버 실제 응답 모델을 감지해 모델을 {selected_model}(으)로 맞췄습니다."
+                config.model = selected_model
+            elif models and (not config.model or config.model not in models):
+                config.model = next((name for name in models if "Qwen3-0.6B" in name), models[0])
                 note = f"MLX 서버 모델 목록을 감지해 모델을 {config.model}(으)로 맞췄습니다."
         elif config.provider == "openai_compatible":
             tell("OpenAI 호환 서버 모델 목록 확인 중")
@@ -2781,52 +2849,32 @@ API 키: 비워둠</pre>
             QMessageBox.information(self, "AI 연결 테스트", "로컬 초안 모드는 외부 연결 없이 바로 사용할 수 있습니다.")
             return
         endpoints = self._candidate_mlx_endpoints()
-        prompt = (
-            "연결 테스트입니다. 설명 없이 JSON 배열만 반환하세요.\n"
-            "각 객체는 반드시 다음 13개 키를 모두 포함해야 합니다: "
-            "구분, 번호/요소, 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, "
-            "A 예상, B 예상, C 예상, D 예상, E 예상, 근거, 다음 확인.\n"
-            "[{\"구분\":\"문항\",\"번호/요소\":\"1번\",\"성취기준 후보\":\"[테스트] 성취기준\","
-            "\"평가유형\":\"선택형\",\"목표수준 후보\":\"C\",\"난이도 후보\":\"보통\","
-            "\"A 예상\":\"3/3\",\"B 예상\":\"3/3\",\"C 예상\":\"2/3\","
-            "\"D 예상\":\"1/3\",\"E 예상\":\"0/3\","
-            "\"근거\":\"연결 확인\",\"다음 확인\":\"없음\"}]"
-        )
+        prompt = "연결 확인입니다. 설명 없이 OK만 답하세요."
 
         def work(progress):
             prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
-            progress(f"{prepared.label}에 짧은 테스트 요청 전송 중")
-            output = run_completion(prompt, prepared)
-            progress("AI 응답 수신, 표 형식 해석 중")
-            parsed = parse_review_rows(output)
-            return {"config": prepared, "note": note, "output": output, "parsed": parsed}
+            progress(f"{prepared.label}에 최종 짧은 테스트 요청 전송 중")
+            output = run_completion(prompt, prepared, max_tokens=16)
+            progress("AI 응답 수신 완료")
+            return {"config": prepared, "note": note, "output": output}
 
         def success(result):
             prepared = result["config"]
             note = result.get("note", "")
-            parsed = result.get("parsed") or []
             self._apply_prepared_ai_config(prepared, note)
-            if not parsed:
-                self.lbl_ai_settings_status.setText("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
-                self._append_ai_progress("응답은 받았지만 표 형식으로 해석하지 못했습니다.")
-                QMessageBox.information(self, "AI 연결 테스트", "응답은 받았지만 표 형식으로 해석하지 못했습니다. 모델 출력 형식을 확인해 주세요.")
-                return
-            missing_expected = [header for header in AI_EXPECTED_HEADERS if not parsed[0].get(header)]
-            if missing_expected:
-                self.lbl_ai_settings_status.setText("응답은 받았지만 A~E 예상값이 비어 있습니다.")
-                QMessageBox.warning(
-                    self,
-                    "AI 연결 테스트",
-                    "AI 응답은 읽었지만 A~E 예상값을 확인하지 못했습니다.\n"
-                    "모델이 JSON 키 'A 예상'부터 'E 예상'까지 채우도록 설정을 확인해 주세요.",
-                )
-                return
             status = f"{prepared.label} 연결 확인 완료. 모델: {prepared.model}"
             if note:
                 status += f" · {note}"
             self.lbl_ai_settings_status.setText(status)
             self._append_ai_progress(status)
-            QMessageBox.information(self, "AI 연결 테스트", f"{prepared.label} 응답을 정상적으로 읽었습니다.\n{note}".strip())
+            QMessageBox.information(
+                self,
+                "AI 연결 테스트",
+                f"{prepared.label} 응답을 정상적으로 읽었습니다.\n"
+                f"모델: {prepared.model}\n"
+                f"응답 예시: {(result.get('output') or '').strip()[:120]}\n"
+                f"{note}".strip(),
+            )
 
         self._run_ai_background_task("AI 연결 테스트", work, success)
 
@@ -3959,8 +4007,8 @@ API 키: 비워둠</pre>
         reference_entries = self._ai_reference_entries(reference_text)
         blocks = self._split_ai_review_blocks(text)
         local_rows = [self._infer_ai_review_row(block, reference_entries) for block in blocks]
+        self._populate_ai_review_table(local_rows, mode="로컬 초안")
         if config.provider == "local_draft":
-            self._populate_ai_review_table(local_rows, mode="로컬 초안")
             self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(local_rows, text, reference_text))
             self.statusBar().showMessage("로컬 초안으로 검토표를 갱신했습니다.", 3500)
             return
@@ -3975,9 +4023,12 @@ API 키: 비워둠</pre>
 
         def work(progress):
             prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
+            if prepared.provider in {"mlx_compatible", "ollama"} and prepared.timeout < 180:
+                prepared.timeout = 180
+                progress("문항 검토는 응답이 길어 대기 시간을 이번 요청에 한해 180초로 적용합니다.")
             progress(f"{prepared.label}에 문항 검토 요청 전송 중")
             progress("문항 수가 많거나 모델이 크면 1~5분 걸릴 수 있습니다.")
-            output = run_completion(prompt_to_send, prepared)
+            output = run_completion(prompt_to_send, prepared, max_tokens=6000)
             progress("AI 응답 수신, 검토표로 변환 중")
             ai_rows = parse_review_rows(output)
             return {"config": prepared, "note": note, "output": output, "rows": ai_rows}
