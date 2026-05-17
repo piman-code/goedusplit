@@ -73,7 +73,7 @@ set ISS=dist\Goedu-Split-installer.iss
   echo Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
   echo.
   echo [Run]
-  echo Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+  echo Filename: "{app}\{#MyAppExeName}"; Description: "Goedu-Split 실행"; Flags: nowait postinstall skipifsilent
 ) > "%ISS%"
 
 pushd dist >nul
