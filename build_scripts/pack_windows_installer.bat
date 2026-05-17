@@ -69,7 +69,7 @@ set ISS=dist\Goedu-Split-installer.iss
   echo.
   echo [Icons]
   echo Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-  echo Name: "{group}\사용 안내"; Filename: "{app}\사용 안내.md"; Check: FileExists(ExpandConstant('{app}\사용 안내.md'))
+  echo Name: "{group}\사용 안내"; Filename: "{app}\사용 안내.md"
   echo Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
   echo.
   echo [Run]
