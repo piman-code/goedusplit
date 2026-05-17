@@ -57,6 +57,7 @@ jobs:
 
       - name: Pack setup installer
         shell: cmd
+        continue-on-error: true
         run: build_scripts\pack_windows_installer.bat
 
       - name: Collect artifacts
@@ -64,7 +65,9 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force artifacts | Out-Null
           Copy-Item dist\Goedu-Split-*-windows.zip artifacts\
-          Copy-Item dist\Goedu-Split-*-windows-setup.exe artifacts\
+          if (Test-Path dist\Goedu-Split-*-windows-setup.exe) {
+            Copy-Item dist\Goedu-Split-*-windows-setup.exe artifacts\
+          }
           Copy-Item distribution\USER_GUIDE.md artifacts\사용_안내.md
 
       - name: Upload Windows artifacts
