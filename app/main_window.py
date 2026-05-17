@@ -2156,11 +2156,21 @@ class MainWindow(QMainWindow):
         btn_save_source_text.clicked.connect(lambda: self._save_current_ai_text("source"))
         source_tools.addWidget(btn_save_source_text)
         source_layout.addLayout(source_tools)
+        self.ai_source_view_tabs = QTabWidget()
         self.txt_ai_review_source = QPlainTextEdit()
         self.txt_ai_review_source.setPlaceholderText(
             "시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 붙여 넣거나 '문항 PDF/자료'로 불러오세요."
         )
-        source_layout.addWidget(self.txt_ai_review_source, 1)
+        self.ai_source_view_tabs.addTab(self.txt_ai_review_source, "편집")
+        self.browser_ai_review_source = QTextBrowser()
+        self.browser_ai_review_source.setReadOnly(True)
+        self.browser_ai_review_source.setOpenExternalLinks(False)
+        self._style_ai_markdown_browser(self.browser_ai_review_source)
+        self.ai_source_view_tabs.addTab(self.browser_ai_review_source, "미리보기")
+        self.txt_ai_review_source.textChanged.connect(
+            lambda: self._update_ai_markdown_preview("source")
+        )
+        source_layout.addWidget(self.ai_source_view_tabs, 1)
         self.ai_review_input_tabs.addTab(source_panel, "문항 자료")
 
         reference_panel = QWidget()
@@ -2184,7 +2194,17 @@ class MainWindow(QMainWindow):
         self.txt_ai_review_reference.setPlaceholderText(
             "성취기준, 성취수준 A~E 설명, 최소능력자 특성, 평가기준 자료를 붙여 넣거나 '성취기준·수준 자료'로 불러오세요."
         )
-        reference_layout.addWidget(self.txt_ai_review_reference, 1)
+        self.ai_reference_view_tabs = QTabWidget()
+        self.ai_reference_view_tabs.addTab(self.txt_ai_review_reference, "편집")
+        self.browser_ai_review_reference = QTextBrowser()
+        self.browser_ai_review_reference.setReadOnly(True)
+        self.browser_ai_review_reference.setOpenExternalLinks(False)
+        self._style_ai_markdown_browser(self.browser_ai_review_reference)
+        self.ai_reference_view_tabs.addTab(self.browser_ai_review_reference, "미리보기")
+        self.txt_ai_review_reference.textChanged.connect(
+            lambda: self._update_ai_markdown_preview("reference")
+        )
+        reference_layout.addWidget(self.ai_reference_view_tabs, 1)
         self.ai_review_input_tabs.addTab(reference_panel, "성취기준·수준")
         left_layout.addWidget(self.ai_review_input_tabs, 1)
         split.addWidget(left)
@@ -2220,6 +2240,67 @@ class MainWindow(QMainWindow):
         self._refresh_ai_source_store_label()
         self._refresh_ai_reference_store_label()
         self._set_ai_review_summary(0, 0, 0)
+
+    @staticmethod
+    def _style_ai_markdown_browser(browser: QTextBrowser):
+        browser.document().setDefaultStyleSheet("""
+            body {
+                line-height: 1.55;
+                font-size: 13px;
+            }
+            h1 {
+                font-size: 20px;
+                margin: 8px 0 10px;
+            }
+            h2 {
+                font-size: 16px;
+                margin: 14px 0 8px;
+            }
+            h3 {
+                font-size: 14px;
+                margin: 12px 0 6px;
+            }
+            p {
+                margin: 5px 0;
+            }
+            ul, ol {
+                margin-top: 4px;
+                margin-bottom: 8px;
+            }
+            li {
+                margin: 3px 0;
+            }
+            code {
+                padding: 1px 4px;
+            }
+            pre {
+                padding: 8px;
+                white-space: pre-wrap;
+            }
+            table {
+                border-collapse: collapse;
+            }
+            th, td {
+                padding: 4px 6px;
+                border: 1px solid #789;
+            }
+        """)
+
+    def _update_ai_markdown_preview(self, target: str):
+        if target == "reference":
+            if not hasattr(self, "browser_ai_review_reference"):
+                return
+            text = self.txt_ai_review_reference.toPlainText()
+            browser = self.browser_ai_review_reference
+        else:
+            if not hasattr(self, "browser_ai_review_source"):
+                return
+            text = self.txt_ai_review_source.toPlainText()
+            browser = self.browser_ai_review_source
+        try:
+            browser.setMarkdown(text)
+        except Exception:
+            browser.setPlainText(text)
 
     def _build_ai_usage_panel(self) -> QWidget:
         panel = QWidget()
@@ -3195,7 +3276,7 @@ API 키: 비워둠</pre>
         p = Path(path)
         suffix = p.suffix.lower()
         if suffix in {".txt", ".md", ".csv", ".json"}:
-            return p.read_text(encoding="utf-8", errors="replace")
+            return self._format_ai_extracted_markdown(p.read_text(encoding="utf-8", errors="replace"))
         if suffix in {".xlsx", ".xlsm"}:
             import openpyxl
             wb = openpyxl.load_workbook(p, read_only=True, data_only=True)
@@ -3220,9 +3301,44 @@ API 키: 비워둠</pre>
             for i, page in enumerate(reader.pages[:80], start=1):
                 text = self._normalize_pdf_math_text(page.extract_text() or "")
                 if text.strip():
-                    pages.append(f"## PDF {i}쪽\n{text}")
+                    pages.append(f"## PDF {i}쪽\n\n{self._format_ai_extracted_markdown(text)}")
             return "\n".join(pages)
         raise ValueError("지원 형식: .txt, .md, .csv, .json, .xlsx, .xlsm, .pdf")
+
+    @staticmethod
+    def _format_ai_material_header(title: str, path: Path | str) -> str:
+        return f"# {title}\n\n**저장 위치:** `{path}`"
+
+    @staticmethod
+    def _format_ai_extracted_markdown(text: str) -> str:
+        if not text:
+            return ""
+        text = text.replace("\r\n", "\n").replace("\r", "\n")
+        text = re.sub(r"[ \t]+", " ", text)
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = re.sub(r"(?<!\n)\s+(?=##\s*PDF\s*\d+쪽)", "\n\n", text)
+        text = re.sub(r"(?<!^)(?<!\n)\s+(?=(?:[1-9]|[1-9]\d)\.\s)", "\n\n", text)
+        text = re.sub(r"(?<!^)(?<!\n)\s+(?=문항\s*\d{1,3}\b)", "\n\n", text)
+        text = re.sub(r"\s+(?=(?:①|②|③|④|⑤|⑥|⑦|⑧|⑨|⑩))", " ", text)
+        lines = []
+        for raw in text.splitlines():
+            line = raw.strip()
+            if not line:
+                lines.append("")
+                continue
+            if re.match(r"^(?:[1-9]|[1-9]\d)\.\s", line):
+                lines.append(f"### {line}")
+            elif re.match(r"^문항\s*\d{1,3}\b", line):
+                lines.append(f"### {line}")
+            elif line.startswith(("과목:", "학기/학년:", "시험일자", "교사")):
+                lines.append(f"**{line}**")
+            elif line.startswith("※"):
+                lines.append(f"> {line}")
+            else:
+                lines.append(line)
+        formatted = "\n".join(lines)
+        formatted = re.sub(r"\n{3,}", "\n\n", formatted)
+        return formatted.strip()
 
     @staticmethod
     def _normalize_pdf_math_text(text: str) -> str:
@@ -3503,7 +3619,7 @@ API 키: 비워둠</pre>
             except Exception as exc:
                 failures.append(f"{path.name}: {exc}")
                 continue
-            parts.append(f"--- 문항 자료: {path.name} ---\n저장 위치: {path}\n{text}")
+            parts.append(f"{self._format_ai_material_header(f'문항 자료: {path.name}', path)}\n\n{text}")
         if not parts:
             QMessageBox.warning(self, "저장자료 불러오기", "선택한 문항 자료를 읽지 못했습니다.\n" + "\n".join(failures[:5]))
             return
@@ -3528,7 +3644,7 @@ API 키: 비워둠</pre>
             except Exception as exc:
                 failures.append(f"{path.name}: {exc}")
                 continue
-            parts.append(f"--- 성취기준·수준 자료: {path.name} ---\n저장 위치: {path}\n{text}")
+            parts.append(f"{self._format_ai_material_header(f'성취기준·수준 자료: {path.name}', path)}\n\n{text}")
         if not parts:
             QMessageBox.warning(
                 self,
@@ -3547,12 +3663,18 @@ API 키: 비워둠</pre>
     def _set_ai_review_source_text(self, text: str, *, target: str = "source"):
         if target == "reference" and hasattr(self, "txt_ai_review_reference"):
             self.txt_ai_review_reference.setPlainText(text[:AI_REFERENCE_TEXT_LIMIT])
+            self._update_ai_markdown_preview("reference")
             if hasattr(self, "ai_review_input_tabs"):
                 self.ai_review_input_tabs.setCurrentIndex(1)
+            if hasattr(self, "ai_reference_view_tabs"):
+                self.ai_reference_view_tabs.setCurrentIndex(1)
             return
         self.txt_ai_review_source.setPlainText(text[:AI_SOURCE_TEXT_LIMIT])
+        self._update_ai_markdown_preview("source")
         if hasattr(self, "ai_review_input_tabs"):
             self.ai_review_input_tabs.setCurrentIndex(0)
+        if hasattr(self, "ai_source_view_tabs"):
+            self.ai_source_view_tabs.setCurrentIndex(1)
 
     def _ai_review_source_text(self) -> str:
         if not hasattr(self, "txt_ai_review_source"):
@@ -3598,8 +3720,7 @@ API 키: 비워둠</pre>
                 failures.append(f"{path.name}: {e}")
                 continue
             parts.append(
-                f"--- 문항 자료: {path.name} ---\n"
-                f"저장 위치: {saved}\n"
+                f"{self._format_ai_material_header(f'문항 자료: {path.name}', saved)}\n\n"
                 f"{text}"
             )
         if not parts:
@@ -3661,8 +3782,7 @@ API 키: 비워둠</pre>
                 failures.append(f"{path.name}: {e}")
                 continue
             loaded_parts.append(
-                f"--- 참고자료: {path.name} ---\n"
-                f"저장 위치: {saved}\n"
+                f"{self._format_ai_material_header(f'성취기준·수준 자료: {path.name}', saved)}\n\n"
                 f"{text}"
             )
         if not loaded_parts:
@@ -3695,22 +3815,30 @@ API 키: 비워둠</pre>
             QMessageBox.warning(self, "AI 문항 검토", "먼저 문항정보표를 불러와 분석을 실행해 주세요.")
             return
         lines = [
-            f"과목: {self.exam.subject or '(과목 미상)'}",
-            f"학기/학년: {self.exam.semester} {self.exam.grade}",
+            "# 현재 문항정보표",
+            "",
+            f"**과목:** {self.exam.subject or '(과목 미상)'}",
+            f"**학기/학년:** {self.exam.semester} {self.exam.grade}",
             "",
         ]
         type_order = {"선택형": 0, "서답형": 1}
         for item in sorted(self.exam.items, key=lambda it: (it.number, type_order.get(it.item_type, 9))):
             standard = " ".join(part for part in [item.standard_code, item.standard] if part).strip()
             lines.append(
-                f"문항 {item.number} | 유형 {item.item_type} | 난이도 {item.difficulty or '-'} | "
+                f"### 문항 {item.number} | 유형 {item.item_type} | 난이도 {item.difficulty or '-'} | "
                 f"배점 {item.score:g} | 내용영역 {item.content_area or '-'} | 성취기준 {standard or '-'}"
             )
         self._set_ai_review_source_text("\n".join(lines), target="source")
         self.statusBar().showMessage("현재 문항정보표를 AI 문항 검토 원문으로 가져왔습니다.", 3500)
 
     def _split_ai_review_blocks(self, text: str) -> list[dict]:
-        lines = [re.sub(r"\s+", " ", line).strip() for line in text.splitlines()]
+        normalized_lines = []
+        for line in text.splitlines():
+            line = re.sub(r"^#{1,6}\s*", "", line.strip())
+            line = re.sub(r"^\s*[-*]\s+", "", line)
+            line = line.replace("**", "").replace("__", "").replace("`", "")
+            normalized_lines.append(re.sub(r"\s+", " ", line).strip())
+        lines = normalized_lines
         lines = [line for line in lines if line]
         blocks = []
         current = None
@@ -3780,7 +3908,13 @@ API 키: 비워둠</pre>
 
     def _ai_reference_entries(self, reference_text: str) -> list[dict[str, str | set[str]]]:
         reference_text = re.sub(r"(?=\[(?:10공수|10기수)[^\]\n]{1,40}\])", "\n", reference_text)
-        lines = [re.sub(r"\s+", " ", line).strip() for line in reference_text.splitlines()]
+        normalized_lines = []
+        for line in reference_text.splitlines():
+            line = re.sub(r"^#{1,6}\s*", "", line.strip())
+            line = re.sub(r"^\s*[-*]\s+", "", line)
+            line = line.replace("**", "").replace("__", "").replace("`", "")
+            normalized_lines.append(re.sub(r"\s+", " ", line).strip())
+        lines = normalized_lines
         lines = [line for line in lines if line]
         entries: list[dict[str, str | set[str]]] = []
         current: list[str] = []
