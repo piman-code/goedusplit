@@ -94,8 +94,11 @@ def normalize_endpoint(provider: str, endpoint: str = "") -> str:
         if value.endswith("/api/generate"):
             value = value[:-len("/api/generate")] + "/api/chat"
     elif provider in {"mlx_compatible", "openai_compatible"}:
-        if "/v1/" not in value and not value.endswith("/chat/completions"):
-            value = value.rstrip("/") + "/v1/chat/completions"
+        value = value.rstrip("/")
+        if value.endswith("/v1"):
+            value = value + "/chat/completions"
+        elif "/v1/" not in value and not value.endswith("/chat/completions"):
+            value = value + "/v1/chat/completions"
     return value
 
 
