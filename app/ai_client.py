@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -71,7 +72,7 @@ def default_model(provider: str) -> str:
     if provider == "ollama":
         return "qwen2.5:7b"
     if provider == "mlx_compatible":
-        return "local-model"
+        return "mlx-community/Qwen3-0.6B-4bit"
     if provider == "openai_cloud":
         return "gpt-5.5"
     if provider == "openai_compatible":
@@ -119,14 +120,22 @@ def scrub_personal_data(text: str, student_names: list[str] | None = None) -> st
     return cleaned
 
 
-def run_completion(prompt: str, config: AIProviderConfig) -> str:
+def run_completion(prompt: str, config: AIProviderConfig, max_tokens: int | None = None) -> str:
     if config.provider == "local_draft":
         return ""
     if config.provider == "ollama":
-        return _run_ollama(prompt, config)
+        return _run_ollama(prompt, config, max_tokens=max_tokens)
     if config.provider in {"openai_compatible", "mlx_compatible", "openai_cloud"}:
-        return _run_openai_compatible(prompt, config)
+        return _run_openai_compatible(prompt, config, max_tokens=max_tokens)
     raise ValueError(f"지원하지 않는 AI 제공자입니다: {config.provider}")
+
+
+def _timeout_message(timeout: int) -> str:
+    return (
+        f"AI 요청 시간이 초과되었습니다({timeout}초). "
+        "로컬 AI라면 모델이 너무 크거나, 첫 실행 모델 다운로드/로딩 중이거나, "
+        "서버는 열렸지만 아직 답변 가능한 상태가 아닐 수 있습니다."
+    )
 
 
 def _get_json(url: str, headers: dict[str, str], timeout: int) -> dict[str, Any]:
@@ -140,6 +149,8 @@ def _get_json(url: str, headers: dict[str, str], timeout: int) -> dict[str, Any]
         raise RuntimeError(f"AI 요청 실패 HTTP {exc.code}: {body[:600]}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"AI 제공자에 연결하지 못했습니다: {exc.reason}") from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise RuntimeError(_timeout_message(max(5, int(timeout)))) from exc
 
 
 def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeout: int) -> dict[str, Any]:
@@ -154,6 +165,8 @@ def _post_json(url: str, payload: dict[str, Any], headers: dict[str, str], timeo
         raise RuntimeError(f"AI 요청 실패 HTTP {exc.code}: {body[:600]}") from exc
     except urllib.error.URLError as exc:
         raise RuntimeError(f"AI 제공자에 연결하지 못했습니다: {exc.reason}") from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise RuntimeError(_timeout_message(max(5, int(timeout)))) from exc
 
 
 def _ollama_tags_endpoint(endpoint: str) -> str:
@@ -194,9 +207,12 @@ def list_openai_compatible_models(
     return [name for name in names if name]
 
 
-def _run_ollama(prompt: str, config: AIProviderConfig) -> str:
+def _run_ollama(prompt: str, config: AIProviderConfig, max_tokens: int | None = None) -> str:
     endpoint = normalize_endpoint("ollama", config.endpoint)
     model = config.model or default_model("ollama")
+    options = {"temperature": 0.2}
+    if max_tokens is not None:
+        options["num_predict"] = int(max_tokens)
     payload = {
         "model": model,
         "stream": False,
@@ -204,14 +220,14 @@ def _run_ollama(prompt: str, config: AIProviderConfig) -> str:
             {"role": "system", "content": "너는 성취평가 문항 검토 보조자다. 반드시 요청한 JSON 형식만 반환한다."},
             {"role": "user", "content": prompt},
         ],
-        "options": {"temperature": 0.2},
+        "options": options,
     }
     data = _post_json(endpoint, payload, {"Content-Type": "application/json"}, config.timeout)
     message = data.get("message") or {}
     return str(message.get("content") or data.get("response") or "")
 
 
-def _run_openai_compatible(prompt: str, config: AIProviderConfig) -> str:
+def _run_openai_compatible(prompt: str, config: AIProviderConfig, max_tokens: int | None = None) -> str:
     endpoint = normalize_endpoint(config.provider, config.endpoint)
     model = config.model or default_model(config.provider)
     headers = {"Content-Type": "application/json"}
@@ -225,6 +241,8 @@ def _run_openai_compatible(prompt: str, config: AIProviderConfig) -> str:
             {"role": "user", "content": prompt},
         ],
     }
+    if max_tokens is not None:
+        payload["max_tokens"] = int(max_tokens)
     data = _post_json(endpoint, payload, headers, config.timeout)
     choices = data.get("choices") or []
     if not choices:
@@ -232,6 +250,27 @@ def _run_openai_compatible(prompt: str, config: AIProviderConfig) -> str:
     first = choices[0]
     message = first.get("message") or {}
     return str(message.get("content") or first.get("text") or "")
+
+
+def probe_openai_compatible_chat(
+    endpoint: str = "",
+    api_key: str = "",
+    provider: str = "openai_compatible",
+    model: str = "",
+    timeout: int = 20,
+) -> str:
+    config = AIProviderConfig(
+        provider=provider,
+        endpoint=endpoint,
+        model=model or default_model(provider),
+        api_key=api_key,
+        timeout=max(5, int(timeout)),
+    )
+    return _run_openai_compatible(
+        "연결 확인입니다. 설명 없이 OK만 답하세요.",
+        config,
+        max_tokens=8,
+    )
 
 
 def parse_review_rows(text: str) -> list[dict[str, str]]:
