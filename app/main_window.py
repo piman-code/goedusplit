@@ -15,6 +15,7 @@ import math
 import os
 import re
 import shutil
+import subprocess
 import sys
 import traceback
 from datetime import datetime
@@ -2213,6 +2214,7 @@ class MainWindow(QMainWindow):
         <ol>
           <li><b>문항 자료</b> 칸에 시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 넣습니다.</li>
           <li><b>성취기준·수준</b> 칸에 성취기준, A~E 성취수준 설명, 최소능력자 특성 자료를 넣습니다. 여러 PDF를 한 번에 선택할 수 있고, 불러온 원본은 앱 자료 폴더에 저장됩니다.</li>
+          <li>성취기준·수준 PDF는 원문 전체가 아니라 성취기준 코드와 A~E 성취수준 설명 중심으로 정리되어 표시됩니다.</li>
           <li><b>검토 초안 생성</b>을 누르면 앱 내부 규칙으로 문항을 먼저 나누고, 참고자료와 대조해 성취기준, 평가유형, 목표수준, 난이도, A~E 예상값을 만듭니다.</li>
           <li>로컬 AI를 연결했다면 <b>AI로 보강</b>을 눌러 근거와 판단을 더 정교하게 보강합니다.</li>
           <li>지필 문항은 <b>지필→예상정답률</b>, 수행평가는 <b>수행→재산정</b>으로 보냅니다.</li>
@@ -2235,7 +2237,7 @@ ollama serve</pre>
 엔드포인트: http://127.0.0.1:11434/api/chat
 모델: qwen2.5:7b
 API 키: 비워둠</pre>
-        <p>MLX-LM, LM Studio처럼 OpenAI 호환 로컬 서버를 쓰면 제공자를 <b>MLX-LM / LM Studio 로컬</b>로 바꾸고, 서버가 알려주는 <code>/v1/chat/completions</code> 주소를 넣습니다.</p>
+        <p>MLX-LM, LM Studio처럼 OpenAI 호환 로컬 서버를 쓰면 제공자를 <b>MLX-LM / LM Studio 로컬</b>로 바꾸고, 서버가 알려주는 <code>/v1/chat/completions</code> 주소를 넣습니다. 앱의 <b>MLX 찾기</b> 또는 <b>MLX 서버 시작</b> 버튼으로 자동 설정할 수 있습니다.</p>
         <p>OpenAI 클라우드는 OAuth 로그인이 아니라 API Key 방식입니다. API Key를 넣고 사용할 수 있는 모델명을 입력해야 합니다.</p>
         """)
         layout.addWidget(browser, 1)
@@ -2311,6 +2313,14 @@ API 키: 비워둠</pre>
         btn_test = QPushButton("연결 테스트")
         btn_test.clicked.connect(self._test_ai_connection)
         row.addWidget(btn_test)
+        btn_find_mlx = QPushButton("MLX 찾기")
+        btn_find_mlx.setToolTip("실행 중인 MLX-LM/LM Studio 로컬 서버를 자동으로 찾아 설정합니다.")
+        btn_find_mlx.clicked.connect(self._find_local_mlx_server)
+        row.addWidget(btn_find_mlx)
+        btn_start_mlx = QPushButton("MLX 서버 시작")
+        btn_start_mlx.setToolTip("로컬에 설치된 mlx_lm.server를 실행합니다. 모델이 없으면 다운로드가 필요할 수 있습니다.")
+        btn_start_mlx.clicked.connect(self._start_local_mlx_server)
+        row.addWidget(btn_start_mlx)
         row.addStretch(1)
         layout.addLayout(row)
 
@@ -2405,6 +2415,120 @@ API 키: 비워둠</pre>
             timeout=int(self.spin_ai_timeout.value()),
         )
 
+    def _candidate_mlx_endpoints(self) -> list[str]:
+        current = self.edit_ai_endpoint.text().strip() if hasattr(self, "edit_ai_endpoint") else ""
+        raw = [
+            current,
+            "http://127.0.0.1:8080/v1/chat/completions",
+            "http://127.0.0.1:8000/v1/chat/completions",
+            "http://127.0.0.1:1234/v1/chat/completions",
+            "http://localhost:8080/v1/chat/completions",
+            "http://localhost:8000/v1/chat/completions",
+            "http://localhost:1234/v1/chat/completions",
+        ]
+        endpoints = []
+        for endpoint in raw:
+            normalized = normalize_endpoint("mlx_compatible", endpoint)
+            if normalized and normalized not in endpoints:
+                endpoints.append(normalized)
+        return endpoints
+
+    def _probe_mlx_models(self) -> tuple[str, list[str], list[str]]:
+        errors = []
+        timeout = int(self.spin_ai_timeout.value()) if hasattr(self, "spin_ai_timeout") else 20
+        for endpoint in self._candidate_mlx_endpoints():
+            try:
+                models = list_openai_compatible_models(
+                    endpoint,
+                    "",
+                    "mlx_compatible",
+                    min(timeout, 15),
+                )
+            except Exception as exc:
+                errors.append(f"{endpoint}: {exc}")
+                continue
+            if models:
+                return endpoint, models, errors
+            errors.append(f"{endpoint}: 모델 목록이 비어 있습니다.")
+        return "", [], errors
+
+    def _find_local_mlx_server(self):
+        endpoint, models, errors = self._probe_mlx_models()
+        if not endpoint:
+            detail = "\n".join(errors[:5])
+            QMessageBox.warning(
+                self,
+                "MLX 서버 찾기",
+                "실행 중인 MLX-LM/LM Studio 서버를 찾지 못했습니다.\n\n"
+                "1. MLX 서버가 켜져 있는지 확인하세요.\n"
+                "2. 보통 주소는 http://127.0.0.1:8080/v1/chat/completions 입니다.\n"
+                "3. 앱의 'MLX 서버 시작' 버튼으로 직접 시작할 수도 있습니다.\n\n"
+                f"점검 내용:\n{detail}",
+            )
+            if hasattr(self, "lbl_ai_settings_status"):
+                self.lbl_ai_settings_status.setText("MLX 서버를 찾지 못했습니다. 서버 실행 후 다시 시도하세요.")
+            return
+        idx = self.cmb_ai_provider.findData("mlx_compatible")
+        if idx >= 0:
+            self.cmb_ai_provider.setCurrentIndex(idx)
+        self.edit_ai_endpoint.setText(endpoint)
+        self.edit_ai_model.setText(models[0])
+        self._save_ai_settings()
+        message = f"MLX 서버 감지 완료 · {endpoint} · 모델 {models[0]}"
+        self.lbl_ai_settings_status.setText(message)
+        self.statusBar().showMessage(message, 6000)
+
+    def _start_local_mlx_server(self):
+        exe = shutil.which("mlx_lm.server")
+        if not exe:
+            for version in ("3.14", "3.13", "3.12", "3.11"):
+                known = Path(f"/Library/Frameworks/Python.framework/Versions/{version}/bin/mlx_lm.server")
+                if known.exists():
+                    exe = str(known)
+                    break
+        if not exe:
+            QMessageBox.warning(
+                self,
+                "MLX 서버 시작",
+                "mlx_lm.server 명령을 찾지 못했습니다.\n"
+                "터미널에서 `pip install mlx-lm` 설치 후 다시 시도하세요.",
+            )
+            return
+        current_model = self.edit_ai_model.text().strip() if hasattr(self, "edit_ai_model") else ""
+        default_model_id = current_model if current_model and current_model != "local-model" else "mlx-community/Qwen2.5-7B-Instruct-4bit"
+        model, ok = QInputDialog.getText(
+            self,
+            "MLX 서버 시작",
+            "사용할 MLX 모델 ID를 입력하세요.\n처음 사용하는 모델은 다운로드가 필요할 수 있습니다.",
+            text=default_model_id,
+        )
+        if not ok or not model.strip():
+            return
+        model = model.strip()
+        log_path = self._ai_reference_store_dir().parent / "mlx_server.log"
+        try:
+            log_file = open(log_path, "a", encoding="utf-8")
+            process = subprocess.Popen(
+                [exe, "--model", model, "--host", "127.0.0.1", "--port", "8080"],
+                stdout=log_file,
+                stderr=log_file,
+                start_new_session=True,
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "MLX 서버 시작", f"MLX 서버를 시작하지 못했습니다.\n{exc}")
+            return
+        self.mlx_server_process = process
+        idx = self.cmb_ai_provider.findData("mlx_compatible")
+        if idx >= 0:
+            self.cmb_ai_provider.setCurrentIndex(idx)
+        self.edit_ai_endpoint.setText("http://127.0.0.1:8080/v1/chat/completions")
+        self.edit_ai_model.setText(model)
+        self._save_ai_settings()
+        self.lbl_ai_settings_status.setText(
+            f"MLX 서버 시작 요청 완료. 5~20초 뒤 'MLX 찾기' 또는 '연결 테스트'를 누르세요. 로그: {log_path}"
+        )
+        QTimer.singleShot(7000, self._find_local_mlx_server)
+
     def _prepare_ai_connection_config(self, config: AIProviderConfig) -> tuple[AIProviderConfig, str]:
         note = ""
         if config.provider == "openai_cloud" and not config.api_key:
@@ -2419,7 +2543,25 @@ API 키: 비워둠</pre>
                 note = f"설치된 Ollama 모델을 감지해 모델을 {preferred}(으)로 맞췄습니다."
             elif not models:
                 note = "Ollama 서버는 응답했지만 설치된 모델 목록이 비어 있습니다."
-        elif config.provider in {"mlx_compatible", "openai_compatible"}:
+        elif config.provider == "mlx_compatible":
+            endpoint, models, errors = self._probe_mlx_models()
+            if not endpoint:
+                detail = "\n".join(errors[:4])
+                raise ValueError(
+                    "MLX-LM/LM Studio 로컬 서버에 연결하지 못했습니다.\n"
+                    "AI 설정에서 'MLX 서버 시작'을 누르거나, 터미널에서 다음처럼 실행하세요.\n"
+                    "mlx_lm.server --model mlx-community/Qwen2.5-7B-Instruct-4bit --host 127.0.0.1 --port 8080\n\n"
+                    f"점검 내용:\n{detail}"
+                )
+            config.endpoint = endpoint
+            if models and (not config.model or config.model not in models):
+                config.model = models[0]
+                self.edit_ai_endpoint.setText(endpoint)
+                self.edit_ai_model.setText(config.model)
+                self.settings.setValue("ai/endpoint", endpoint)
+                self.settings.setValue("ai/model", config.model)
+                note = f"MLX 서버 모델 목록을 감지해 모델을 {config.model}(으)로 맞췄습니다."
+        elif config.provider == "openai_compatible":
             try:
                 models = list_openai_compatible_models(
                     config.endpoint,
@@ -2621,11 +2763,124 @@ API 키: 비워둠</pre>
             reader = pypdf.PdfReader(str(p))
             pages = []
             for i, page in enumerate(reader.pages[:80], start=1):
-                text = page.extract_text() or ""
+                text = self._normalize_pdf_math_text(page.extract_text() or "")
                 if text.strip():
                     pages.append(f"## PDF {i}쪽\n{text}")
             return "\n".join(pages)
         raise ValueError("지원 형식: .txt, .md, .csv, .json, .xlsx, .xlsm, .pdf")
+
+    @staticmethod
+    def _normalize_pdf_math_text(text: str) -> str:
+        if not text:
+            return ""
+        special_replacements = {
+            "\ue05c\ue06d\ue046\ue034": r"\sqrt{-1}",
+            "\ue06d\ue0fe": r"\overline{z}",
+            "\ue06d\ue0fb": r"\overline{w}",
+            "\ue06d\ue0fc": r"\overline{x}",
+            "\ue06d\ue0e5": r"\overline{a}",
+            "\ue06d\ue0e6": r"\overline{b}",
+        }
+        for old, new in special_replacements.items():
+            text = text.replace(old, new)
+        glyphs = {
+            "\ue034": "1",
+            "\ue035": "2",
+            "\ue036": "3",
+            "\ue037": "4",
+            "\ue038": "5",
+            "\ue039": "6",
+            "\ue03a": "7",
+            "\ue03b": "8",
+            "\ue03c": "9",
+            "\ue03d": "0",
+            "\ue000": "A",
+            "\ue001": "B",
+            "\ue002": "C",
+            "\ue003": "D",
+            "\ue010": "Q",
+            "\ue011": "R",
+            "\ue044": "(",
+            "\ue045": ")",
+            "\ue046": "-",
+            "\ue047": "=",
+            "\ue048": "+",
+            "\ue052": ",",
+            "\ue055": r"\le ",
+            "\ue05c": r"\sqrt",
+            "\ue06d": "",
+            "\ue0e5": "a",
+            "\ue0e6": "b",
+            "\ue0e7": "c",
+            "\ue0e8": "d",
+            "\ue0ed": "i",
+            "\ue0fb": "w",
+            "\ue0fc": "x",
+            "\ue0fd": "y",
+            "\ue0fe": "z",
+        }
+        text = "".join(glyphs.get(ch, ch) for ch in text)
+        text = re.sub(r"([xyzwabcd])([0-9])", r"\1^{\2}", text)
+        text = re.sub(r"\\sqrt\s*\{?-1\}?", r"\\sqrt{-1}", text)
+        text = re.sub(r"\s+([①②③④⑤])", r" \1", text)
+        return text
+
+    def _compact_ai_reference_text(self, text: str) -> str:
+        entries = self._ai_reference_entries(text)
+        level_parts = []
+        standard_parts = []
+        seen = set()
+        for entry in entries:
+            raw = str(entry.get("text", "")).strip()
+            code = str(entry.get("code", "")).strip()
+            if not raw:
+                continue
+            if not re.search(r"\[(?:10공수|10기수)[^\]]+\]", raw):
+                continue
+            if any(token in raw for token in ("예시 답안", "채점 시 고려", "피드백 방안", "문항 개발", "수행 과제")):
+                continue
+            cleaned = self._clean_ai_reference_standard_text(raw, code)
+            if not cleaned:
+                continue
+            key = cleaned[:120]
+            if key in seen:
+                continue
+            seen.add(key)
+            levels = self._extract_ai_reference_levels(raw)
+            if levels:
+                level_parts.append(cleaned + "\n" + "\n".join(levels))
+            else:
+                standard_parts.append(cleaned)
+        if level_parts:
+            return "\n\n".join(level_parts)
+        if standard_parts:
+            return "\n\n".join(standard_parts)
+        relevant = []
+        for line in text.splitlines():
+            compact = re.sub(r"\s+", " ", line).strip()
+            if not compact:
+                continue
+            if re.search(r"\[(?:10공수|10기수)[^\]]+\]", compact) or any(
+                token in compact for token in ("성취기준", "성취수준", "평가기준", "최소능력자")
+            ):
+                relevant.append(compact)
+        return "\n".join(relevant[:500]) if relevant else text[:AI_REFERENCE_TEXT_LIMIT]
+
+    @staticmethod
+    def _extract_ai_reference_levels(text: str) -> list[str]:
+        compact = re.sub(r"\s+", " ", text or "").strip()
+        levels = []
+        for lv in LEVELS_AE:
+            match = re.search(rf"(?:^|\s){lv}\s+(.+?)(?=\s[ABCDE]\s+|$)", compact)
+            if not match:
+                continue
+            body = match.group(1).strip()
+            body = re.sub(r"\s+", " ", body)
+            if len(body) < 12 or not re.search(r"[가-힣]", body):
+                continue
+            body = body[:260].strip()
+            levels.append(f"{lv}: {body}")
+        return levels
 
     def _ai_reference_store_dir(self) -> Path:
         if sys.platform == "darwin":
@@ -2694,7 +2949,9 @@ API 키: 비워둠</pre>
         except Exception as exc:
             QMessageBox.warning(self, "저장자료 불러오기", f"저장자료를 읽지 못했습니다.\n{exc}")
             return
+        text = self._compact_ai_reference_text(text)
         self._set_ai_review_source_text(text, target="reference")
+        self._save_ai_reference_cache(text)
         self._refresh_ai_reference_store_label()
         self.statusBar().showMessage(f"저장된 성취기준·수준 자료를 불러왔습니다. 위치: {cache}", 5000)
 
@@ -2764,7 +3021,7 @@ API 키: 비워둠</pre>
             path = Path(path_str)
             try:
                 saved = self._store_ai_reference_file(path)
-                text = self._extract_text_from_review_file(str(path))
+                text = self._compact_ai_reference_text(self._extract_text_from_review_file(str(path)))
             except Exception as e:
                 failures.append(f"{path.name}: {e}")
                 continue
@@ -2931,11 +3188,11 @@ API 키: 비워둠</pre>
             text = text[text.find(reference_code):]
         cut_positions = []
         for pattern in (
-            r"\sA\s",
-            r"\sB\s",
-            r"\sC\s",
-            r"\sD\s",
-            r"\sE\s",
+            r"\sA[:\s]",
+            r"\sB[:\s]",
+            r"\sC[:\s]",
+            r"\sD[:\s]",
+            r"\sE[:\s]",
             r"\s프로젝트\s",
             r"\s공통수학\d+-\d+",
             r"\s예시문항\s",
@@ -3329,6 +3586,12 @@ API 키: 비워둠</pre>
             self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(local_rows, text, reference_text))
             self.statusBar().showMessage("로컬 초안으로 검토표를 갱신했습니다.", 3500)
             return
+        try:
+            config, note = self._prepare_ai_connection_config(config)
+        except Exception as exc:
+            QMessageBox.warning(self, "AI 문항 검토", f"AI 연결 설정을 확인하지 못했습니다.\n{exc}")
+            self.statusBar().showMessage("AI 연결 확인 실패", 5000)
+            return
 
         prompt = self._make_structured_ai_review_prompt(local_rows, text, reference_text)
         if hasattr(self, "chk_ai_scrub") and self.chk_ai_scrub.isChecked():
@@ -3362,7 +3625,10 @@ API 키: 비워둠</pre>
             prompt_to_send + "\n\n[AI 원문 출력]\n" + (output or "")[:20000]
         )
         self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
-        self.statusBar().showMessage(f"AI 보강 완료 · {len(ai_rows)}개 항목", 5000)
+        done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목"
+        if note:
+            done_message += f" · {note}"
+        self.statusBar().showMessage(done_message, 5000)
 
     def _export_ai_review_csv(self):
         if not hasattr(self, "table_ai_review") or self.table_ai_review.rowCount() == 0:
