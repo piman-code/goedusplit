@@ -10,6 +10,7 @@ PySide6 기반 메인 윈도우 (KICE Shiny 웹앱 2.1.2 화면 구조에 맞춰
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import math
 import os
@@ -2109,6 +2110,16 @@ class MainWindow(QMainWindow):
         self.btn_ai_enrich.setToolTip("AI 설정에 지정한 로컬/클라우드 모델로 검토 초안을 보강합니다.")
         self.btn_ai_enrich.clicked.connect(self._run_ai_review_completion)
         head.addWidget(self.btn_ai_enrich)
+        self.btn_ai_review_stop = QPushButton("보강 중지")
+        self.btn_ai_review_stop.setToolTip("현재 응답 중인 묶음이 끝난 뒤 AI 보강을 멈춥니다.")
+        self.btn_ai_review_stop.clicked.connect(self._request_ai_review_stop)
+        self.btn_ai_review_stop.setEnabled(False)
+        head.addWidget(self.btn_ai_review_stop)
+        self.btn_ai_review_resume = QPushButton("이어하기")
+        self.btn_ai_review_resume.setToolTip("중지된 AI 보강을 다음 묶음부터 이어서 진행합니다.")
+        self.btn_ai_review_resume.clicked.connect(self._resume_ai_review_completion)
+        self.btn_ai_review_resume.setEnabled(False)
+        head.addWidget(self.btn_ai_review_resume)
         btn_to_spliter = QPushButton("지필→예상정답률")
         btn_to_spliter.clicked.connect(self._send_ai_review_to_spliter)
         head.addWidget(btn_to_spliter)
@@ -2369,10 +2380,7 @@ API 키: 비워둠</pre>
         panel = QWidget()
         layout = QVBoxLayout(panel); layout.setContentsMargins(10, 10, 10, 10); layout.setSpacing(10)
 
-        note = QLabel(
-            "기본은 외부 전송이 없는 로컬 초안입니다. Ollama, MLX-LM 서버, LM Studio, OpenAI 클라우드 API는 "
-            "선생님이 AI로 보강을 누를 때만 호출됩니다."
-        )
+        note = QLabel("AI 보강을 누를 때만 선택한 제공자를 호출합니다.")
         note.setProperty("role", "muted")
         note.setWordWrap(True)
         layout.addWidget(note)
@@ -2382,13 +2390,13 @@ API 키: 비워둠</pre>
         form = QFormLayout(form_card)
         form.setContentsMargins(14, 12, 14, 12)
         form.setSpacing(8)
+        form.setFieldGrowthPolicy(QFormLayout.ExpandingFieldsGrow)
 
         self.cmb_ai_provider = QComboBox()
         self.cmb_ai_provider.addItem("로컬 초안만 사용", "local_draft")
         self.cmb_ai_provider.addItem("Ollama 로컬", "ollama")
-        self.cmb_ai_provider.addItem("MLX-LM / LM Studio 로컬", "mlx_compatible")
+        self.cmb_ai_provider.addItem("MLX / LM Studio", "mlx_compatible")
         self.cmb_ai_provider.addItem("OpenAI 클라우드 API (API Key)", "openai_cloud")
-        self.cmb_ai_provider.addItem("기타 OpenAI 호환 API", "openai_compatible")
         self.cmb_ai_provider.currentIndexChanged.connect(self._sync_ai_provider_defaults)
         form.addRow("AI 제공자", self.cmb_ai_provider)
 
@@ -2399,6 +2407,7 @@ API 키: 비워둠</pre>
         self.cmb_ai_model = QComboBox()
         self.cmb_ai_model.setEditable(True)
         self.cmb_ai_model.setInsertPolicy(QComboBox.NoInsert)
+        self.cmb_ai_model.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.cmb_ai_model.lineEdit().setPlaceholderText("예: qwen2.5:7b, mlx-community/Qwen3.5-9B-OptiQ-4bit")
         self.edit_ai_model = self.cmb_ai_model.lineEdit()
         form.addRow("모델", self.cmb_ai_model)
@@ -2425,12 +2434,7 @@ API 키: 비워둠</pre>
 
         layout.addWidget(form_card)
 
-        guide = QLabel(
-            "빠른 예: Ollama는 `ollama pull qwen2.5:7b` 후 `ollama serve`를 실행하고, "
-            "엔드포인트를 http://127.0.0.1:11434/api/chat 로 둡니다. "
-            "MLX-LM/LM Studio는 OpenAI 호환 서버의 /v1/chat/completions 주소를 사용합니다. "
-            "OpenAI 클라우드는 OAuth가 아니라 API Key가 필요합니다."
-        )
+        guide = QLabel("자세한 연결 방법은 '사용 예시' 탭에서 확인하세요.")
         guide.setProperty("role", "muted")
         guide.setWordWrap(True)
         layout.addWidget(guide)
@@ -2503,6 +2507,11 @@ API 키: 비워둠</pre>
         if provider == "openai_cloud":
             return "OpenAI API는 API Key 방식입니다. OAuth 로그인은 이 데스크톱 API 호출에 사용하지 않습니다."
         return "모델 새로고침을 누르면 서버의 모델 목록을 선택할 수 있습니다."
+
+    @staticmethod
+    def _is_ai_chat_model_candidate(model: str) -> bool:
+        lowered = (model or "").lower()
+        return not any(term in lowered for term in ("embed", "embedding", "rerank", "whisper"))
 
     @staticmethod
     def _sanitize_ai_model_for_provider(provider: str, model: str) -> str:
@@ -2645,8 +2654,14 @@ API 키: 비워둠</pre>
     ):
         if not hasattr(self, "cmb_ai_model"):
             return
-        clean = [model for model in dict.fromkeys(m.strip() for m in models if m and m.strip())]
+        raw_clean = [model for model in dict.fromkeys(m.strip() for m in models if m and m.strip())]
+        clean = [model for model in raw_clean if self._is_ai_chat_model_candidate(model)]
+        removed_count = len(raw_clean) - len(clean)
+        if not clean:
+            clean = raw_clean
         recommended = recommended or self._recommend_ai_model(clean, provider)
+        if recommended and recommended not in clean and clean:
+            recommended = self._recommend_ai_model(clean, provider)
         current = self._ai_model_text()
         self.cmb_ai_model.blockSignals(True)
         self.cmb_ai_model.clear()
@@ -2665,6 +2680,8 @@ API 키: 비워둠</pre>
                 hint += f" · 추천: {recommended}{size_note}"
             if note:
                 hint += f" · {note}"
+            if removed_count:
+                hint += f" · 비채팅 모델 {removed_count}개 숨김"
             self.lbl_ai_model_hint.setText(hint)
         else:
             self.lbl_ai_model_hint.setText(note or "감지된 모델이 없습니다. 모델명을 직접 입력할 수 있습니다.")
@@ -2737,6 +2754,35 @@ API 키: 비워둠</pre>
         if hasattr(self, "lbl_ai_settings_status"):
             self.lbl_ai_settings_status.setText(message)
         self.statusBar().showMessage(message, 5000)
+
+    def _set_ai_review_control_state(
+        self,
+        *,
+        running: bool = False,
+        can_resume: bool = False,
+        stop_requested: bool = False,
+    ):
+        if hasattr(self, "btn_ai_review_stop"):
+            self.btn_ai_review_stop.setEnabled(running and not stop_requested)
+            self.btn_ai_review_stop.setText("중지 요청됨" if stop_requested else "보강 중지")
+        if hasattr(self, "btn_ai_review_resume"):
+            self.btn_ai_review_resume.setEnabled((not running) and can_resume)
+
+    def _request_ai_review_stop(self):
+        event = getattr(self, "_ai_review_cancel_event", None)
+        if not getattr(self, "_ai_worker_active", False) or event is None:
+            QMessageBox.information(self, "AI 문항 검토", "현재 중지할 AI 보강 작업이 없습니다.")
+            return
+        event.set()
+        self._set_ai_review_control_state(running=True, can_resume=False, stop_requested=True)
+        self._append_ai_progress("AI 보강 중지 요청 · 현재 응답 중인 묶음이 끝난 뒤 멈춥니다.")
+
+    def _resume_ai_review_completion(self):
+        state = getattr(self, "_ai_review_resume_state", None)
+        if not state:
+            QMessageBox.information(self, "AI 문항 검토", "이어갈 AI 보강 작업이 없습니다.")
+            return
+        self._run_ai_review_completion(resume_state=state)
 
     def _set_ai_busy(self, busy: bool, label: str = ""):
         for attr in (
@@ -2823,6 +2869,12 @@ API 키: 비워둠</pre>
                     f"작업 중 오류가 발생했습니다.\n{short}\n\n자세한 내용은 진행 로그를 확인해 주세요.",
                 )
             finally:
+                if title == "AI 문항 검토":
+                    self._ai_review_cancel_event = None
+                    self._set_ai_review_control_state(
+                        running=False,
+                        can_resume=bool(getattr(self, "_ai_review_resume_state", None)),
+                    )
                 cleanup()
 
         def drain_events():
@@ -4425,6 +4477,7 @@ API 키: 비워둠</pre>
             "지필 문항의 A~E 예상은 각 수준 대표학생 3명 중 몇 명이 맞힐지 3/3, 2/3, 1/3, 0/3으로 쓴다.\n"
             "수행평가의 A~E 예상은 만점 대비 점수나 비율로 쓴다. 예: 9점, 80%, 7.5/10.\n"
             "A에서 E로 갈수록 예상값은 같거나 낮아야 한다.\n\n"
+            "근거와 다음 확인은 각각 80자 이내로 간결하게 쓴다.\n\n"
             "[로컬 초안]\n"
             f"{draft}\n\n"
             "[시험 문제 자료]\n"
@@ -4517,6 +4570,14 @@ API 키: 비워둠</pre>
             failed.append(fallback)
         return failed
 
+    @staticmethod
+    def _ai_review_signature(source_text: str, reference_text: str) -> str:
+        digest = hashlib.sha256()
+        digest.update((source_text or "").encode("utf-8", errors="replace"))
+        digest.update(b"\0")
+        digest.update((reference_text or "").encode("utf-8", errors="replace"))
+        return digest.hexdigest()
+
     def _set_ai_review_summary(self, rows: int, standards: int, warnings: int, mode: str = "로컬 초안"):
         if not hasattr(self, "ai_review_cards"):
             return
@@ -4577,7 +4638,7 @@ API 키: 비워둠</pre>
         self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(rows, text, reference_text))
         self.statusBar().showMessage(f"AI 문항 검토 초안 생성 완료 · {len(rows)}개 항목", 3500)
 
-    def _run_ai_review_completion(self):
+    def _run_ai_review_completion(self, resume_state: dict | None = None):
         if not hasattr(self, "txt_ai_review_source"):
             return
         text = self._ai_review_source_text()
@@ -4585,12 +4646,34 @@ API 키: 비워둠</pre>
         if not text:
             QMessageBox.information(self, "AI 문항 검토", "먼저 문항 자료를 붙여 넣거나 시험 문제 PDF를 불러와 주세요.")
             return
+        source_signature = self._ai_review_signature(text, reference_text)
+        if resume_state and resume_state.get("signature") != source_signature:
+            QMessageBox.warning(
+                self,
+                "AI 문항 검토",
+                "문항 자료나 성취기준·수준 자료가 바뀌어 이어하기를 할 수 없습니다.\n처음부터 다시 AI로 보강해 주세요.",
+            )
+            self._ai_review_resume_state = None
+            self._set_ai_review_control_state(running=False, can_resume=False)
+            return
         config = self._ai_provider_config()
         self._save_ai_settings()
         reference_entries = self._ai_reference_entries(reference_text)
         blocks = self._split_ai_review_blocks(text)
         local_rows = [self._infer_ai_review_row(block, reference_entries) for block in blocks]
-        self._populate_ai_review_table(local_rows, mode="로컬 초안")
+        resume_state = resume_state or None
+        start_index = int(resume_state.get("next_index", 0)) if resume_state else 0
+        seeded_rows = list(resume_state.get("merged_rows", [])) if resume_state else []
+        seeded_outputs = list(resume_state.get("outputs", [])) if resume_state else []
+        seeded_prompts = list(resume_state.get("prompts", [])) if resume_state else []
+        seeded_failures = list(resume_state.get("failures", [])) if resume_state else []
+        if resume_state:
+            display_rows = seeded_rows + local_rows[start_index:]
+            self._populate_ai_review_table(display_rows, mode="AI 보강 이어하기 준비")
+        else:
+            self._populate_ai_review_table(local_rows, mode="로컬 초안")
+            self._ai_review_resume_state = None
+            self._set_ai_review_control_state(running=False, can_resume=False)
         if config.provider == "local_draft":
             self.txt_ai_review_prompt.setPlainText(self._make_ai_review_prompt(local_rows, text, reference_text))
             self.statusBar().showMessage("로컬 초안으로 검토표를 갱신했습니다.", 3500)
@@ -4614,6 +4697,9 @@ API 키: 비워둠</pre>
         endpoints = self._candidate_mlx_endpoints()
         scrub_enabled = hasattr(self, "chk_ai_scrub") and self.chk_ai_scrub.isChecked()
         student_names = self._student_names_for_privacy()
+        cancel_event = threading.Event()
+        self._ai_review_cancel_event = cancel_event
+        self._set_ai_review_control_state(running=True, can_resume=False)
 
         def work(progress):
             prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
@@ -4632,18 +4718,35 @@ API 키: 비워둠</pre>
                     chunk_size = 2
             chunks = [
                 (idx, local_rows[idx: idx + chunk_size], blocks[idx: idx + chunk_size])
-                for idx in range(0, len(local_rows), chunk_size)
+                for idx in range(start_index, len(local_rows), chunk_size)
             ]
             reference_entries_for_chunks = reference_entries
             progress(
                 f"{prepared.label}에 문항 검토 요청 전송 중 · "
-                f"{len(local_rows)}개 항목을 {len(chunks)}개 묶음으로 처리합니다."
+                f"{len(local_rows)}개 항목 중 {start_index + 1}번째부터 {len(chunks)}개 묶음으로 처리합니다."
             )
-            merged_rows = []
-            outputs = []
-            sent_prompts = []
-            failures = []
+            merged_rows = list(seeded_rows)
+            outputs = list(seeded_outputs)
+            sent_prompts = list(seeded_prompts)
+            failures = list(seeded_failures)
             for chunk_no, (start, chunk_rows, chunk_blocks) in enumerate(chunks, start=1):
+                if cancel_event.is_set():
+                    progress(f"중지 요청 반영 · {start + 1}번째 항목부터 이어하기 가능")
+                    return {
+                        "config": prepared,
+                        "note": note,
+                        "output": "\n\n".join(outputs),
+                        "prompts": "\n\n".join(sent_prompts),
+                        "rows": merged_rows + local_rows[start:],
+                        "merged_rows": merged_rows,
+                        "failures": failures,
+                        "chunk_count": len(chunks),
+                        "canceled": True,
+                        "next_index": start,
+                        "signature": source_signature,
+                        "outputs_list": outputs,
+                        "prompts_list": sent_prompts,
+                    }
                 end = start + len(chunk_rows)
                 source_chunk = self._ai_review_source_for_blocks(chunk_blocks)
                 reference_chunk = self._ai_reference_text_for_review_chunk(
@@ -4681,10 +4784,66 @@ API 키: 비워둠</pre>
                 outputs.append(f"===== 묶음 {chunk_no}/{len(chunks)} 응답 =====\n{output}")
                 ai_rows = parse_review_rows(output)
                 if not ai_rows:
-                    message = f"묶음 {chunk_no}/{len(chunks)} 응답 해석 실패 · 로컬 초안 유지"
-                    progress(message)
-                    failures.append(message)
-                    merged_rows.extend(self._ai_review_failed_chunk_rows(chunk_rows, "응답 해석 실패"))
+                    progress(f"묶음 {chunk_no}/{len(chunks)} 응답 해석 실패 · 1문항씩 재시도")
+                    single_rows = []
+                    single_failures = []
+                    for offset, (single_row, single_block) in enumerate(zip(chunk_rows, chunk_blocks), start=0):
+                        if cancel_event.is_set():
+                            next_index = start + offset
+                            progress(f"중지 요청 반영 · {next_index + 1}번째 항목부터 이어하기 가능")
+                            merged_rows.extend(single_rows)
+                            return {
+                                "config": prepared,
+                                "note": note,
+                                "output": "\n\n".join(outputs),
+                                "prompts": "\n\n".join(sent_prompts),
+                                "rows": merged_rows + local_rows[next_index:],
+                                "merged_rows": merged_rows,
+                                "failures": failures + single_failures,
+                                "chunk_count": len(chunks),
+                                "canceled": True,
+                                "next_index": next_index,
+                                "signature": source_signature,
+                                "outputs_list": outputs,
+                                "prompts_list": sent_prompts,
+                            }
+                        single_scope = f"{start + offset + 1}번째 항목"
+                        single_prompt = self._make_structured_ai_review_prompt(
+                            [single_row],
+                            self._ai_review_source_for_blocks([single_block], limit_per_block=1800),
+                            self._ai_reference_text_for_review_chunk([single_row], reference_entries_for_chunks, reference_text),
+                            source_limit=3600,
+                            reference_limit=5000,
+                            row_limit=1,
+                            scope_note=single_scope,
+                        )
+                        if scrub_enabled:
+                            single_prompt = scrub_personal_data(single_prompt, student_names)
+                        sent_prompts.append(f"===== 재시도 · {single_scope} =====\n{single_prompt}")
+                        progress(f"재시도 전송 중 · {single_scope}")
+                        try:
+                            single_output = run_completion(single_prompt, prepared, max_tokens=1000)
+                        except Exception as exc:
+                            message = f"재시도 실패 · {single_scope} · {exc}"
+                            progress(message)
+                            single_failures.append(message)
+                            outputs.append(f"===== 재시도 실패 · {single_scope} =====\n{exc}")
+                            single_rows.extend(self._ai_review_failed_chunk_rows([single_row], str(exc)))
+                            continue
+                        outputs.append(f"===== 재시도 응답 · {single_scope} =====\n{single_output}")
+                        parsed_single = parse_review_rows(single_output)
+                        if parsed_single:
+                            single_rows.extend(self._ai_review_merge_chunk_rows([single_row], parsed_single))
+                            progress(f"재시도 완료 · {single_scope}")
+                        else:
+                            message = f"재시도 응답 해석 실패 · {single_scope}"
+                            progress(message)
+                            single_failures.append(message)
+                            single_rows.extend(self._ai_review_failed_chunk_rows([single_row], "응답 해석 실패"))
+                    merged_rows.extend(single_rows)
+                    failures.extend(single_failures)
+                    if single_failures:
+                        failures.append(f"묶음 {chunk_no}/{len(chunks)} 일부 재시도 실패")
                     continue
                 merged_rows.extend(self._ai_review_merge_chunk_rows(chunk_rows, ai_rows))
                 progress(f"묶음 {chunk_no}/{len(chunks)} 완료 · {len(ai_rows)}개 응답")
@@ -4695,8 +4854,14 @@ API 키: 비워둠</pre>
                 "output": "\n\n".join(outputs),
                 "prompts": "\n\n".join(sent_prompts),
                 "rows": merged_rows,
+                "merged_rows": merged_rows,
                 "failures": failures,
                 "chunk_count": len(chunks),
+                "canceled": False,
+                "next_index": len(local_rows),
+                "signature": source_signature,
+                "outputs_list": outputs,
+                "prompts_list": sent_prompts,
             }
 
         def success(result):
@@ -4706,6 +4871,7 @@ API 키: 비워둠</pre>
             prompts = result.get("prompts") or ""
             ai_rows = result.get("rows") or []
             failures = result.get("failures") or []
+            canceled = bool(result.get("canceled"))
             self._apply_prepared_ai_config(prepared, note)
             if not ai_rows:
                 self.txt_ai_review_prompt.setPlainText(
@@ -4717,20 +4883,40 @@ API 키: 비워둠</pre>
                     "AI 응답은 받았지만 검토표로 해석하지 못했습니다.\nAI 프롬프트 탭의 원문 출력을 확인해 주세요.",
                 )
                 return
-            mode = f"{prepared.label} 보강" if not failures else f"{prepared.label} 일부 보강"
+            if canceled:
+                mode = f"{prepared.label} 보강 중지"
+            else:
+                mode = f"{prepared.label} 보강" if not failures else f"{prepared.label} 일부 보강"
             self._populate_ai_review_table(ai_rows, mode=mode)
             self.txt_ai_review_prompt.setPlainText(
                 prompts[:30000] + "\n\n[AI 원문 출력]\n" + output[:30000]
             )
             self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
-            done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목 · 묶음 {result.get('chunk_count', 1)}개"
+            if canceled:
+                self._ai_review_resume_state = {
+                    "signature": result.get("signature"),
+                    "next_index": int(result.get("next_index", 0)),
+                    "merged_rows": list(result.get("merged_rows") or []),
+                    "outputs": list(result.get("outputs_list") or []),
+                    "prompts": list(result.get("prompts_list") or []),
+                    "failures": list(failures),
+                }
+                self._set_ai_review_control_state(running=False, can_resume=True)
+                done_message = (
+                    f"AI 보강 중지 · {result.get('next_index', 0) + 1}번째 항목부터 이어하기 가능"
+                )
+            else:
+                self._ai_review_resume_state = None
+                self._set_ai_review_control_state(running=False, can_resume=False)
+                done_message = f"AI 보강 완료 · {len(ai_rows)}개 항목 · 묶음 {result.get('chunk_count', 1)}개"
             if failures:
                 done_message += f" · 일부 로컬 초안 유지 {len(failures)}개"
             if note:
                 done_message += f" · {note}"
             self._append_ai_progress(done_message)
             self.ai_review_tabs.setCurrentWidget(self.table_ai_review)
-            if failures:
+            self._ai_review_cancel_event = None
+            if failures and not canceled:
                 QMessageBox.information(
                     self,
                     "AI 문항 검토",
