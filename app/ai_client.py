@@ -207,6 +207,45 @@ def list_openai_compatible_models(
     return [name for name in names if name]
 
 
+def _message_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        parts = []
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or ""))
+        return "\n".join(part for part in parts if part).strip()
+    return str(value)
+
+
+def _chat_output_text(choice: dict[str, Any]) -> str:
+    message = choice.get("message") or {}
+    if isinstance(message, dict):
+        for key in ("content", "text", "reasoning_content", "reasoning", "thinking"):
+            text = _message_text(message.get(key)).strip()
+            if text:
+                return text
+    return _message_text(choice.get("text")).strip()
+
+
+def _system_prompt() -> str:
+    return (
+        "너는 성취평가 문항 검토 보조자다. 반드시 요청한 JSON 형식만 반환한다. "
+        "추론 과정, thinking process, 설명 문단, markdown 코드는 출력하지 않는다."
+    )
+
+
+def _user_prompt_for_provider(prompt: str, config: AIProviderConfig) -> str:
+    if config.provider == "mlx_compatible" and "qwen3" in (config.model or "").lower():
+        return "/no_think\n" + prompt
+    return prompt
+
+
 def _run_ollama(prompt: str, config: AIProviderConfig, max_tokens: int | None = None) -> str:
     endpoint = normalize_endpoint("ollama", config.endpoint)
     model = config.model or default_model("ollama")
@@ -217,14 +256,14 @@ def _run_ollama(prompt: str, config: AIProviderConfig, max_tokens: int | None = 
         "model": model,
         "stream": False,
         "messages": [
-            {"role": "system", "content": "너는 성취평가 문항 검토 보조자다. 반드시 요청한 JSON 형식만 반환한다."},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": _user_prompt_for_provider(prompt, config)},
         ],
         "options": options,
     }
     data = _post_json(endpoint, payload, {"Content-Type": "application/json"}, config.timeout)
     message = data.get("message") or {}
-    return str(message.get("content") or data.get("response") or "")
+    return _message_text(message.get("content") or data.get("response")).strip()
 
 
 def _run_openai_compatible(prompt: str, config: AIProviderConfig, max_tokens: int | None = None) -> str:
@@ -237,19 +276,20 @@ def _run_openai_compatible(prompt: str, config: AIProviderConfig, max_tokens: in
         "model": model,
         "temperature": 0.2,
         "messages": [
-            {"role": "system", "content": "너는 성취평가 문항 검토 보조자다. 반드시 요청한 JSON 형식만 반환한다."},
-            {"role": "user", "content": prompt},
+            {"role": "system", "content": _system_prompt()},
+            {"role": "user", "content": _user_prompt_for_provider(prompt, config)},
         ],
     }
     if max_tokens is not None:
         payload["max_tokens"] = int(max_tokens)
+    if config.provider == "mlx_compatible" and "qwen3" in model.lower():
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     data = _post_json(endpoint, payload, headers, config.timeout)
     choices = data.get("choices") or []
     if not choices:
         return ""
     first = choices[0]
-    message = first.get("message") or {}
-    return str(message.get("content") or first.get("text") or "")
+    return _chat_output_text(first)
 
 
 def probe_openai_compatible_chat(
@@ -269,7 +309,7 @@ def probe_openai_compatible_chat(
     return _run_openai_compatible(
         "연결 확인입니다. 설명 없이 OK만 답하세요.",
         config,
-        max_tokens=8,
+        max_tokens=128,
     )
 
 

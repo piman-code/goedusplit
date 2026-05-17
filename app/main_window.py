@@ -2303,9 +2303,17 @@ API 키: 비워둠</pre>
         self.edit_ai_endpoint.setPlaceholderText("예: http://127.0.0.1:11434/api/chat")
         form.addRow("엔드포인트", self.edit_ai_endpoint)
 
-        self.edit_ai_model = QLineEdit()
-        self.edit_ai_model.setPlaceholderText("예: gemma4:e4b, qwen2.5:7b, local-model, gpt-5.5")
-        form.addRow("모델", self.edit_ai_model)
+        self.cmb_ai_model = QComboBox()
+        self.cmb_ai_model.setEditable(True)
+        self.cmb_ai_model.setInsertPolicy(QComboBox.NoInsert)
+        self.cmb_ai_model.lineEdit().setPlaceholderText("예: qwen2.5:7b, mlx-community/Qwen3.5-9B-OptiQ-4bit")
+        self.edit_ai_model = self.cmb_ai_model.lineEdit()
+        form.addRow("모델", self.cmb_ai_model)
+
+        self.lbl_ai_model_hint = QLabel("MLX 찾기 또는 모델 새로고침을 누르면 감지된 모델과 추천값이 표시됩니다.")
+        self.lbl_ai_model_hint.setProperty("role", "muted")
+        self.lbl_ai_model_hint.setWordWrap(True)
+        form.addRow("추천", self.lbl_ai_model_hint)
 
         self.edit_ai_api_key = QLineEdit()
         self.edit_ai_api_key.setEchoMode(QLineEdit.Password)
@@ -2342,6 +2350,10 @@ API 키: 비워둠</pre>
         self.btn_ai_test = QPushButton("연결 테스트")
         self.btn_ai_test.clicked.connect(self._test_ai_connection)
         row.addWidget(self.btn_ai_test)
+        self.btn_refresh_ai_models = QPushButton("모델 새로고침")
+        self.btn_refresh_ai_models.setToolTip("현재 AI 제공자의 모델 목록을 다시 읽고 추천 모델을 선택합니다.")
+        self.btn_refresh_ai_models.clicked.connect(self._refresh_ai_model_list)
+        row.addWidget(self.btn_refresh_ai_models)
         self.btn_find_mlx = QPushButton("MLX 찾기")
         self.btn_find_mlx.setToolTip("실행 중인 MLX-LM/LM Studio 로컬 서버를 자동으로 찾아 설정합니다.")
         self.btn_find_mlx.clicked.connect(self._find_local_mlx_server)
@@ -2375,7 +2387,7 @@ API 키: 비워둠</pre>
         self.cmb_ai_provider.setCurrentIndex(idx if idx >= 0 else 0)
         endpoint = str(self.settings.value("ai/endpoint", default_endpoint(provider)))
         self.edit_ai_endpoint.setText(normalize_endpoint(provider, endpoint))
-        self.edit_ai_model.setText(str(self.settings.value("ai/model", default_model(provider))))
+        self._set_ai_model_text(str(self.settings.value("ai/model", default_model(provider))))
         self.edit_ai_api_key.setText(str(self.settings.value("ai/api_key", "")))
         try:
             self.spin_ai_timeout.setValue(float(self.settings.value("ai/timeout", 120)))
@@ -2383,6 +2395,107 @@ API 키: 비워둠</pre>
             self.spin_ai_timeout.setValue(120)
         scrub = self.settings.value("ai/scrub_personal_data", True)
         self.chk_ai_scrub.setChecked(str(scrub).lower() not in {"false", "0", "no"})
+
+    def _ai_model_text(self) -> str:
+        if hasattr(self, "cmb_ai_model"):
+            return self.cmb_ai_model.currentText().strip() or self.edit_ai_model.text().strip()
+        return self.edit_ai_model.text().strip() if hasattr(self, "edit_ai_model") else ""
+
+    def _set_ai_model_text(self, model: str):
+        model = (model or "").strip()
+        if hasattr(self, "cmb_ai_model"):
+            idx = self.cmb_ai_model.findText(model)
+            if idx >= 0:
+                self.cmb_ai_model.setCurrentIndex(idx)
+            else:
+                self.cmb_ai_model.setEditText(model)
+        elif hasattr(self, "edit_ai_model"):
+            self.edit_ai_model.setText(model)
+
+    @staticmethod
+    def _model_size_hint(model: str) -> float:
+        lowered = model.lower()
+        matches = re.findall(r"(\d+(?:\.\d+)?)\s*b", lowered)
+        if not matches:
+            return 0.0
+        try:
+            return max(float(value) for value in matches)
+        except Exception:
+            return 0.0
+
+    @classmethod
+    def _recommend_ai_model(cls, models: list[str], provider: str) -> str:
+        clean = [model for model in dict.fromkeys(m.strip() for m in models if m and m.strip())]
+        if not clean:
+            return default_model(provider)
+
+        def score(model: str) -> tuple[float, str]:
+            lowered = model.lower()
+            value = 0.0
+            if any(term in lowered for term in ("embed", "rerank", "vision", "whisper")):
+                value -= 200
+            if any(term in lowered for term in ("qwen", "gemma", "llama", "mistral")):
+                value += 25
+            if any(term in lowered for term in ("instruct", "chat", "it")):
+                value += 18
+            if "coder" in lowered:
+                value -= 8
+            if any(term in lowered for term in ("optiq", "mlx-community")):
+                value += 8
+            if "4bit" in lowered or "q4" in lowered:
+                value += 5
+            size = cls._model_size_hint(model)
+            if 7 <= size <= 10:
+                value += 70
+            elif 11 <= size <= 15:
+                value += 62
+            elif 20 <= size <= 32:
+                value += 48
+            elif 3 <= size < 7:
+                value += 38
+            elif 1 <= size < 3:
+                value += 18
+            elif 0 < size < 1:
+                value -= 25
+            if provider == "ollama" and any(term in lowered for term in ("qwen2.5", "gemma", "llama3")):
+                value += 10
+            return value, model
+
+        return max(clean, key=score)
+
+    def _set_ai_model_choices(
+        self,
+        models: list[str],
+        provider: str,
+        recommended: str = "",
+        select_recommended: bool = True,
+        note: str = "",
+    ):
+        if not hasattr(self, "cmb_ai_model"):
+            return
+        clean = [model for model in dict.fromkeys(m.strip() for m in models if m and m.strip())]
+        recommended = recommended or self._recommend_ai_model(clean, provider)
+        current = self._ai_model_text()
+        self.cmb_ai_model.blockSignals(True)
+        self.cmb_ai_model.clear()
+        for model in clean:
+            self.cmb_ai_model.addItem(model)
+        target = recommended if select_recommended and recommended else current
+        if target and target not in clean:
+            self.cmb_ai_model.addItem(target)
+        self.cmb_ai_model.blockSignals(False)
+        self._set_ai_model_text(target or default_model(provider))
+        if clean:
+            hint = f"감지 모델 {len(clean)}개"
+            if recommended:
+                size = self._model_size_hint(recommended)
+                size_note = " · 균형 추천" if 7 <= size <= 15 else (" · 고품질/느림" if size >= 20 else " · 빠른 확인용")
+                hint += f" · 추천: {recommended}{size_note}"
+            if note:
+                hint += f" · {note}"
+            self.lbl_ai_model_hint.setText(hint)
+        else:
+            self.lbl_ai_model_hint.setText(note or "감지된 모델이 없습니다. 모델명을 직접 입력할 수 있습니다.")
 
     def _save_ai_settings(self):
         if not hasattr(self, "cmb_ai_provider"):
@@ -2392,7 +2505,7 @@ API 키: 비워둠</pre>
         self.edit_ai_endpoint.setText(endpoint)
         self.settings.setValue("ai/provider", provider)
         self.settings.setValue("ai/endpoint", endpoint)
-        self.settings.setValue("ai/model", self.edit_ai_model.text().strip())
+        self.settings.setValue("ai/model", self._ai_model_text())
         self.settings.setValue("ai/api_key", self.edit_ai_api_key.text().strip())
         self.settings.setValue("ai/timeout", int(self.spin_ai_timeout.value()))
         self.settings.setValue("ai/scrub_personal_data", self.chk_ai_scrub.isChecked())
@@ -2419,18 +2532,30 @@ API 키: 비워둠</pre>
         current_endpoint = normalize_endpoint(provider, self.edit_ai_endpoint.text())
         if self.edit_ai_endpoint.text().strip() in known_endpoints or current_endpoint in known_endpoints:
             self.edit_ai_endpoint.setText(default_endpoint(provider))
-        if self.edit_ai_model.text().strip() in known_models:
-            self.edit_ai_model.setText(default_model(provider))
+        if self._ai_model_text() in known_models:
+            self._set_ai_model_text(default_model(provider))
+        if hasattr(self, "cmb_ai_model") and self.cmb_ai_model.count() == 0:
+            self.cmb_ai_model.addItem(default_model(provider))
         if provider == "local_draft":
             self.lbl_ai_settings_status.setText("로컬 초안은 외부 AI를 호출하지 않습니다.")
+            if hasattr(self, "lbl_ai_model_hint"):
+                self.lbl_ai_model_hint.setText("로컬 초안은 모델 선택이 필요하지 않습니다.")
         elif provider == "ollama":
             self.lbl_ai_settings_status.setText("Ollama가 실행 중이어야 합니다. 연결 테스트가 설치된 모델을 감지해 모델명을 맞춥니다.")
+            if hasattr(self, "lbl_ai_model_hint"):
+                self.lbl_ai_model_hint.setText("모델 새로고침을 누르면 설치된 Ollama 모델을 선택할 수 있습니다.")
         elif provider == "mlx_compatible":
             self.lbl_ai_settings_status.setText("MLX-LM/LM Studio 로컬 서버의 /v1/chat/completions 주소를 입력하세요.")
+            if hasattr(self, "lbl_ai_model_hint"):
+                self.lbl_ai_model_hint.setText("MLX 찾기 또는 모델 새로고침을 누르면 감지된 모델과 추천값이 표시됩니다.")
         elif provider == "openai_cloud":
             self.lbl_ai_settings_status.setText("OpenAI 클라우드는 OAuth가 아니라 API Key 방식입니다. 사용할 수 있는 모델명을 입력하세요.")
+            if hasattr(self, "lbl_ai_model_hint"):
+                self.lbl_ai_model_hint.setText("클라우드 모델명은 직접 입력합니다.")
         else:
             self.lbl_ai_settings_status.setText("OpenAI 호환 서버의 chat completions 엔드포인트를 입력하세요.")
+            if hasattr(self, "lbl_ai_model_hint"):
+                self.lbl_ai_model_hint.setText("모델 새로고침을 누르면 서버의 모델 목록을 선택할 수 있습니다.")
 
     def _ai_provider_config(self) -> AIProviderConfig:
         if not hasattr(self, "cmb_ai_provider"):
@@ -2439,7 +2564,7 @@ API 키: 비워둠</pre>
         return AIProviderConfig(
             provider=provider,
             endpoint=normalize_endpoint(provider, self.edit_ai_endpoint.text()),
-            model=self.edit_ai_model.text().strip() or default_model(provider),
+            model=self._ai_model_text() or default_model(provider),
             api_key=self.edit_ai_api_key.text().strip(),
             timeout=int(self.spin_ai_timeout.value()),
         )
@@ -2461,6 +2586,7 @@ API 키: 비워둠</pre>
             "btn_ai_test",
             "btn_find_mlx",
             "btn_start_mlx",
+            "btn_refresh_ai_models",
             "btn_ai_load_source",
         ):
             widget = getattr(self, attr, None)
@@ -2600,6 +2726,74 @@ API 키: 비워둠</pre>
             errors.append(f"{endpoint}: 모델 목록이 비어 있습니다.")
         return "", [], errors
 
+    def _refresh_ai_model_list(self):
+        config = self._ai_provider_config()
+        self._save_ai_settings()
+        provider = config.provider
+        if provider == "local_draft":
+            self.lbl_ai_model_hint.setText("로컬 초안은 모델 선택이 필요하지 않습니다.")
+            return
+        endpoints = self._candidate_mlx_endpoints()
+
+        def work(progress):
+            progress("모델 목록 새로고침 시작")
+            if provider == "ollama":
+                progress("Ollama 모델 목록 확인 중")
+                models = list_ollama_models(config.endpoint, min(config.timeout, 30))
+                return {"provider": provider, "endpoint": config.endpoint, "models": models}
+            if provider == "mlx_compatible":
+                errors = []
+                for endpoint in endpoints:
+                    progress(f"MLX 모델 목록 확인 중: {endpoint}")
+                    try:
+                        models = list_openai_compatible_models(
+                            endpoint,
+                            "",
+                            "mlx_compatible",
+                            min(config.timeout, 30),
+                        )
+                    except Exception as exc:
+                        errors.append(f"{endpoint}: {exc}")
+                        continue
+                    if models:
+                        return {
+                            "provider": provider,
+                            "endpoint": endpoint,
+                            "models": models,
+                            "errors": errors,
+                        }
+                    errors.append(f"{endpoint}: 모델 목록이 비어 있습니다.")
+                detail = "\n".join(errors[:5])
+                raise ValueError(f"MLX/LM Studio 모델 목록을 읽지 못했습니다.\n{detail}")
+            progress("OpenAI 호환 모델 목록 확인 중")
+            models = list_openai_compatible_models(
+                config.endpoint,
+                config.api_key,
+                provider,
+                min(config.timeout, 30),
+            )
+            return {"provider": provider, "endpoint": config.endpoint, "models": models}
+
+        def success(result):
+            models = result.get("models") or []
+            result_provider = result.get("provider") or provider
+            endpoint = result.get("endpoint") or config.endpoint
+            recommended = self._recommend_ai_model(models, result_provider)
+            if endpoint:
+                self.edit_ai_endpoint.setText(normalize_endpoint(result_provider, endpoint))
+            self._set_ai_model_choices(
+                models,
+                result_provider,
+                recommended=recommended,
+                select_recommended=True,
+                note="직접 다른 모델을 선택할 수 있습니다.",
+            )
+            self._save_ai_settings()
+            message = f"모델 {len(models)}개 감지 · 추천 모델: {recommended}"
+            self._append_ai_progress(message)
+
+        self._run_ai_background_task("모델 새로고침", work, success)
+
     @staticmethod
     def _is_local_port_open(port: int, timeout: float = 0.25) -> bool:
         try:
@@ -2618,7 +2812,7 @@ API 키: 비워둠</pre>
         config = AIProviderConfig(
             provider="mlx_compatible",
             endpoint=normalize_endpoint("mlx_compatible", self.edit_ai_endpoint.text()),
-            model=self.edit_ai_model.text().strip() or default_model("mlx_compatible"),
+            model="",
             timeout=int(self.spin_ai_timeout.value()),
         )
         endpoints = self._candidate_mlx_endpoints()
@@ -2626,12 +2820,27 @@ API 키: 비워둠</pre>
         def work(progress):
             progress("MLX/LM Studio 로컬 서버 자동 탐색 시작")
             prepared, note = self._prepare_ai_connection_config_for_worker(config, endpoints, progress)
-            return {"config": prepared, "note": note}
+            models = list_openai_compatible_models(
+                prepared.endpoint,
+                "",
+                "mlx_compatible",
+                min(prepared.timeout, 30),
+            )
+            recommended = self._recommend_ai_model(models, "mlx_compatible")
+            return {"config": prepared, "note": note, "models": models, "recommended": recommended}
 
         def success(result):
             prepared = result["config"]
             note = result.get("note", "")
+            models = result.get("models") or []
             self._apply_prepared_ai_config(prepared, note)
+            self._set_ai_model_choices(
+                models,
+                "mlx_compatible",
+                recommended=result.get("recommended") or prepared.model,
+                select_recommended=True,
+                note="AI로 보강 품질을 높이려면 7B~15B급 모델을 권장합니다.",
+            )
             message = f"MLX 서버 감지 완료 · {prepared.endpoint} · 모델 {prepared.model}"
             self.lbl_ai_settings_status.setText(message)
             self.statusBar().showMessage(message, 6000)
@@ -2654,7 +2863,7 @@ API 키: 비워둠</pre>
                 "터미널에서 `pip install mlx-lm` 설치 후 다시 시도하세요.",
             )
             return
-        current_model = self.edit_ai_model.text().strip() if hasattr(self, "edit_ai_model") else ""
+        current_model = self._ai_model_text() if hasattr(self, "edit_ai_model") else ""
         default_model_id = (
             current_model
             if current_model and current_model not in {"local-model", default_model("openai_compatible")}
@@ -2679,7 +2888,7 @@ API 키: 비워둠</pre>
             if idx >= 0:
                 self.cmb_ai_provider.setCurrentIndex(idx)
             self.edit_ai_endpoint.setText(endpoint)
-            self.edit_ai_model.setText(model)
+            self._set_ai_model_text(model)
             self._save_ai_settings()
             self._append_ai_progress(
                 f"이미 열린 로컬 서버 포트 {port}를 발견했습니다. 새 서버를 띄우지 않고 연결 확인을 진행합니다."
@@ -2705,7 +2914,7 @@ API 키: 비워둠</pre>
         if idx >= 0:
             self.cmb_ai_provider.setCurrentIndex(idx)
         self.edit_ai_endpoint.setText(f"http://127.0.0.1:{port}/v1/chat/completions")
-        self.edit_ai_model.setText(model)
+        self._set_ai_model_text(model)
         self._save_ai_settings()
         self.lbl_ai_settings_status.setText(
             f"MLX 서버 시작 요청 완료. 5~20초 뒤 'MLX 찾기' 또는 '연결 테스트'를 누르세요. 로그: {log_path}"
@@ -2759,11 +2968,11 @@ API 키: 비워둠</pre>
                 preferred = (
                     config.model
                     if config.model and config.model in found
-                    else next((name for name in found if "Qwen3-0.6B" in name), found[0])
+                    else MainWindow._recommend_ai_model(found, "mlx_compatible")
                 )
                 tell(f"모델 목록 확인 성공: {preferred}")
                 tell("짧은 실제 응답 확인 중")
-                probe_config_timeout = min(max(config.timeout, 20), 45)
+                probe_config_timeout = min(max(config.timeout, 45), 120)
                 try:
                     probe_openai_compatible_chat(
                         candidate,
@@ -2795,7 +3004,7 @@ API 키: 비워둠</pre>
                     note = f"MLX 서버 실제 응답 모델을 감지해 모델을 {selected_model}(으)로 맞췄습니다."
                 config.model = selected_model
             elif models and (not config.model or config.model not in models):
-                config.model = next((name for name in models if "Qwen3-0.6B" in name), models[0])
+                config.model = MainWindow._recommend_ai_model(models, "mlx_compatible")
                 note = f"MLX 서버 모델 목록을 감지해 모델을 {config.model}(으)로 맞췄습니다."
         elif config.provider == "openai_compatible":
             tell("OpenAI 호환 서버 모델 목록 확인 중")
@@ -2820,7 +3029,7 @@ API 키: 비워둠</pre>
         if idx >= 0:
             self.cmb_ai_provider.setCurrentIndex(idx)
         self.edit_ai_endpoint.setText(config.endpoint)
-        self.edit_ai_model.setText(config.model)
+        self._set_ai_model_text(config.model)
         self.settings.setValue("ai/provider", config.provider)
         self.settings.setValue("ai/endpoint", config.endpoint)
         self.settings.setValue("ai/model", config.model)
@@ -4026,6 +4235,11 @@ API 키: 비워둠</pre>
             if prepared.provider in {"mlx_compatible", "ollama"} and prepared.timeout < 180:
                 prepared.timeout = 180
                 progress("문항 검토는 응답이 길어 대기 시간을 이번 요청에 한해 180초로 적용합니다.")
+            size = self._model_size_hint(prepared.model)
+            if 0 < size < 3:
+                progress("현재 선택 모델은 빠른 확인용에 가까워 검토 품질이 낮을 수 있습니다. 품질이 중요하면 7B~15B급 모델을 선택해 보세요.")
+            elif size >= 20:
+                progress("현재 선택 모델은 큰 모델이라 품질은 좋아질 수 있지만 응답이 오래 걸릴 수 있습니다.")
             progress(f"{prepared.label}에 문항 검토 요청 전송 중")
             progress("문항 수가 많거나 모델이 크면 1~5분 걸릴 수 있습니다.")
             output = run_completion(prompt_to_send, prepared, max_tokens=6000)
