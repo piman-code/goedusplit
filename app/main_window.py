@@ -13,16 +13,18 @@ import csv
 import json
 import math
 import os
+import queue
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer, QObject, QThread, Signal, Slot
+from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -77,23 +79,6 @@ AI_SOURCE_TEXT_LIMIT = 120_000
 AI_REFERENCE_TEXT_LIMIT = 300_000
 AI_SOURCE_CACHE_NAME = "_combined_ai_source_text.txt"
 AI_REFERENCE_CACHE_NAME = "_combined_ai_reference_text.txt"
-
-
-class _CallableWorker(QObject):
-    progress = Signal(str)
-    finished = Signal(object)
-    failed = Signal(str)
-
-    def __init__(self, func):
-        super().__init__()
-        self._func = func
-
-    @Slot()
-    def run(self):
-        try:
-            self.finished.emit(self._func(self.progress.emit))
-        except Exception:
-            self.failed.emit(traceback.format_exc())
 
 
 def _app_icon_path() -> Path | None:
@@ -2489,28 +2474,54 @@ API 키: 비워둠</pre>
             self._append_ai_progress(label)
 
     def _run_ai_background_task(self, title: str, func, on_success):
-        if getattr(self, "_ai_worker_thread", None) is not None:
+        if getattr(self, "_ai_worker_active", False):
             QMessageBox.information(self, title, "이미 AI 작업이 진행 중입니다. 진행 로그를 확인해 주세요.")
             return
         self._set_ai_busy(True, f"{title} 시작")
-        thread = QThread(self)
-        worker = _CallableWorker(func)
-        worker.moveToThread(thread)
-        thread.started.connect(worker.run)
-        worker.progress.connect(self._append_ai_progress)
+        events: queue.Queue = queue.Queue()
+        self._ai_worker_active = True
+        self._ai_worker_queue = events
+
+        def progress(message: str):
+            events.put(("progress", str(message)))
+
+        def runner():
+            try:
+                events.put(("success", func(progress)))
+            except Exception:
+                events.put(("failure", traceback.format_exc()))
+
+        worker = threading.Thread(target=runner, daemon=True, name=f"GoeduSplit-{title}")
+        self._ai_worker_thread = worker
+        worker.start()
+
+        timer = QTimer(self)
+        timer.setInterval(150)
+        self._ai_worker_timer = timer
 
         def cleanup():
-            thread.quit()
-            thread.wait()
-            worker.deleteLater()
-            thread.deleteLater()
+            timer.stop()
+            timer.deleteLater()
+            self._ai_worker_active = False
+            self._ai_worker_queue = None
             self._ai_worker_thread = None
-            self._ai_worker = None
+            self._ai_worker_timer = None
             self._set_ai_busy(False)
 
         def handle_success(result):
             try:
                 on_success(result)
+            except Exception:
+                trace = traceback.format_exc()
+                short = trace.strip().splitlines()[-1] if trace.strip() else "알 수 없는 오류"
+                self._append_ai_progress(f"{title} 결과 반영 실패: {short}")
+                if hasattr(self, "txt_ai_progress"):
+                    self.txt_ai_progress.appendPlainText(trace)
+                QMessageBox.warning(
+                    self,
+                    title,
+                    f"결과를 화면에 반영하는 중 오류가 발생했습니다.\n{short}\n\n자세한 내용은 진행 로그를 확인해 주세요.",
+                )
             finally:
                 cleanup()
 
@@ -2518,17 +2529,36 @@ API 키: 비워둠</pre>
             try:
                 short = trace.strip().splitlines()[-1] if trace.strip() else "알 수 없는 오류"
                 self._append_ai_progress(f"{title} 실패: {short}")
-                QMessageBox.warning(self, title, f"작업 중 오류가 발생했습니다.\n{short}\n\n자세한 내용은 진행 로그를 확인해 주세요.")
                 if hasattr(self, "txt_ai_progress"):
                     self.txt_ai_progress.appendPlainText(trace)
+                QMessageBox.warning(
+                    self,
+                    title,
+                    f"작업 중 오류가 발생했습니다.\n{short}\n\n자세한 내용은 진행 로그를 확인해 주세요.",
+                )
             finally:
                 cleanup()
 
-        worker.finished.connect(handle_success)
-        worker.failed.connect(handle_failure)
-        self._ai_worker_thread = thread
-        self._ai_worker = worker
-        thread.start()
+        def drain_events():
+            while True:
+                try:
+                    kind, payload = events.get_nowait()
+                except queue.Empty:
+                    break
+                if kind == "progress":
+                    self._append_ai_progress(payload)
+                elif kind == "success":
+                    handle_success(payload)
+                    break
+                elif kind == "failure":
+                    handle_failure(payload)
+                    break
+            if getattr(self, "_ai_worker_active", False) and not worker.is_alive() and events.empty():
+                self._append_ai_progress(f"{title} 종료 상태를 확인하지 못했습니다. 다시 시도해 주세요.")
+                cleanup()
+
+        timer.timeout.connect(drain_events)
+        timer.start()
 
     def _candidate_mlx_endpoints(self) -> list[str]:
         current = self.edit_ai_endpoint.text().strip() if hasattr(self, "edit_ai_endpoint") else ""
