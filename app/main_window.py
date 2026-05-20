@@ -1069,6 +1069,13 @@ class MainWindow(QMainWindow):
         )
         btn_import_paper.clicked.connect(self.import_exam_paper_to_spliter)
         toolbar_layout.addWidget(btn_import_paper)
+        btn_blueprint = QPushButton("문항 구성안 제안…")
+        btn_blueprint.setToolTip(
+            "문항 수를 입력하면 분석자료의 난이도·정답률·배점 분포를 참고해 "
+            "성취수준 목표와 배점 초안을 예상정답률 계산기에 제안합니다."
+        )
+        btn_blueprint.clicked.connect(self.suggest_expected_rate_blueprint)
+        toolbar_layout.addWidget(btn_blueprint)
         btn_export = QPushButton("예상정답률 근거 엑셀 내보내기…")
         btn_export.clicked.connect(self.export_spliter_evidence)
         toolbar_layout.addWidget(btn_export)
@@ -1268,6 +1275,208 @@ class MainWindow(QMainWindow):
                 "다음 자료는 불러오지 못했습니다.\n" + "\n".join(failures[:8]),
             )
         self.statusBar().showMessage(message, 8000)
+
+    def suggest_expected_rate_blueprint(self):
+        if self.spliter_view is None:
+            QMessageBox.information(self, "예상정답률 계산기", "이 환경에서는 내장 예상정답률 계산기를 열 수 없습니다.")
+            return
+        default_count = len(self.exam.items) if self.exam is not None and self.exam.items else 18
+        count, ok = QInputDialog.getInt(
+            self,
+            "문항 구성안 제안",
+            "새 시험의 문항 수를 입력하세요.",
+            max(1, min(80, default_count)),
+            1,
+            80,
+            1,
+        )
+        if not ok:
+            return
+        project = self._build_expected_rate_blueprint_project(count)
+        self._spliter_pending_project_payload = project
+        if self.exam is not None and self.overall is not None:
+            self._spliter_pending_payload = self._build_spliter_evidence_payload()
+        self.tabs.setCurrentWidget(self.tab_spliter)
+        if self._spliter_loaded:
+            self._flush_spliter_project_payload()
+            self._flush_spliter_payload()
+        else:
+            self._load_spliter_web()
+        basis = "현재 분석자료" if self.exam is not None and self.item_stats else "기본 100점 구성"
+        self.statusBar().showMessage(f"{basis}를 바탕으로 {count}문항 구성안을 예상정답률 계산기에 제안했습니다.", 7000)
+
+    def _build_expected_rate_blueprint_project(self, count: int) -> dict:
+        count = max(1, min(80, int(count)))
+        total_score = self._expected_rate_blueprint_total_score()
+        levels = self._expected_rate_blueprint_level_sequence(count)
+        points = self._expected_rate_blueprint_points(levels, total_score)
+        source_items = self._expected_rate_blueprint_source_items(levels)
+        items = []
+        for idx, target in enumerate(levels, start=1):
+            source = source_items[idx - 1] if idx - 1 < len(source_items) else None
+            difficulty = self._expected_rate_blueprint_difficulty(target, source)
+            item_type = getattr(source, "item_type", "") if source is not None else ""
+            item_type = item_type if item_type in {"선택형", "서답형"} else "선택형"
+            standard = ""
+            content = ""
+            if source is not None:
+                standard = " ".join(
+                    part for part in [getattr(source, "standard_code", ""), getattr(source, "standard", "")]
+                    if part
+                ).strip()
+                content = getattr(source, "content_area", "") or ""
+            expected = self._ai_default_ox_expected_values(target, difficulty)
+            counts = {}
+            sample_size = 3
+            for lv in LEVELS_AE:
+                count_value, denominator = self._parse_expected_count(expected.get(f"{lv} 예상", ""), sample_size)
+                sample_size = denominator
+                counts[lv] = 0 if count_value is None else count_value
+            judgments = self._judgments_from_expected_counts(counts, sample_size)
+            items.append({
+                "id": f"blueprint-{idx}",
+                "number": idx,
+                "title": f"{idx}번 · {target} 수준 제안",
+                "standard": standard,
+                "points": points[idx - 1],
+                "sampleSize": sample_size,
+                "type": item_type,
+                "difficulty": difficulty,
+                "targetLevel": target,
+                "judgmentsByJudge": {
+                    "teacher-1": judgments,
+                    "teacher-2": judgments,
+                },
+                "evidence": ["구성안 제안"],
+                "note": self._expected_rate_blueprint_note(target, difficulty, points[idx - 1], content),
+            })
+        project = {
+            "version": 1,
+            "judges": [
+                {"id": "teacher-1", "name": "교사 1"},
+                {"id": "teacher-2", "name": "교사 2"},
+            ],
+            "activeJudgeId": "teacher-1",
+            "items": items,
+            "evidenceMode": "difficultyAverage",
+        }
+        if self.exam is not None and self.overall is not None:
+            project["evidenceData"] = self._build_spliter_evidence_payload()
+        return project
+
+    def _expected_rate_blueprint_total_score(self) -> float:
+        if self.exam is not None and self.exam.items:
+            total = sum(float(getattr(item, "score", 0.0) or 0.0) for item in self.exam.items)
+            if total > 0:
+                return round(total, 2)
+        return 100.0
+
+    def _expected_rate_blueprint_level_sequence(self, count: int) -> list[str]:
+        weights = {lv: 0 for lv in LEVELS_AE}
+        if self.item_stats:
+            for stat in self.item_stats:
+                p_value = float(getattr(stat, "p_value", 0.0) or 0.0)
+                if p_value >= 0.80:
+                    target = "E"
+                elif p_value >= 0.65:
+                    target = "D"
+                elif p_value >= 0.45:
+                    target = "C"
+                elif p_value >= 0.30:
+                    target = "B"
+                else:
+                    target = "A"
+                weights[target] += 1
+        if not any(weights.values()):
+            weights = {"A": 1, "B": 3, "C": 5, "D": 5, "E": 4}
+        scaled = self._scale_counts_to_total(weights, count, ["E", "D", "C", "B", "A"])
+        sequence = []
+        for lv in ["E", "D", "C", "B", "A"]:
+            sequence.extend([lv] * scaled.get(lv, 0))
+        return sequence[:count] or ["C"] * count
+
+    @staticmethod
+    def _scale_counts_to_total(weights: dict[str, int | float], total: int, order: list[str]) -> dict[str, int]:
+        total = max(1, int(total))
+        weight_sum = sum(max(0.0, float(weights.get(key, 0.0))) for key in order)
+        if weight_sum <= 0:
+            weight_sum = float(len(order))
+            weights = {key: 1.0 for key in order}
+        raw = {key: max(0.0, float(weights.get(key, 0.0))) / weight_sum * total for key in order}
+        counts = {key: int(math.floor(raw[key])) for key in order}
+        remaining = total - sum(counts.values())
+        for key in sorted(order, key=lambda k: raw[k] - counts[k], reverse=True):
+            if remaining <= 0:
+                break
+            counts[key] += 1
+            remaining -= 1
+        while sum(counts.values()) > total:
+            for key in reversed(order):
+                if counts.get(key, 0) > 0 and sum(counts.values()) > total:
+                    counts[key] -= 1
+        return counts
+
+    def _expected_rate_blueprint_points(self, levels: list[str], total_score: float) -> list[float]:
+        if not levels:
+            return []
+        level_weights = {"E": 0.9, "D": 1.0, "C": 1.1, "B": 1.2, "A": 1.3}
+        weights = [level_weights.get(lv, 1.0) for lv in levels]
+        weight_sum = sum(weights) or 1.0
+        raw = [max(1.0, total_score * weight / weight_sum) for weight in weights]
+        points = [max(1, int(round(value))) for value in raw]
+        diff = int(round(total_score - sum(points)))
+        hard_order = sorted(range(len(levels)), key=lambda i: LEVELS_AE.index(levels[i]))
+        easy_order = list(reversed(hard_order))
+        guard = 0
+        while diff != 0 and guard < 1000:
+            order = hard_order if diff > 0 else easy_order
+            changed = False
+            for idx in order:
+                if diff > 0:
+                    points[idx] += 1
+                    diff -= 1
+                    changed = True
+                elif points[idx] > 1:
+                    points[idx] -= 1
+                    diff += 1
+                    changed = True
+                if diff == 0:
+                    break
+            if not changed:
+                break
+            guard += 1
+        return [float(value) for value in points]
+
+    def _expected_rate_blueprint_source_items(self, levels: list[str]) -> list:
+        if self.exam is None or not self.exam.items:
+            return [None for _ in levels]
+        source_items = sorted(
+            self.exam.items,
+            key=lambda item: (
+                {"쉬움": 0, "보통": 1, "어려움": 2}.get(getattr(item, "difficulty", ""), 1),
+                getattr(item, "number", 0),
+            ),
+        )
+        if not source_items:
+            return [None for _ in levels]
+        return [source_items[(idx - 1) % len(source_items)] for idx in range(1, len(levels) + 1)]
+
+    @staticmethod
+    def _expected_rate_blueprint_difficulty(target: str, source) -> str:
+        if source is not None and getattr(source, "difficulty", "") in {"쉬움", "보통", "어려움"}:
+            return getattr(source, "difficulty", "")
+        if target in {"A", "B"}:
+            return "어려움"
+        if target == "C":
+            return "보통"
+        return "쉬움"
+
+    @staticmethod
+    def _expected_rate_blueprint_note(target: str, difficulty: str, points: float, content: str) -> str:
+        base = f"{target} 수준 문항 제안 · {difficulty} · {points:g}점"
+        if content:
+            base += f" · 참고 내용영역: {content}"
+        return base
 
     def _render_spliter_tab(self):
         if not hasattr(self, "lbl_spliter_status"):
@@ -5597,6 +5806,8 @@ API 키: 비워둠</pre>
         행 끝의 휴지통 아이콘은 해당 문항 하나만 지울 때 사용합니다.</p>
         <p><b>시험지 자동 반영</b>은 HWPX, PDF, DOCX, 엑셀, 텍스트 자료를 문항 단위로 읽어 예상정답률 계산기에 바로 넣습니다.
         HWP 파일은 로컬에 <code>kordoc</code> 또는 <code>hwp5txt</code> 변환기가 설치된 경우 자동으로 시도하며, 안정성을 위해 HWPX 저장본을 권장합니다.</p>
+        <p><b>문항 구성안 제안</b>은 사용자가 입력한 문항 수에 맞춰 성취수준 목표와 배점을 먼저 제시합니다.
+        분석자료가 있으면 기존 문항의 정답률·난이도·배점 분포를 참고하고, 없으면 100점 기준 기본 구성안을 만듭니다.</p>
         <p>지필평가는 문항별 예상정답률을 합산해 분할점수를 만들고, 수행평가는 평가요소별 예상점수를 합산해 분할점수를 만듭니다.
         두 기능은 모두 “최소능력자가 어느 정도 수행할 수 있는가”를 숫자로 옮기는 같은 구조입니다.</p>
 
