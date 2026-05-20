@@ -23,8 +23,10 @@ import sys
 import tempfile
 import threading
 import traceback
+import zipfile
 from datetime import datetime
 from pathlib import Path
+import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer
 from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap
@@ -1060,6 +1062,13 @@ class MainWindow(QMainWindow):
         btn_send.setProperty("role", "primary")
         btn_send.clicked.connect(self.send_spliter_evidence_to_web)
         toolbar_layout.addWidget(btn_send)
+        btn_import_paper = QPushButton("시험지 자동 반영…")
+        btn_import_paper.setToolTip(
+            "시험지 HWPX/PDF/자료를 읽어 문항 초안을 만들고 예상정답률 계산기에 바로 반영합니다. "
+            "AI 없이 로컬 규칙으로 먼저 처리하며, AI 문항 검토 탭에서 보강할 수 있습니다."
+        )
+        btn_import_paper.clicked.connect(self.import_exam_paper_to_spliter)
+        toolbar_layout.addWidget(btn_import_paper)
         btn_export = QPushButton("예상정답률 근거 엑셀 내보내기…")
         btn_export.clicked.connect(self.export_spliter_evidence)
         toolbar_layout.addWidget(btn_export)
@@ -1190,6 +1199,75 @@ class MainWindow(QMainWindow):
             else:
                 self._load_spliter_web()
         self.statusBar().showMessage("예상정답률 계산기에 현재 분석자료를 전달했습니다.", 6000)
+
+    def import_exam_paper_to_spliter(self):
+        if self.spliter_view is None:
+            QMessageBox.information(self, "예상정답률 계산기", "이 환경에서는 내장 예상정답률 계산기를 열 수 없습니다.")
+            return
+        paths, _ = QFileDialog.getOpenFileNames(
+            self,
+            "시험지 또는 문항 자료 불러와 예상정답률에 반영",
+            "",
+            "시험지/문항 자료 (*.hwp *.hwpx *.pdf *.docx *.txt *.md *.csv *.json *.xlsx *.xlsm);;모든 파일 (*.*)",
+        )
+        if not paths:
+            return
+        existing = self._ai_review_source_text().strip()
+        append_existing = False
+        if existing:
+            choice = QMessageBox.question(
+                self,
+                "시험지 자료 반영",
+                f"AI 문항 검토 탭에 이미 문항 자료가 들어 있습니다.\n"
+                f"선택한 {len(paths)}개 자료를 기존 자료 뒤에 추가할까요?\n\n"
+                "예: 추가해서 함께 반영\n아니오: 기존 자료를 지우고 새 시험지만 반영",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.No,
+            )
+            if choice == QMessageBox.Cancel:
+                return
+            append_existing = choice == QMessageBox.Yes
+        parts = []
+        failures = []
+        for path_str in paths:
+            path = Path(path_str)
+            try:
+                saved = self._store_ai_source_file(path)
+                text = self._extract_text_from_review_file(str(path))
+            except Exception as exc:
+                failures.append(f"{path.name}: {exc}")
+                continue
+            parts.append(
+                f"{self._format_ai_material_header(f'시험지/문항 자료: {path.name}', saved)}\n\n"
+                f"{text}"
+            )
+        if not parts:
+            QMessageBox.warning(
+                self,
+                "시험지 자동 반영",
+                "선택한 시험지 자료를 읽지 못했습니다.\n" + "\n".join(failures[:5]),
+            )
+            return
+        text = "\n\n".join(parts)
+        if append_existing:
+            text = f"{existing}\n\n{text}"
+        self._set_ai_review_source_text(text, target="source")
+        self._save_ai_source_cache(text)
+        self._load_ai_reference_cache_if_empty()
+        self._generate_ai_review_draft()
+        self._send_ai_review_to_spliter()
+        message = (
+            f"시험지 자료 {len(parts)}개를 읽어 예상정답률 계산기에 반영했습니다. "
+            "필요하면 AI 문항 검토 탭에서 성취기준·난이도·예상 O/X를 보강하세요."
+        )
+        if failures:
+            message += f" 읽기 실패 {len(failures)}개."
+            QMessageBox.warning(
+                self,
+                "일부 시험지 자료 읽기 실패",
+                "다음 자료는 불러오지 못했습니다.\n" + "\n".join(failures[:8]),
+            )
+        self.statusBar().showMessage(message, 8000)
 
     def _render_spliter_tab(self):
         if not hasattr(self, "lbl_spliter_status"):
@@ -2081,9 +2159,9 @@ class MainWindow(QMainWindow):
 
         head = QHBoxLayout()
         head.addStretch(1)
-        self.btn_ai_load_source = QPushButton("문항 PDF/자료")
+        self.btn_ai_load_source = QPushButton("문항 자료")
         self.btn_ai_load_source.setToolTip(
-            "시험 문제 PDF, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다."
+            "시험 문제 HWPX/PDF, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다."
         )
         self.btn_ai_load_source.clicked.connect(self._load_ai_review_file)
         head.addWidget(self.btn_ai_load_source)
@@ -2173,7 +2251,7 @@ class MainWindow(QMainWindow):
         self.ai_source_view_tabs = QTabWidget()
         self.txt_ai_review_source = QPlainTextEdit()
         self.txt_ai_review_source.setPlaceholderText(
-            "시험 문제 PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 붙여 넣거나 '문항 PDF/자료'로 불러오세요."
+            "시험 문제 HWPX/PDF에서 추출한 문항, 문항정보표, 수행평가 채점기준표를 붙여 넣거나 '문항 자료'로 불러오세요."
         )
         self.ai_source_view_tabs.addTab(self.txt_ai_review_source, "편집")
         self.browser_ai_review_source = QTextBrowser()
@@ -3471,6 +3549,12 @@ API 키: 비워둠</pre>
                     if values:
                         parts.append(" | ".join(values))
             return "\n".join(parts)
+        if suffix == ".docx":
+            return self._format_ai_extracted_markdown(self._extract_docx_text(p))
+        if suffix == ".hwpx":
+            return self._format_ai_extracted_markdown(self._extract_hwpx_text(p))
+        if suffix == ".hwp":
+            return self._format_ai_extracted_markdown(self._extract_hwp_text_with_external_tools(p))
         if suffix == ".pdf":
             try:
                 import pypdf
@@ -3483,7 +3567,134 @@ API 키: 비워둠</pre>
                 if text.strip():
                     pages.append(f"## PDF {i}쪽\n\n{self._format_ai_extracted_markdown(text)}")
             return "\n".join(pages)
-        raise ValueError("지원 형식: .txt, .md, .csv, .json, .xlsx, .xlsm, .pdf")
+        raise ValueError("지원 형식: .txt, .md, .csv, .json, .xlsx, .xlsm, .docx, .hwp, .hwpx, .pdf")
+
+    @staticmethod
+    def _xml_local_name(tag: str) -> str:
+        return tag.rsplit("}", 1)[-1] if "}" in tag else tag
+
+    def _extract_docx_text(self, path: Path) -> str:
+        try:
+            with zipfile.ZipFile(path) as zf:
+                names = [name for name in zf.namelist() if name == "word/document.xml"]
+                if not names:
+                    raise ValueError("DOCX 본문 XML을 찾지 못했습니다.")
+                root = ET.fromstring(zf.read(names[0]))
+        except zipfile.BadZipFile as exc:
+            raise ValueError("DOCX 파일 구조를 읽지 못했습니다.") from exc
+        paragraphs = []
+        for para in root.iter():
+            if self._xml_local_name(para.tag) != "p":
+                continue
+            texts = []
+            for node in para.iter():
+                name = self._xml_local_name(node.tag)
+                if name == "t" and node.text:
+                    texts.append(node.text)
+                elif name in {"tab", "br"}:
+                    texts.append("\t" if name == "tab" else "\n")
+            joined = "".join(texts).strip()
+            if joined:
+                paragraphs.append(joined)
+        return "\n".join(paragraphs)
+
+    def _extract_hwpx_text(self, path: Path) -> str:
+        try:
+            with zipfile.ZipFile(path) as zf:
+                xml_names = [
+                    name for name in zf.namelist()
+                    if name.lower().endswith(".xml")
+                    and (
+                        "/section" in name.lower()
+                        or name.lower().startswith("contents/")
+                        or name.lower().startswith("bodytext/")
+                    )
+                ]
+                section_names = [
+                    name for name in xml_names
+                    if "section" in Path(name).name.lower()
+                ] or xml_names
+                section_names = sorted(section_names)[:120]
+                parts = []
+                for name in section_names:
+                    try:
+                        root = ET.fromstring(zf.read(name))
+                    except Exception:
+                        continue
+                    parts.extend(self._extract_text_from_hwpx_xml_root(root))
+        except zipfile.BadZipFile as exc:
+            raise ValueError("HWPX 파일 구조를 읽지 못했습니다.") from exc
+        text = "\n".join(part for part in parts if part.strip())
+        if not text.strip():
+            raise ValueError("HWPX에서 본문 텍스트를 찾지 못했습니다.")
+        return text
+
+    def _extract_text_from_hwpx_xml_root(self, root: ET.Element) -> list[str]:
+        paragraphs: list[str] = []
+        for elem in root.iter():
+            if self._xml_local_name(elem.tag) not in {"p", "para"}:
+                continue
+            chunks = []
+            for node in elem.iter():
+                name = self._xml_local_name(node.tag)
+                if name in {"t", "text"} and node.text:
+                    chunks.append(node.text)
+                elif name in {"lineBreak", "br"}:
+                    chunks.append("\n")
+                elif name in {"tab"}:
+                    chunks.append("\t")
+            line = re.sub(r"[ \t]+", " ", "".join(chunks)).strip()
+            if line:
+                paragraphs.append(line)
+        return paragraphs
+
+    @staticmethod
+    def _is_useful_converter_output(text: str) -> bool:
+        stripped = (text or "").strip()
+        if len(stripped) < 20:
+            return False
+        lowered = stripped.lower()
+        if "usage:" in lowered and len(stripped) < 800:
+            return False
+        if "not found" in lowered and len(stripped) < 400:
+            return False
+        return True
+
+    def _extract_hwp_text_with_external_tools(self, path: Path) -> str:
+        attempts: list[tuple[str, list[str]]] = []
+        if shutil.which("hwp5txt"):
+            attempts.append(("hwp5txt", ["hwp5txt", str(path)]))
+        if shutil.which("kordoc"):
+            attempts.extend([
+                ("kordoc", ["kordoc", str(path)]),
+                ("kordoc parse", ["kordoc", "parse", str(path)]),
+                ("kordoc parse-document", ["kordoc", "parse-document", str(path)]),
+                ("kordoc to-markdown", ["kordoc", "to-markdown", str(path)]),
+            ])
+        errors = []
+        for label, command in attempts:
+            try:
+                completed = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=45,
+                    check=False,
+                )
+            except Exception as exc:
+                errors.append(f"{label}: {exc}")
+                continue
+            output = (completed.stdout or "").strip()
+            if self._is_useful_converter_output(output):
+                return output
+            err = (completed.stderr or output or f"종료코드 {completed.returncode}").strip()
+            errors.append(f"{label}: {err[:180]}")
+        detail = "\n".join(errors[:5])
+        raise ValueError(
+            "HWP 파일은 현재 앱 내장 파서만으로 안정적으로 읽기 어렵습니다. "
+            "HWPX로 저장해 불러오거나, 로컬에 kordoc 또는 hwp5txt를 설치한 뒤 다시 시도해 주세요."
+            + (f"\n\n시도 결과:\n{detail}" if detail else "")
+        )
 
     @staticmethod
     def _format_ai_material_header(title: str, path: Path | str) -> str:
@@ -3746,6 +3957,19 @@ API 키: 비워둠</pre>
         cache.write_text(text[:AI_REFERENCE_TEXT_LIMIT], encoding="utf-8")
         self._refresh_ai_reference_store_label()
 
+    def _load_ai_reference_cache_if_empty(self):
+        if self._ai_review_reference_text():
+            return
+        cache = self._ai_reference_cache_path()
+        if not cache.exists():
+            return
+        try:
+            text = cache.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return
+        if text.strip():
+            self._set_ai_review_source_text(text, target="reference")
+
     def _save_current_ai_text(self, kind: str):
         if kind == "source":
             text = self._ai_review_source_text()
@@ -3793,7 +4017,7 @@ API 키: 비워둠</pre>
             self,
             title,
             str(store),
-            "저장 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
+            "저장 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.docx *.hwp *.hwpx *.pdf);;모든 파일 (*.*)",
         )
         return paths
 
@@ -3880,9 +4104,9 @@ API 키: 비워둠</pre>
     def _load_ai_review_file(self):
         paths, _ = QFileDialog.getOpenFileNames(
             self,
-            "시험 문제 PDF 또는 문항 자료 불러오기",
+            "시험 문제 또는 문항 자료 불러오기",
             "",
-            "검토 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
+            "검토 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.docx *.hwp *.hwpx *.pdf);;모든 파일 (*.*)",
         )
         if not paths:
             return
@@ -3944,7 +4168,7 @@ API 키: 비워둠</pre>
             self,
             "성취기준·성취수준 참고자료 불러오기",
             "",
-            "참고 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.pdf);;모든 파일 (*.*)",
+            "참고 자료 (*.txt *.md *.csv *.json *.xlsx *.xlsm *.docx *.hwp *.hwpx *.pdf);;모든 파일 (*.*)",
         )
         if not paths:
             return
@@ -4321,6 +4545,8 @@ API 키: 비워둠</pre>
             review_type = "지필 문항"
 
         evidence_terms = [term for term in high_terms + mid_terms + low_terms if term in compact][:4]
+        if inferred_points > 0:
+            evidence_terms.insert(0, f"배점 {inferred_points:g}점")
         if matched_reference:
             evidence_terms.append("참고자료 매칭")
         evidence = " · ".join(evidence_terms) if evidence_terms else compact[:90]
@@ -5012,6 +5238,31 @@ API 키: 비워둠</pre>
         except Exception:
             return fallback
 
+    def _ai_review_points_for_row(self, number: int, item_type: str, row: dict, fallback: float = 5.0) -> float:
+        exam_point = self._ai_review_points_for_item(number, item_type, fallback)
+        if self.exam is not None and abs(exam_point - fallback) > 1e-6:
+            return exam_point
+        joined = " ".join(
+            str(row.get(key, ""))
+            for key in ("번호/요소", "근거", "다음 확인", "성취기준 후보")
+        )
+        patterns = [
+            r"배점\s*(\d+(?:\.\d+)?)\s*점",
+            r"\[(\d+(?:\.\d+)?)\s*점\]",
+            r"(\d+(?:\.\d+)?)\s*점",
+        ]
+        for pattern in patterns:
+            matches = re.findall(pattern, joined)
+            if not matches:
+                continue
+            try:
+                value = float(matches[0])
+            except Exception:
+                continue
+            if 0 < value <= 100:
+                return value
+        return exam_point
+
     @staticmethod
     def _parse_expected_count(value: str, default_sample: int = 3) -> tuple[int | None, int]:
         text = (value or "").strip()
@@ -5144,7 +5395,7 @@ API 키: 비워둠</pre>
                 "number": number,
                 "title": row.get("번호/요소", "") or f"{number}번",
                 "standard": "" if standard == "(후보 없음)" else standard,
-                "points": self._ai_review_points_for_item(number, item_type, 5.0),
+                "points": self._ai_review_points_for_row(number, item_type, row, 5.0),
                 "sampleSize": sample_size,
                 "type": item_type,
                 "difficulty": difficulty,
@@ -5344,13 +5595,15 @@ API 키: 비워둠</pre>
         난이도·성취수준별 응답 자료를 기준으로 기본 예상정답률을 맞춘 뒤, 교사가 새 시험 설계에 맞게 조정합니다.</p>
         <p><b>문항 추가</b>로 새 문항을 만들고, 표에서 체크한 문항은 <b>선택 제거</b>로 한 번에 삭제할 수 있습니다.
         행 끝의 휴지통 아이콘은 해당 문항 하나만 지울 때 사용합니다.</p>
+        <p><b>시험지 자동 반영</b>은 HWPX, PDF, DOCX, 엑셀, 텍스트 자료를 문항 단위로 읽어 예상정답률 계산기에 바로 넣습니다.
+        HWP 파일은 로컬에 <code>kordoc</code> 또는 <code>hwp5txt</code> 변환기가 설치된 경우 자동으로 시도하며, 안정성을 위해 HWPX 저장본을 권장합니다.</p>
         <p>지필평가는 문항별 예상정답률을 합산해 분할점수를 만들고, 수행평가는 평가요소별 예상점수를 합산해 분할점수를 만듭니다.
         두 기능은 모두 “최소능력자가 어느 정도 수행할 수 있는가”를 숫자로 옮기는 같은 구조입니다.</p>
 
         <h2>AI 문항 검토 방향</h2>
         <p><b>AI 문항 검토</b> 탭은 시험 문제 자료를 먼저 문항 단위로 읽고, 별도로 넣은 성취기준·성취수준 자료와 대조해 검토 초안을 만드는 작업 공간입니다.</p>
         <ul>
-          <li><b>문항 PDF/자료</b>: 시험 문제 PDF, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다. PDF는 텍스트 추출 가능한 파일이어야 합니다.</li>
+          <li><b>문항 자료</b>: 시험 문제 HWPX/PDF/DOCX, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다. PDF는 텍스트 추출 가능한 파일이어야 합니다.</li>
           <li><b>성취기준·수준 자료</b>: 성취기준, 성취수준 A~E 설명, 최소능력자 특성 자료를 참고자료 칸으로 불러옵니다.</li>
           <li><b>현재 문항정보표</b>: 이미 분석한 문항정보표를 검토 원문으로 가져옵니다.</li>
           <li><b>검토 초안 생성</b>: 문항 자료를 먼저 나누고 참고자료와 대조해 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, 근거, 추가 확인 질문을 표로 정리합니다.</li>
