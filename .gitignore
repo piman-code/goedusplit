@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 build/
 dist/
+.pyinstaller-cache/
 out_test/
 sample_data/
 *.log

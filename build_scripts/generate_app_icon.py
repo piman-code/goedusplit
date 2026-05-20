@@ -248,7 +248,14 @@ def main() -> int:
 
     if sys.platform == "darwin":
         _write_iconset(selected)
-        subprocess.run(["iconutil", "-c", "icns", str(ICONSET_DIR), "-o", str(ASSET_DIR / "goedusplit.icns")], check=True)
+        icns_path = ASSET_DIR / "goedusplit.icns"
+        try:
+            subprocess.run(["iconutil", "-c", "icns", str(ICONSET_DIR), "-o", str(icns_path)], check=True)
+        except subprocess.CalledProcessError:
+            if icns_path.exists():
+                print(f"warning: iconutil failed; keeping existing {icns_path}")
+            else:
+                print("warning: iconutil failed and no .icns file exists; app will build without a fresh macOS icon")
 
     print(f"wrote {ASSET_DIR}")
     return 0
