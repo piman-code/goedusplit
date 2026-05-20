@@ -52,7 +52,12 @@ python build_scripts/generate_app_icon.py
 
 # ── 6. PyInstaller 빌드 ────────────────────────────────────────────────
 echo "[6/6] 앱 번들 빌드"
-rm -rf build dist
+rm -rf build
+if [ -e dist ]; then
+  OLD_DIST="dist.old.$$"
+  mv dist "$OLD_DIST"
+  rm -rf "$OLD_DIST" || true
+fi
 export PYINSTALLER_CONFIG_DIR="${PYINSTALLER_CONFIG_DIR:-$(pwd)/.pyinstaller-cache}"
 mkdir -p "$PYINSTALLER_CONFIG_DIR"
 pyinstaller --noconfirm --clean goedusplit.spec
