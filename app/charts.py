@@ -243,6 +243,8 @@ def fig_score_histogram_colored(
     levels_arr,
     title: str = "환산점수 분포",
     *,
+    achievement_cuts: dict | None = None,
+    grade_cut_points: list[dict] | None = None,
     highlight_scores: list[float] | None = None,
     highlight_labels: list[str] | None = None,
 ) -> Figure:
@@ -268,6 +270,37 @@ def fig_score_histogram_colored(
         bar_handles[lv] = bars[0]
         bottom += cnt
     ymax = max(1, int(bottom.max()) if bottom.size else 1)
+    headroom = 1.3
+    if achievement_cuts:
+        for i, lv in enumerate(["A", "B", "C", "D", "E"]):
+            if lv not in achievement_cuts:
+                continue
+            x = float(achievement_cuts[lv])
+            ax.axvline(x, color=COLOR_LEVELS.get(lv, "#555"), linestyle="--", linewidth=1.0, alpha=0.72)
+            ax.text(
+                x, ymax + 0.22 + (i % 2) * 0.20, lv,
+                ha="center", va="bottom", fontsize=8.2, fontweight="bold",
+                color=COLOR_LEVELS.get(lv, THEME_COLORS["chart_text"]),
+            )
+        headroom = max(headroom, 1.9)
+    if grade_cut_points:
+        style_by_kind = {
+            "9등급": ("#64748b", ":"),
+            "5등급": ("#8b5cf6", "-."),
+        }
+        for i, point in enumerate(grade_cut_points):
+            x = float(point.get("score", 0.0))
+            label = str(point.get("label", "등급"))
+            kind = str(point.get("kind", ""))
+            color, linestyle = style_by_kind.get(kind, ("#475569", ":"))
+            ax.axvline(x, color=color, linestyle=linestyle, linewidth=0.9, alpha=0.55)
+            if i < 14:
+                ax.text(
+                    x, ymax + 0.70 + (i % 4) * 0.22, label,
+                    ha="center", va="bottom", fontsize=6.9, rotation=90,
+                    color=color,
+                )
+        headroom = max(headroom, 3.3)
     if highlight_scores:
         labels = highlight_labels or ["" for _ in highlight_scores]
         for i, (score, label) in enumerate(zip(highlight_scores, labels)):
@@ -282,7 +315,8 @@ def fig_score_histogram_colored(
                         rotation=25, color=THEME_COLORS["chart_text"],
                         bbox=dict(boxstyle="round,pad=0.18", facecolor=THEME_COLORS["chart_bg"],
                                   edgecolor=color, linewidth=0.8, alpha=0.9))
-        ax.set_ylim(0, ymax + 2.6)
+        headroom = max(headroom, 2.8)
+    ax.set_ylim(0, ymax + headroom)
     ax.set_xlabel("환산점수 (반올림 정수 원점수)")
     ax.set_ylabel("학생 수")
     ax.set_xlim(-1, 101)
