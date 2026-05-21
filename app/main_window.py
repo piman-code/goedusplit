@@ -30,7 +30,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 
 from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer
-from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap
+from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
     QPushButton, QLineEdit, QFileDialog, QFrame, QTabWidget, QGroupBox,
@@ -1417,10 +1417,15 @@ class MainWindow(QMainWindow):
         dialog.exec()
 
     def show_portfolio_store_location(self):
+        store = self._portfolio_store_dir()
+        opened = QDesktopServices.openUrl(QUrl.fromLocalFile(str(store)))
+        if opened:
+            self.statusBar().showMessage(f"학생 포트폴리오 저장 폴더를 열었습니다 · {store}", 7000)
+            return
         QMessageBox.information(
             self,
             "학생 포트폴리오 저장 위치",
-            f"과목별 스냅샷은 아래 폴더에 JSON 파일로 저장됩니다.\n\n{self._portfolio_store_dir()}",
+            f"Finder에서 폴더를 열지 못했습니다. 아래 경로를 확인해 주세요.\n\n{store}",
         )
 
     def _show_monitoring_dialog(self):
