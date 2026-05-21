@@ -909,17 +909,38 @@ class MainWindow(QMainWindow):
             + _relative_grade_cut_points(totals, GRADE5_CUMULATIVE, "5등급")
         )
 
+    def _chart_option_checked(self, attr: str, default: bool = True) -> bool:
+        widget = getattr(self, attr, None)
+        return bool(widget.isChecked()) if widget is not None else default
+
+    def _visible_grade_cut_points(self) -> list[dict]:
+        points = self._current_grade_cut_points()
+        show_grade9 = self._chart_option_checked("chk_chart_grade9", True)
+        show_grade5 = self._chart_option_checked("chk_chart_grade5", True)
+        return [
+            point for point in points
+            if (point.get("kind") == "9등급" and show_grade9)
+            or (point.get("kind") == "5등급" and show_grade5)
+        ]
+
+    def _refresh_score_histogram_options(self):
+        self._render_score_histogram_for_search(self.le_search.text() if hasattr(self, "le_search") else "")
+
     def _render_score_histogram_for_search(self, text: str = ""):
         if self.exam is None or self.overall is None:
             return
         totals = [s.final_score for s in self.exam.students]
         scores, labels = self._highlight_data_from_search(text)
+        if not self._chart_option_checked("chk_chart_student_markers", True):
+            scores, labels = [], []
+        elif not self._chart_option_checked("chk_chart_student_labels", False):
+            labels = ["" for _ in scores]
         self.canvas_score_hist.set_figure(
             charts.fig_score_histogram_colored(
                 totals,
                 self.overall.levels_arr,
-                achievement_cuts=self.exam.cut_scores,
-                grade_cut_points=self._current_grade_cut_points(),
+                achievement_cuts=self.exam.cut_scores if self._chart_option_checked("chk_chart_achievement_cuts", True) else None,
+                grade_cut_points=self._visible_grade_cut_points(),
                 highlight_scores=scores,
                 highlight_labels=labels,
             )
@@ -1077,6 +1098,20 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table_portfolio"):
             return
         rows = self._load_portfolio_rows()
+        previous_subject = (
+            self.combo_portfolio_subject.currentData()
+            if hasattr(self, "combo_portfolio_subject") else ""
+        )
+        if hasattr(self, "combo_portfolio_subject"):
+            subjects = sorted({row["subject"] for row in rows if row.get("subject")})
+            self.combo_portfolio_subject.blockSignals(True)
+            self.combo_portfolio_subject.clear()
+            self.combo_portfolio_subject.addItem("전체 과목", "")
+            for subject in subjects:
+                self.combo_portfolio_subject.addItem(subject, subject)
+            idx = self.combo_portfolio_subject.findData(previous_subject)
+            self.combo_portfolio_subject.setCurrentIndex(idx if idx >= 0 else 0)
+            self.combo_portfolio_subject.blockSignals(False)
         self.table_portfolio.setSortingEnabled(False)
         self.table_portfolio.setRowCount(len(rows))
         for r, row in enumerate(rows):
@@ -1108,19 +1143,29 @@ class MainWindow(QMainWindow):
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
             self.lbl_portfolio_note.setText(
-                f"저장 위치: {self._portfolio_store_dir()} · 현재 저장 행 {len(rows)}개. "
-                "Data 탭의 '포트폴리오 저장'으로 과목별 결과를 누적할 수 있습니다."
+                f"저장 위치: {self._portfolio_store_dir()} · 저장 과목 {len(set(row['subject'] for row in rows))}개 · 현재 저장 행 {len(rows)}개. "
+                "Data 탭의 '포트폴리오 저장'을 과목마다 누르면 다과목 포트폴리오가 누적됩니다."
             )
 
     def _filter_portfolio_table(self, text: str = ""):
         if not hasattr(self, "table_portfolio"):
             return
         terms = self._search_terms(text)
+        subject_filter = (
+            self.combo_portfolio_subject.currentData()
+            if hasattr(self, "combo_portfolio_subject") else ""
+        )
         privacy = self._counseling_mode_enabled()
         target_only = privacy and self._counseling_only_target_enabled() and bool(terms)
+        visible_rows = []
         for r in range(self.table_portfolio.rowCount()):
+            subject = self._real_item_text(self.table_portfolio.item(r, 1))
+            subject_match = not subject_filter or subject == str(subject_filter)
             if not terms:
-                self.table_portfolio.setRowHidden(r, False)
+                visible = subject_match
+                self.table_portfolio.setRowHidden(r, not visible)
+                if visible:
+                    visible_rows.append(r)
                 continue
             row_text = " ".join(
                 self._real_item_text(self.table_portfolio.item(r, c)).lower()
@@ -1133,8 +1178,50 @@ class MainWindow(QMainWindow):
             ])
             general_match = any(term in row_text for term in terms)
             target_match = not target_only or any(term in student_text for term in terms)
-            self.table_portfolio.setRowHidden(r, not (general_match and target_match))
+            visible = subject_match and general_match and target_match
+            self.table_portfolio.setRowHidden(r, not visible)
+            if visible:
+                visible_rows.append(r)
         self._apply_portfolio_privacy_masks()
+        self._update_portfolio_summary(visible_rows, terms)
+
+    def _update_portfolio_summary(self, visible_rows: list[int], terms: list[str]):
+        if not hasattr(self, "lbl_portfolio_summary") or not hasattr(self, "table_portfolio"):
+            return
+        if not visible_rows:
+            self.lbl_portfolio_summary.setText("표시할 포트폴리오 기록이 없습니다.")
+            return
+        subjects = []
+        scores = []
+        levels = {}
+        student_names = []
+        for r in visible_rows:
+            subject = self._real_item_text(self.table_portfolio.item(r, 1))
+            name = self._real_item_text(self.table_portfolio.item(r, 4))
+            level = self._real_item_text(self.table_portfolio.item(r, 5))
+            score_text = self._real_item_text(self.table_portfolio.item(r, 8))
+            if subject and subject not in subjects:
+                subjects.append(subject)
+            if name and name not in student_names:
+                student_names.append(name)
+            if level:
+                levels[level] = levels.get(level, 0) + 1
+            try:
+                scores.append(float(score_text))
+            except ValueError:
+                pass
+        subject_part = ", ".join(subjects[:5]) + (f" 외 {len(subjects) - 5}과목" if len(subjects) > 5 else "")
+        level_part = ", ".join(f"{lv} {count}" for lv, count in sorted(levels.items()))
+        score_part = f"평균 {sum(scores) / len(scores):.1f}점" if scores else "점수 없음"
+        if terms and len(student_names) == 1:
+            headline = f"{student_names[0]} · {len(subjects)}과목 · {score_part}"
+        elif terms:
+            headline = f"검색 결과 {len(student_names)}명 · {len(subjects)}과목 · {len(visible_rows)}개 기록"
+        else:
+            headline = f"전체 포트폴리오 · {len(subjects)}과목 · {len(visible_rows)}개 기록"
+        self.lbl_portfolio_summary.setText(
+            f"{headline} · 성취도 분포 {level_part or '-'} · 과목 {subject_part or '-'}"
+        )
 
     def show_portfolio_store_location(self):
         QMessageBox.information(
@@ -1931,6 +2018,31 @@ class MainWindow(QMainWindow):
         search_row.addWidget(self.btn_clear_search)
         layout.addLayout(search_row)
 
+        chart_option_row = QHBoxLayout()
+        chart_option_row.setSpacing(10)
+        chart_option_row.addWidget(QLabel("그래프 표시:"))
+        self.chk_chart_achievement_cuts = QCheckBox("성취도선")
+        self.chk_chart_achievement_cuts.setChecked(True)
+        self.chk_chart_grade9 = QCheckBox("9등급선")
+        self.chk_chart_grade9.setChecked(True)
+        self.chk_chart_grade5 = QCheckBox("5등급선")
+        self.chk_chart_grade5.setChecked(True)
+        self.chk_chart_student_markers = QCheckBox("학생 위치")
+        self.chk_chart_student_markers.setChecked(True)
+        self.chk_chart_student_labels = QCheckBox("학생 이름")
+        self.chk_chart_student_labels.setChecked(False)
+        for checkbox in (
+            self.chk_chart_achievement_cuts,
+            self.chk_chart_grade9,
+            self.chk_chart_grade5,
+            self.chk_chart_student_markers,
+            self.chk_chart_student_labels,
+        ):
+            checkbox.toggled.connect(lambda _: self._refresh_score_histogram_options())
+            chart_option_row.addWidget(checkbox)
+        chart_option_row.addStretch(1)
+        layout.addLayout(chart_option_row)
+
         # 차트 ↔ 표 splitter
         data_split = QSplitter(Qt.Vertical)
         self.score_chart_tabs = QTabWidget()
@@ -1982,6 +2094,12 @@ class MainWindow(QMainWindow):
         self.le_portfolio_search.setPlaceholderText("학생 이름 또는 반/번호 검색")
         self.le_portfolio_search.textChanged.connect(self._filter_portfolio_table)
         top.addWidget(self.le_portfolio_search, 1)
+        self.combo_portfolio_subject = QComboBox()
+        self.combo_portfolio_subject.addItem("전체 과목", "")
+        self.combo_portfolio_subject.currentIndexChanged.connect(
+            lambda _: self._filter_portfolio_table(self.le_portfolio_search.text())
+        )
+        top.addWidget(self.combo_portfolio_subject)
         btn_reload = QPushButton("새로고침")
         btn_reload.clicked.connect(self.refresh_portfolio_tab)
         top.addWidget(btn_reload)
@@ -1998,6 +2116,11 @@ class MainWindow(QMainWindow):
         self.lbl_portfolio_note.setProperty("role", "muted")
         self.lbl_portfolio_note.setWordWrap(True)
         layout.addWidget(self.lbl_portfolio_note)
+
+        self.lbl_portfolio_summary = QLabel("학생 이름을 검색하면 저장된 과목 흐름을 요약해 보여줍니다.")
+        self.lbl_portfolio_summary.setProperty("role", "muted")
+        self.lbl_portfolio_summary.setWordWrap(True)
+        layout.addWidget(self.lbl_portfolio_summary)
 
         self.table_portfolio = QTableWidget(0, 9)
         self.table_portfolio.setHorizontalHeaderLabels([
@@ -6194,9 +6317,9 @@ API 키: 비워둠</pre>
 
         <h2>Data 탭</h2>
         <ul>
-          <li><b>환산점수 분포</b>: 학생 점수가 어디에 모여 있는지 성취수준 색으로 보여주고, A/B/C/D/E 분할점수와 9등급·5등급 경계 점수를 함께 표시합니다.</li>
+          <li><b>환산점수 분포</b>: 학생 점수가 어디에 모여 있는지 성취수준 색으로 보여주고, A/B/C/D/E 분할점수와 9등급·5등급 경계 점수를 함께 표시합니다. 그래프 표시 옵션에서 성취도선, 9등급선, 5등급선, 학생 위치, 학생 이름을 각각 켜고 끌 수 있습니다.</li>
           <li><b>학생 검색·필터</b>: 이름이나 반/번호를 입력하고, 성취도·9등급·5등급 콤보를 함께 써서 표를 좁혀 봅니다. 여러 명은 쉼표로 구분합니다.</li>
-          <li>검색된 학생은 그래프 위에 세로선과 이름으로 표시되어, 분포 안 위치를 바로 볼 수 있습니다.</li>
+          <li>검색된 학생은 그래프 위에 세로선으로 표시되어, 분포 안 위치를 바로 볼 수 있습니다. 이름 라벨은 겹침을 줄이기 위해 기본은 꺼져 있고 필요할 때 켭니다.</li>
           <li><b>상담 모드</b>: 상단 방패 아이콘 또는 Ctrl+Shift+H로 켭니다. 검색한 학생 외 다른 학생의 이름과 반/번호는 화면에서 가려지며, <b>검색 학생만 보기</b>를 켜면 상담 대상만 표에 남깁니다.</li>
           <li><b>포트폴리오 저장</b>: 현재 과목 결과를 저장해 다른 과목 분석 결과와 함께 학생별 이력으로 쌓을 수 있습니다.</li>
           <li><b>정규분포·점검</b>: 평균, ±1표준편차, ±2표준편차와 정규분포 곡선을 함께 보여줍니다.</li>
@@ -6205,7 +6328,7 @@ API 키: 비워둠</pre>
 
         <h2>학생 포트폴리오 탭</h2>
         <p>과목별 분석이 끝난 뒤 Data 탭의 <b>포트폴리오 저장</b>을 누르면 학생별 성취도, 9등급, 5등급, 환산점수가 저장됩니다.
-        이후 다른 과목을 분석하고 다시 저장하면 같은 학생의 여러 과목 결과를 한 표에서 검색할 수 있습니다.
+        이후 다른 과목을 분석하고 다시 저장하면 같은 학생의 여러 과목 결과를 한 표에서 검색하고, 과목 필터와 요약 문장으로 상담 흐름을 볼 수 있습니다.
         상담 모드가 켜져 있으면 포트폴리오에서도 검색 대상 외 학생 이름과 반/번호를 가립니다.</p>
 
         <h2>모니터링 탭</h2>
