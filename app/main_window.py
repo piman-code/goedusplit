@@ -10,6 +10,7 @@ PySide6 기반 메인 윈도우 (KICE Shiny 웹앱 2.1.2 화면 구조에 맞춰
 from __future__ import annotations
 
 import csv
+import html
 import hashlib
 import json
 import math
@@ -35,7 +36,8 @@ from PySide6.QtWidgets import (
     QPushButton, QLineEdit, QFileDialog, QFrame, QTabWidget, QGroupBox,
     QFormLayout, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QSplitter, QComboBox, QSizePolicy, QCheckBox, QToolButton,
-    QScrollArea, QAbstractItemView, QGridLayout, QTextBrowser, QPlainTextEdit, QInputDialog
+    QScrollArea, QAbstractItemView, QGridLayout, QTextBrowser, QPlainTextEdit, QInputDialog,
+    QDialog
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -90,6 +92,7 @@ AI_REVIEW_CLOUD_CHUNK_SIZE = 5
 AI_REVIEW_CHUNK_SOURCE_LIMIT = 9_000
 AI_REVIEW_CHUNK_REFERENCE_LIMIT = 8_000
 PRIVACY_REAL_TEXT_ROLE = Qt.UserRole + 601
+PORTFOLIO_STUDENT_KEY_ROLE = Qt.UserRole + 602
 
 
 def _app_icon_path() -> Path | None:
@@ -1021,6 +1024,30 @@ class MainWindow(QMainWindow):
     def _portfolio_store_dir(self) -> Path:
         return self._ensure_writable_dir(self._ai_material_root_dir() / "subject_snapshots", "subject_snapshots")
 
+    def _portfolio_student_key(self, row: dict) -> str:
+        sid = str(row.get("sid", "") or "").strip()
+        class_no = str(row.get("class_no", "") or "").strip()
+        name = str(row.get("name", "") or "").strip()
+        if sid:
+            return f"sid:{sid}|class:{class_no}|name:{name}"
+        return f"class:{class_no}|name:{name}"
+
+    def _portfolio_student_label(self, row: dict, subject_count: int | None = None, record_count: int | None = None) -> str:
+        name = str(row.get("name", "") or "이름 없음")
+        class_no = str(row.get("class_no", "") or "반/번호 없음")
+        tail = []
+        if subject_count is not None:
+            tail.append(f"{subject_count}과목")
+        if record_count is not None:
+            tail.append(f"{record_count}개 기록")
+        return f"{name} ({class_no})" + (f" · {' · '.join(tail)}" if tail else "")
+
+    def _portfolio_rows_for_key(self, key: str) -> list[dict]:
+        rows = getattr(self, "_portfolio_rows_cache", None)
+        if rows is None:
+            rows = self._load_portfolio_rows()
+        return [row for row in rows if self._portfolio_student_key(row) == key]
+
     def _current_subject_snapshot(self) -> dict | None:
         if self.exam is None or self.overall is None:
             return None
@@ -1086,11 +1113,13 @@ class MainWindow(QMainWindow):
                     "subject": subject,
                     "term": term,
                     "class_no": str(student.get("class_no", "")),
+                    "sid": str(student.get("sid", "")),
                     "name": str(student.get("name", "")),
                     "level": str(student.get("level", "")),
                     "grade9": str(student.get("grade9", "")),
                     "grade5": str(student.get("grade5", "")),
                     "score": float(student.get("final_score", 0) or 0),
+                    "snapshot_path": str(path),
                 })
         return rows
 
@@ -1098,9 +1127,14 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table_portfolio"):
             return
         rows = self._load_portfolio_rows()
+        self._portfolio_rows_cache = rows
         previous_subject = (
             self.combo_portfolio_subject.currentData()
             if hasattr(self, "combo_portfolio_subject") else ""
+        )
+        previous_student = (
+            self.combo_portfolio_student.currentData()
+            if hasattr(self, "combo_portfolio_student") else ""
         )
         if hasattr(self, "combo_portfolio_subject"):
             subjects = sorted({row["subject"] for row in rows if row.get("subject")})
@@ -1112,9 +1146,33 @@ class MainWindow(QMainWindow):
             idx = self.combo_portfolio_subject.findData(previous_subject)
             self.combo_portfolio_subject.setCurrentIndex(idx if idx >= 0 else 0)
             self.combo_portfolio_subject.blockSignals(False)
+        if hasattr(self, "combo_portfolio_student"):
+            grouped: dict[str, dict] = {}
+            for row in rows:
+                key = self._portfolio_student_key(row)
+                data = grouped.setdefault(key, {"row": row, "subjects": set(), "records": 0})
+                if row.get("subject"):
+                    data["subjects"].add(row["subject"])
+                data["records"] += 1
+            ordered = sorted(grouped.items(), key=lambda item: (
+                str(item[1]["row"].get("class_no", "")),
+                str(item[1]["row"].get("name", "")),
+            ))
+            self.combo_portfolio_student.blockSignals(True)
+            self.combo_portfolio_student.clear()
+            self.combo_portfolio_student.addItem("학생 선택", "")
+            for key, data in ordered:
+                self.combo_portfolio_student.addItem(
+                    self._portfolio_student_label(data["row"], len(data["subjects"]), data["records"]),
+                    key,
+                )
+            idx = self.combo_portfolio_student.findData(previous_student)
+            self.combo_portfolio_student.setCurrentIndex(idx if idx >= 0 else 0)
+            self.combo_portfolio_student.blockSignals(False)
         self.table_portfolio.setSortingEnabled(False)
         self.table_portfolio.setRowCount(len(rows))
         for r, row in enumerate(rows):
+            student_key = self._portfolio_student_key(row)
             values = [
                 row["saved_at"],
                 row["subject"],
@@ -1139,6 +1197,7 @@ class MainWindow(QMainWindow):
                     item = _set_item(self.table_portfolio, r, c, value, align_left=c in (1, 2, 4))
                     if c in (3, 4):
                         item.setData(PRIVACY_REAL_TEXT_ROLE, value)
+                self.table_portfolio.item(r, c).setData(PORTFOLIO_STUDENT_KEY_ROLE, student_key)
         self.table_portfolio.setSortingEnabled(True)
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
@@ -1155,14 +1214,20 @@ class MainWindow(QMainWindow):
             self.combo_portfolio_subject.currentData()
             if hasattr(self, "combo_portfolio_subject") else ""
         )
+        selected_student = (
+            self.combo_portfolio_student.currentData()
+            if hasattr(self, "combo_portfolio_student") else ""
+        )
         privacy = self._counseling_mode_enabled()
         target_only = privacy and self._counseling_only_target_enabled() and bool(terms)
         visible_rows = []
         for r in range(self.table_portfolio.rowCount()):
             subject = self._real_item_text(self.table_portfolio.item(r, 1))
+            row_key = self.table_portfolio.item(r, 0).data(PORTFOLIO_STUDENT_KEY_ROLE) if self.table_portfolio.item(r, 0) else ""
             subject_match = not subject_filter or subject == str(subject_filter)
+            selected_student_match = not selected_student or row_key == selected_student
             if not terms:
-                visible = subject_match
+                visible = subject_match and selected_student_match
                 self.table_portfolio.setRowHidden(r, not visible)
                 if visible:
                     visible_rows.append(r)
@@ -1178,7 +1243,7 @@ class MainWindow(QMainWindow):
             ])
             general_match = any(term in row_text for term in terms)
             target_match = not target_only or any(term in student_text for term in terms)
-            visible = subject_match and general_match and target_match
+            visible = subject_match and selected_student_match and general_match and target_match
             self.table_portfolio.setRowHidden(r, not visible)
             if visible:
                 visible_rows.append(r)
@@ -1222,6 +1287,134 @@ class MainWindow(QMainWindow):
         self.lbl_portfolio_summary.setText(
             f"{headline} · 성취도 분포 {level_part or '-'} · 과목 {subject_part or '-'}"
         )
+
+    def _on_portfolio_student_selected(self):
+        key = self.combo_portfolio_student.currentData() if hasattr(self, "combo_portfolio_student") else ""
+        if key:
+            rows = self._portfolio_rows_for_key(key)
+            if rows:
+                row = rows[0]
+                self.le_portfolio_search.blockSignals(True)
+                self.le_portfolio_search.setText(str(row.get("name") or row.get("class_no") or ""))
+                self.le_portfolio_search.blockSignals(False)
+        elif hasattr(self, "le_portfolio_search"):
+            self.le_portfolio_search.blockSignals(True)
+            self.le_portfolio_search.setText("")
+            self.le_portfolio_search.blockSignals(False)
+        self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
+
+    def _portfolio_key_from_visible_rows(self) -> str:
+        if hasattr(self, "combo_portfolio_student"):
+            key = self.combo_portfolio_student.currentData()
+            if key:
+                return str(key)
+        keys = set()
+        for r in range(self.table_portfolio.rowCount()):
+            if self.table_portfolio.isRowHidden(r):
+                continue
+            item = self.table_portfolio.item(r, 0)
+            key = item.data(PORTFOLIO_STUDENT_KEY_ROLE) if item else ""
+            if key:
+                keys.add(str(key))
+        return next(iter(keys)) if len(keys) == 1 else ""
+
+    def _portfolio_report_html(self, rows: list[dict]) -> str:
+        ordered = sorted(rows, key=lambda row: str(row.get("saved_at", "")))
+        first = ordered[0]
+        name = html.escape(str(first.get("name") or "이름 없음"))
+        class_no = html.escape(str(first.get("class_no") or "반/번호 없음"))
+        scores = [float(row.get("score", 0.0)) for row in ordered]
+        avg = sum(scores) / len(scores) if scores else 0.0
+        best = max(ordered, key=lambda row: float(row.get("score", 0.0)))
+        low = min(ordered, key=lambda row: float(row.get("score", 0.0)))
+        level_counts: dict[str, int] = {}
+        for row in ordered:
+            lv = str(row.get("level", "") or "-")
+            level_counts[lv] = level_counts.get(lv, 0) + 1
+        level_text = ", ".join(f"{html.escape(k)} {v}" for k, v in sorted(level_counts.items()))
+        rows_html = []
+        for row in ordered:
+            rows_html.append(
+                "<tr>"
+                f"<td>{html.escape(str(row.get('saved_at', ''))[:10])}</td>"
+                f"<td>{html.escape(str(row.get('subject', '')))}</td>"
+                f"<td>{html.escape(str(row.get('term', '')))}</td>"
+                f"<td>{html.escape(str(row.get('level', '')))}</td>"
+                f"<td>{html.escape(str(row.get('grade9', '')))}</td>"
+                f"<td>{html.escape(str(row.get('grade5', '')))}</td>"
+                f"<td style='text-align:right'>{float(row.get('score', 0.0)):.1f}</td>"
+                "</tr>"
+            )
+        questions = [
+            f"{html.escape(str(best.get('subject', '')))}에서 가장 높게 나온 이유가 무엇인지 학생의 학습 습관과 연결해 확인합니다.",
+            f"{html.escape(str(low.get('subject', '')))}에서 막힌 단원, 문항 유형, 수행 과정 중 어디가 어려웠는지 구체적으로 묻습니다.",
+            "다음 평가 전까지 한 과목을 어떻게 유지하고, 한 과목을 어떻게 회복할지 작은 실천 계획을 정합니다.",
+        ]
+        question_html = "".join(f"<li>{q}</li>" for q in questions)
+        return f"""
+        <html><head><style>
+        body {{ font-family: sans-serif; line-height: 1.55; }}
+        h1 {{ font-size: 22px; margin-bottom: 4px; }}
+        h2 {{ font-size: 16px; margin-top: 18px; }}
+        .muted {{ color: #64748b; }}
+        .cards {{ display: flex; gap: 10px; flex-wrap: wrap; }}
+        .card {{ border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; min-width: 140px; }}
+        .value {{ font-size: 20px; font-weight: 700; }}
+        table {{ border-collapse: collapse; width: 100%; margin-top: 8px; }}
+        th, td {{ border: 1px solid #cbd5e1; padding: 6px 8px; }}
+        th {{ background: #e2e8f0; }}
+        </style></head><body>
+        <h1>{name} 학생 포트폴리오</h1>
+        <p class="muted">{class_no} · 저장된 과목 기록 {len(ordered)}개</p>
+        <div class="cards">
+          <div class="card"><div>과목 수</div><div class="value">{len({row.get('subject') for row in ordered})}</div></div>
+          <div class="card"><div>평균 환산점수</div><div class="value">{avg:.1f}</div></div>
+          <div class="card"><div>가장 높은 과목</div><div class="value">{html.escape(str(best.get('subject', '-')))}</div><div>{float(best.get('score', 0.0)):.1f}점</div></div>
+          <div class="card"><div>점검 과목</div><div class="value">{html.escape(str(low.get('subject', '-')))}</div><div>{float(low.get('score', 0.0)):.1f}점</div></div>
+        </div>
+        <h2>성취도 흐름</h2>
+        <p>{level_text or '-'}</p>
+        <h2>과목별 기록</h2>
+        <table>
+          <thead><tr><th>저장일</th><th>과목</th><th>학기/학년</th><th>성취도</th><th>9등급</th><th>5등급</th><th>환산점수</th></tr></thead>
+          <tbody>{''.join(rows_html)}</tbody>
+        </table>
+        <h2>상담 질문</h2>
+        <ul>{question_html}</ul>
+        <p class="muted">이 리포트는 저장된 과목 스냅샷을 바탕으로 한 상담 보조 자료입니다. 최신 분석 결과를 반영하려면 각 과목 분석 후 Data 탭에서 포트폴리오 저장을 눌러 주세요.</p>
+        </body></html>
+        """
+
+    def show_selected_student_portfolio(self):
+        if not hasattr(self, "table_portfolio"):
+            return
+        key = self._portfolio_key_from_visible_rows()
+        if not key:
+            QMessageBox.information(
+                self,
+                "학생 포트폴리오",
+                "학생 선택에서 한 학생을 고르거나, 검색 결과가 한 학생만 남도록 좁힌 뒤 다시 눌러 주세요.",
+            )
+            return
+        rows = self._portfolio_rows_for_key(key)
+        if not rows:
+            QMessageBox.information(self, "학생 포트폴리오", "선택한 학생의 저장 기록이 없습니다.")
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("학생 포트폴리오 상담 리포트")
+        dialog.resize(self._px(900), self._px(680))
+        layout = QVBoxLayout(dialog)
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(False)
+        browser.setHtml(self._portfolio_report_html(rows))
+        layout.addWidget(browser, 1)
+        btn_row = QHBoxLayout()
+        btn_row.addStretch(1)
+        btn_close = QPushButton("닫기")
+        btn_close.clicked.connect(dialog.accept)
+        btn_row.addWidget(btn_close)
+        layout.addLayout(btn_row)
+        dialog.exec()
 
     def show_portfolio_store_location(self):
         QMessageBox.information(
@@ -2094,13 +2287,21 @@ class MainWindow(QMainWindow):
         self.le_portfolio_search.setPlaceholderText("학생 이름 또는 반/번호 검색")
         self.le_portfolio_search.textChanged.connect(self._filter_portfolio_table)
         top.addWidget(self.le_portfolio_search, 1)
+        self.combo_portfolio_student = QComboBox()
+        self.combo_portfolio_student.addItem("학생 선택", "")
+        self.combo_portfolio_student.currentIndexChanged.connect(lambda _: self._on_portfolio_student_selected())
+        top.addWidget(self.combo_portfolio_student)
         self.combo_portfolio_subject = QComboBox()
         self.combo_portfolio_subject.addItem("전체 과목", "")
         self.combo_portfolio_subject.currentIndexChanged.connect(
             lambda _: self._filter_portfolio_table(self.le_portfolio_search.text())
         )
         top.addWidget(self.combo_portfolio_subject)
-        btn_reload = QPushButton("새로고침")
+        btn_report = QPushButton("상담 리포트 보기")
+        btn_report.setToolTip("선택한 학생의 여러 과목 기록을 상담용 리포트로 정리합니다.")
+        btn_report.clicked.connect(self.show_selected_student_portfolio)
+        top.addWidget(btn_report)
+        btn_reload = QPushButton("저장자료 불러오기")
         btn_reload.clicked.connect(self.refresh_portfolio_tab)
         top.addWidget(btn_reload)
         btn_location = QPushButton("저장 위치")
@@ -2110,14 +2311,14 @@ class MainWindow(QMainWindow):
 
         self.lbl_portfolio_note = QLabel(
             "Data 탭의 '포트폴리오 저장'을 누르면 과목별 학생 결과가 이곳에 쌓입니다. "
-            "다른 과목 자료를 분석한 뒤 같은 방식으로 저장하면 특정 학생의 여러 과목 흐름을 함께 볼 수 있습니다. "
+            "이후 학생 선택에서 한 학생을 고르면 여러 과목 흐름이 자동으로 정리됩니다. "
             "상담 모드에서는 검색 대상 외 학생 이름과 반/번호가 가려집니다."
         )
         self.lbl_portfolio_note.setProperty("role", "muted")
         self.lbl_portfolio_note.setWordWrap(True)
         layout.addWidget(self.lbl_portfolio_note)
 
-        self.lbl_portfolio_summary = QLabel("학생 이름을 검색하면 저장된 과목 흐름을 요약해 보여줍니다.")
+        self.lbl_portfolio_summary = QLabel("학생 선택에서 한 학생을 고르면 저장된 과목 흐름을 요약해 보여줍니다.")
         self.lbl_portfolio_summary.setProperty("role", "muted")
         self.lbl_portfolio_summary.setWordWrap(True)
         layout.addWidget(self.lbl_portfolio_summary)
@@ -6328,7 +6529,9 @@ API 키: 비워둠</pre>
 
         <h2>학생 포트폴리오 탭</h2>
         <p>과목별 분석이 끝난 뒤 Data 탭의 <b>포트폴리오 저장</b>을 누르면 학생별 성취도, 9등급, 5등급, 환산점수가 저장됩니다.
-        이후 다른 과목을 분석하고 다시 저장하면 같은 학생의 여러 과목 결과를 한 표에서 검색하고, 과목 필터와 요약 문장으로 상담 흐름을 볼 수 있습니다.
+        이후 다른 과목을 분석하고 다시 저장하면 <b>학생 선택</b>에서 한 학생을 고르는 것만으로 여러 과목 결과가 정리됩니다.
+        <b>상담 리포트 보기</b>를 누르면 과목별 흐름, 강점/점검 과목, 상담 질문을 한 화면으로 볼 수 있습니다.
+        새로 저장한 기록은 <b>저장자료 불러오기</b>로 즉시 갱신합니다.
         상담 모드가 켜져 있으면 포트폴리오에서도 검색 대상 외 학생 이름과 반/번호를 가립니다.</p>
 
         <h2>모니터링 탭</h2>
