@@ -74,6 +74,8 @@ APP_COPYRIGHT = "© 2026 이준서. All rights reserved."
 DEFAULT_CUTS = {"A": 90.0, "B": 80.0, "C": 70.0, "D": 60.0, "E": 40.0}
 PERFORM_DEFAULT_RATES = {"A": 0.90, "B": 0.80, "C": 0.70, "D": 0.60, "E": 0.40}
 LEVELS_AE = ["A", "B", "C", "D", "E"]
+GRADE9_CUMULATIVE = [("1", 4.0), ("2", 11.0), ("3", 23.0), ("4", 40.0), ("5", 60.0), ("6", 77.0), ("7", 89.0), ("8", 96.0), ("9", 100.0)]
+GRADE5_CUMULATIVE = [("1", 10.0), ("2", 34.0), ("3", 66.0), ("4", 90.0), ("5", 100.0)]
 AI_EXPECTED_HEADERS = [f"{lv} 예상" for lv in LEVELS_AE]
 AI_REVIEW_HEADERS = [
     "구분", "번호/요소", "성취기준 후보", "평가유형", "목표수준 후보", "난이도 후보",
@@ -121,6 +123,48 @@ def _normal_cdf(x: float, mean: float, std: float) -> float:
     if std <= 0:
         return 1.0 if x >= mean else 0.0
     return 0.5 * (1.0 + math.erf((x - mean) / (std * math.sqrt(2.0))))
+
+
+def _relative_grade_labels(scores: list[float], cumulative: list[tuple[str, float]]) -> list[str]:
+    if not scores:
+        return []
+    values = [float(score) for score in scores]
+    sorted_unique = sorted(set(values), reverse=True)
+    rank_by_score: dict[float, int] = {}
+    greater = 0
+    for value in sorted_unique:
+        rank_by_score[value] = greater + 1
+        greater += values.count(value)
+    n = len(values)
+    labels = []
+    for value in values:
+        rank_percent = rank_by_score[value] / n * 100.0
+        label = cumulative[-1][0]
+        for grade, boundary in cumulative:
+            if rank_percent <= boundary + 1e-9:
+                label = grade
+                break
+        labels.append(label)
+    return labels
+
+
+def _relative_grade_cut_points(scores: list[float], cumulative: list[tuple[str, float]], prefix: str) -> list[dict]:
+    if not scores:
+        return []
+    sorted_scores = sorted([float(score) for score in scores], reverse=True)
+    n = len(sorted_scores)
+    cut_points = []
+    for idx in range(len(cumulative) - 1):
+        grade, boundary = cumulative[idx]
+        next_grade = cumulative[idx + 1][0]
+        rank = max(1, min(n, math.ceil(n * boundary / 100.0)))
+        score = sorted_scores[rank - 1]
+        cut_points.append({
+            "score": score,
+            "label": f"{prefix} {grade}/{next_grade}",
+            "kind": prefix,
+        })
+    return cut_points
 
 LUCIDE_PATHS = {
     "menu": '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
@@ -705,6 +749,24 @@ class MainWindow(QMainWindow):
             labels.append(f"{name} {st.final_score:.1f}")
         return scores, labels
 
+    def _current_relative_grades(self) -> tuple[list[str], list[str]]:
+        if self.exam is None:
+            return [], []
+        totals = [float(st.final_score) for st in self.exam.students]
+        return (
+            _relative_grade_labels(totals, GRADE9_CUMULATIVE),
+            _relative_grade_labels(totals, GRADE5_CUMULATIVE),
+        )
+
+    def _current_grade_cut_points(self) -> list[dict]:
+        if self.exam is None:
+            return []
+        totals = [float(st.final_score) for st in self.exam.students]
+        return (
+            _relative_grade_cut_points(totals, GRADE9_CUMULATIVE, "9등급")
+            + _relative_grade_cut_points(totals, GRADE5_CUMULATIVE, "5등급")
+        )
+
     def _render_score_histogram_for_search(self, text: str = ""):
         if self.exam is None or self.overall is None:
             return
@@ -714,6 +776,8 @@ class MainWindow(QMainWindow):
             charts.fig_score_histogram_colored(
                 totals,
                 self.overall.levels_arr,
+                achievement_cuts=self.exam.cut_scores,
+                grade_cut_points=self._current_grade_cut_points(),
                 highlight_scores=scores,
                 highlight_labels=labels,
             )
@@ -729,30 +793,42 @@ class MainWindow(QMainWindow):
         terms = self._search_terms(text)
         if not hasattr(self, "table_data") or self.table_data.rowCount() == 0:
             return
-        # 컬럼 0: 반/번호, 컬럼 1: 이름
+        level_filter = self.combo_filter_level.currentData() if hasattr(self, "combo_filter_level") else ""
+        grade9_filter = self.combo_filter_grade9.currentData() if hasattr(self, "combo_filter_grade9") else ""
+        grade5_filter = self.combo_filter_grade5.currentData() if hasattr(self, "combo_filter_grade5") else ""
+        score_col = getattr(self, "_data_score_col", 3)
+        level_col = getattr(self, "_data_level_col", 2)
+        grade9_col = getattr(self, "_data_grade9_col", 3)
+        grade5_col = getattr(self, "_data_grade5_col", 4)
         visible_rows = []
         for r in range(self.table_data.rowCount()):
-            if not terms:
-                self.table_data.setRowHidden(r, False)
-                self._sync_frozen_row_hidden(r, False)
-                continue
             cls_item = self.table_data.item(r, 0)
             name_item = self.table_data.item(r, 1)
             cls = (cls_item.text() if cls_item else "").lower()
             name = (name_item.text() if name_item else "").lower()
-            visible = any(term in cls or term in name for term in terms)
-            self.table_data.setRowHidden(r, not visible)
-            self._sync_frozen_row_hidden(r, not visible)
+            level = self.table_data.item(r, level_col).text() if self.table_data.item(r, level_col) else ""
+            grade9 = self.table_data.item(r, grade9_col).text() if self.table_data.item(r, grade9_col) else ""
+            grade5 = self.table_data.item(r, grade5_col).text() if self.table_data.item(r, grade5_col) else ""
+            text_match = True if not terms else any(term in cls or term in name for term in terms)
+            level_match = not level_filter or level == level_filter
+            grade9_match = not grade9_filter or grade9 == str(grade9_filter)
+            grade5_match = not grade5_filter or grade5 == str(grade5_filter)
+            visible = text_match and level_match and grade9_match and grade5_match
             if visible:
+                self.table_data.setRowHidden(r, False)
+                self._sync_frozen_row_hidden(r, False)
                 visible_rows.append(r)
-        if not terms:
+            else:
+                self.table_data.setRowHidden(r, True)
+                self._sync_frozen_row_hidden(r, True)
+        if not terms and not any([level_filter, grade9_filter, grade5_filter]):
             self.lbl_search_status.setText("")
         else:
             names = []
             for r in visible_rows[:4]:
                 cls = self.table_data.item(r, 0).text() if self.table_data.item(r, 0) else ""
                 name = self.table_data.item(r, 1).text() if self.table_data.item(r, 1) else ""
-                score_item = self.table_data.item(r, 3) if self.table_data.columnCount() > 3 else None
+                score_item = self.table_data.item(r, score_col) if self.table_data.columnCount() > score_col else None
                 score = f" {score_item.text()}점" if score_item is not None else ""
                 names.append(f"{name}({cls}{score})")
             more = f" 외 {len(visible_rows) - 4}명" if len(visible_rows) > 4 else ""
@@ -765,6 +841,141 @@ class MainWindow(QMainWindow):
             if first_item is not None:
                 self.table_data.scrollToItem(first_item, QAbstractItemView.PositionAtCenter)
         self._render_score_histogram_for_search(text)
+
+    def _portfolio_store_dir(self) -> Path:
+        return self._ensure_writable_dir(self._ai_material_root_dir() / "subject_snapshots", "subject_snapshots")
+
+    def _current_subject_snapshot(self) -> dict | None:
+        if self.exam is None or self.overall is None:
+            return None
+        grade9_labels, grade5_labels = self._current_relative_grades()
+        students = []
+        for idx, st in enumerate(self.exam.students):
+            level = self.overall.levels_arr[idx] if idx < len(self.overall.levels_arr) else grade_level(st.final_score, self.exam.cut_scores)
+            students.append({
+                "class_no": st.class_no,
+                "sid": st.sid,
+                "name": st.name,
+                "level": level,
+                "grade9": grade9_labels[idx] if idx < len(grade9_labels) else "",
+                "grade5": grade5_labels[idx] if idx < len(grade5_labels) else "",
+                "final_score": round(float(st.final_score), 2),
+                "rounded_score": round(float(st.final_score)),
+                "pencil_total": round(float(st.total), 2),
+                "perform_score": round(float(st.perform_score), 2),
+            })
+        return {
+            "version": 1,
+            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "subject": self.exam.subject or "(과목 미상)",
+            "grade": self.exam.grade,
+            "semester": self.exam.semester,
+            "n_students": len(self.exam.students),
+            "n_items": len(self.exam.items),
+            "cuts": {lv: round(float(self.exam.cut_scores.get(lv, 0)), 2) for lv in ["A", "B", "C", "D", "E"]},
+            "students": students,
+        }
+
+    def save_current_subject_snapshot(self):
+        snapshot = self._current_subject_snapshot()
+        if snapshot is None:
+            QMessageBox.information(self, "포트폴리오 저장", "먼저 분석을 실행해 주세요.")
+            return
+        store = self._portfolio_store_dir()
+        safe_subject = re.sub(r"[\\/:*?\"<>|]+", "_", snapshot.get("subject", "subject")).strip() or "subject"
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        path = store / f"{stamp}_{safe_subject}.json"
+        try:
+            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            QMessageBox.warning(self, "포트폴리오 저장", f"저장하지 못했습니다.\n{exc}")
+            return
+        self.refresh_portfolio_tab()
+        self.statusBar().showMessage(f"포트폴리오 스냅샷 저장 완료 · {path}", 7000)
+
+    def _load_portfolio_rows(self) -> list[dict]:
+        store = self._portfolio_store_dir()
+        rows = []
+        for path in sorted(store.glob("*.json"), reverse=True):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            saved_at = str(data.get("saved_at", ""))
+            subject = str(data.get("subject", ""))
+            term = " ".join(part for part in [str(data.get("semester", "")), str(data.get("grade", ""))] if part)
+            for student in data.get("students", []):
+                rows.append({
+                    "saved_at": saved_at,
+                    "subject": subject,
+                    "term": term,
+                    "class_no": str(student.get("class_no", "")),
+                    "name": str(student.get("name", "")),
+                    "level": str(student.get("level", "")),
+                    "grade9": str(student.get("grade9", "")),
+                    "grade5": str(student.get("grade5", "")),
+                    "score": float(student.get("final_score", 0) or 0),
+                })
+        return rows
+
+    def refresh_portfolio_tab(self):
+        if not hasattr(self, "table_portfolio"):
+            return
+        rows = self._load_portfolio_rows()
+        self.table_portfolio.setSortingEnabled(False)
+        self.table_portfolio.setRowCount(len(rows))
+        for r, row in enumerate(rows):
+            values = [
+                row["saved_at"],
+                row["subject"],
+                row["term"],
+                row["class_no"],
+                row["name"],
+                row["level"],
+                row["grade9"],
+                row["grade5"],
+                f"{row['score']:.2f}",
+            ]
+            for c, value in enumerate(values):
+                if c in (6, 7):
+                    item = NaturalItem(value, int(value) if str(value).isdigit() else 99)
+                    item.setTextAlignment(Qt.AlignCenter)
+                    self.table_portfolio.setItem(r, c, item)
+                elif c == 8:
+                    item = NaturalItem(value, row["score"])
+                    item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                    self.table_portfolio.setItem(r, c, item)
+                else:
+                    _set_item(self.table_portfolio, r, c, value, align_left=c in (1, 2, 4))
+        self.table_portfolio.setSortingEnabled(True)
+        self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
+        if hasattr(self, "lbl_portfolio_note"):
+            self.lbl_portfolio_note.setText(
+                f"저장 위치: {self._portfolio_store_dir()} · 현재 저장 행 {len(rows)}개. "
+                "Data 탭의 '포트폴리오 저장'으로 과목별 결과를 누적할 수 있습니다."
+            )
+
+    def _filter_portfolio_table(self, text: str = ""):
+        if not hasattr(self, "table_portfolio"):
+            return
+        terms = self._search_terms(text)
+        for r in range(self.table_portfolio.rowCount()):
+            if not terms:
+                self.table_portfolio.setRowHidden(r, False)
+                continue
+            row_text = " ".join(
+                self.table_portfolio.item(r, c).text().lower()
+                for c in range(self.table_portfolio.columnCount())
+                if self.table_portfolio.item(r, c)
+            )
+            self.table_portfolio.setRowHidden(r, not any(term in row_text for term in terms))
+
+    def show_portfolio_store_location(self):
+        QMessageBox.information(
+            self,
+            "학생 포트폴리오 저장 위치",
+            f"과목별 스냅샷은 아래 폴더에 JSON 파일로 저장됩니다.\n\n{self._portfolio_store_dir()}",
+        )
 
     def _show_monitoring_dialog(self):
         if self.exam is None or self.overall is None:
@@ -1021,6 +1232,8 @@ class MainWindow(QMainWindow):
         self.tabs.setUsesScrollButtons(True)
         self.tab_data = QWidget(); self._init_tab_data()
         self.tabs.addTab(self.tab_data, "Data")
+        self.tab_portfolio = QWidget(); self._init_tab_portfolio()
+        self.tabs.addTab(self.tab_portfolio, "학생 포트폴리오")
         self.tab_overview = QWidget(); self._init_tab_overview()
         self.tabs.addTab(self.tab_overview, "전체 성취도 분석")
         self.tab_perform = QWidget(); self._init_tab_perform()
@@ -1513,9 +1726,31 @@ class MainWindow(QMainWindow):
         self.le_search.setPlaceholderText("이름 또는 반/번호 입력 · 여러 명은 쉼표로 구분 (예: 강예서, 신태빈, 1/3)")
         self.le_search.textChanged.connect(self._filter_data_table)
         search_row.addWidget(self.le_search, 1)
+        self.combo_filter_level = QComboBox()
+        self.combo_filter_level.addItem("성취도 전체", "")
+        for lv in ["A", "B", "C", "D", "E", "미도달"]:
+            self.combo_filter_level.addItem(lv, lv)
+        self.combo_filter_level.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
+        search_row.addWidget(self.combo_filter_level)
+        self.combo_filter_grade9 = QComboBox()
+        self.combo_filter_grade9.addItem("9등급 전체", "")
+        for grade in range(1, 10):
+            self.combo_filter_grade9.addItem(f"9등급 {grade}", str(grade))
+        self.combo_filter_grade9.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
+        search_row.addWidget(self.combo_filter_grade9)
+        self.combo_filter_grade5 = QComboBox()
+        self.combo_filter_grade5.addItem("5등급 전체", "")
+        for grade in range(1, 6):
+            self.combo_filter_grade5.addItem(f"5등급 {grade}", str(grade))
+        self.combo_filter_grade5.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
+        search_row.addWidget(self.combo_filter_grade5)
         self.lbl_search_status = QLabel("")
         self.lbl_search_status.setProperty("role", "muted")
         search_row.addWidget(self.lbl_search_status)
+        btn_save_portfolio = QPushButton("포트폴리오 저장")
+        btn_save_portfolio.setToolTip("현재 과목 분석 결과를 학생 포트폴리오 스냅샷으로 저장합니다.")
+        btn_save_portfolio.clicked.connect(self.save_current_subject_snapshot)
+        search_row.addWidget(btn_save_portfolio)
         btn_monitor = QPushButton("모니터링 탭")
         btn_monitor.clicked.connect(self._open_monitoring_tab)
         search_row.addWidget(btn_monitor)
@@ -1555,11 +1790,50 @@ class MainWindow(QMainWindow):
         layout.addWidget(data_split, 1)
 
         self.lbl_data_note = QLabel(
-            "▸ 표 머리글을 클릭하면 정렬됩니다 ▸ '학생 검색'으로 즉시 필터 ▸ 그래프 위 마우스 휠로 확대/축소\n"
-            "성취수준은 반영비율을 고려한 100점 만점 환산점수를 반올림하여 정수로 변환한 원점수 기준."
+            "▸ 표 머리글을 클릭하면 정렬됩니다 ▸ 학생 검색과 성취도/9등급/5등급 필터를 함께 사용할 수 있습니다 ▸ 그래프 위 마우스 휠로 확대/축소\n"
+            "성취수준은 환산점수를 반올림한 원점수 기준, 9등급/5등급은 현재 분석 집단 안의 상대 석차 기준입니다."
         )
         self.lbl_data_note.setProperty("role", "muted"); self.lbl_data_note.setWordWrap(True)
         layout.addWidget(self.lbl_data_note)
+
+    # ---- 학생 포트폴리오 ----------------------------------------------
+    def _init_tab_portfolio(self):
+        layout = QVBoxLayout(self.tab_portfolio)
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        top = QHBoxLayout()
+        title = QLabel("학생 포트폴리오")
+        title.setProperty("role", "title")
+        top.addWidget(title)
+        top.addStretch(1)
+        self.le_portfolio_search = QLineEdit()
+        self.le_portfolio_search.setPlaceholderText("학생 이름 또는 반/번호 검색")
+        self.le_portfolio_search.textChanged.connect(self._filter_portfolio_table)
+        top.addWidget(self.le_portfolio_search, 1)
+        btn_reload = QPushButton("새로고침")
+        btn_reload.clicked.connect(self.refresh_portfolio_tab)
+        top.addWidget(btn_reload)
+        btn_location = QPushButton("저장 위치")
+        btn_location.clicked.connect(self.show_portfolio_store_location)
+        top.addWidget(btn_location)
+        layout.addLayout(top)
+
+        self.lbl_portfolio_note = QLabel(
+            "Data 탭의 '포트폴리오 저장'을 누르면 과목별 학생 결과가 이곳에 쌓입니다. "
+            "다른 과목 자료를 분석한 뒤 같은 방식으로 저장하면 특정 학생의 여러 과목 흐름을 함께 볼 수 있습니다."
+        )
+        self.lbl_portfolio_note.setProperty("role", "muted")
+        self.lbl_portfolio_note.setWordWrap(True)
+        layout.addWidget(self.lbl_portfolio_note)
+
+        self.table_portfolio = QTableWidget(0, 9)
+        self.table_portfolio.setHorizontalHeaderLabels([
+            "저장일", "과목", "학기/학년", "반/번호", "이름", "성취도", "9등급", "5등급", "원점수",
+        ])
+        _setup_table(self.table_portfolio, word_wrap=False, horizontal_scroll=True)
+        self.table_portfolio.setSortingEnabled(True)
+        layout.addWidget(self.table_portfolio, 1)
+        self.refresh_portfolio_tab()
 
     # ---- 모니터링 ------------------------------------------------------
     def _make_collapsible_panel(self, title: str, body: QWidget) -> QFrame:
@@ -5747,12 +6021,17 @@ API 키: 비워둠</pre>
 
         <h2>Data 탭</h2>
         <ul>
-          <li><b>환산점수 분포</b>: 학생 점수가 어디에 모여 있는지 성취수준 색으로 보여줍니다.</li>
-          <li><b>학생 검색</b>: 이름이나 반/번호를 입력하면 표가 즉시 필터링됩니다. 여러 명은 쉼표로 구분합니다.</li>
+          <li><b>환산점수 분포</b>: 학생 점수가 어디에 모여 있는지 성취수준 색으로 보여주고, A/B/C/D/E 분할점수와 9등급·5등급 경계 점수를 함께 표시합니다.</li>
+          <li><b>학생 검색·필터</b>: 이름이나 반/번호를 입력하고, 성취도·9등급·5등급 콤보를 함께 써서 표를 좁혀 봅니다. 여러 명은 쉼표로 구분합니다.</li>
           <li>검색된 학생은 그래프 위에 세로선과 이름으로 표시되어, 분포 안 위치를 바로 볼 수 있습니다.</li>
+          <li><b>포트폴리오 저장</b>: 현재 과목 결과를 저장해 다른 과목 분석 결과와 함께 학생별 이력으로 쌓을 수 있습니다.</li>
           <li><b>정규분포·점검</b>: 평균, ±1표준편차, ±2표준편차와 정규분포 곡선을 함께 보여줍니다.</li>
           <li><b>모니터링 탭</b>: 성취평가 외부점검 지표를 별도 탭에서 더 자세히 확인합니다.</li>
         </ul>
+
+        <h2>학생 포트폴리오 탭</h2>
+        <p>과목별 분석이 끝난 뒤 Data 탭의 <b>포트폴리오 저장</b>을 누르면 학생별 성취도, 9등급, 5등급, 환산점수가 저장됩니다.
+        이후 다른 과목을 분석하고 다시 저장하면 같은 학생의 여러 과목 결과를 한 표에서 검색할 수 있습니다.</p>
 
         <h2>모니터링 탭</h2>
         <ul>
@@ -5988,6 +6267,7 @@ API 키: 비워둠</pre>
         self._render_choice()
         self._render_standard()
         self._render_spliter_tab()
+        self.refresh_portfolio_tab()
         if self.spliter_view is not None:
             self._spliter_pending_payload = self._build_spliter_evidence_payload()
             self._flush_spliter_payload()
@@ -6026,13 +6306,18 @@ API 키: 비워둠</pre>
         items = sorted([it for it in self.exam.items if it.item_type == "선택형"],
                        key=lambda x: x.number)
         # KICE 원본 웹앱과 동일: 환산점수는 '반올림 정수 원점수'로 표시
-        score_headers = ["성취도", "원점수"]
+        grade9_labels, grade5_labels = self._current_relative_grades()
+        score_headers = ["성취도", "9등급", "5등급", "원점수"]
         if self.exam.use_perform:
             score_headers += ["수행환산", "지필총점"]
         else:
             score_headers += ["지필총점"]
         item_headers = [f"문{it.number}" for it in items]
         headers = ["반/번호", "이름"] + score_headers + item_headers
+        self._data_level_col = 2
+        self._data_grade9_col = 3
+        self._data_grade5_col = 4
+        self._data_score_col = 5
         self.table_data.setColumnCount(len(headers))
         self.table_data.setHorizontalHeaderLabels(headers)
         self.table_data.setRowCount(len(self.exam.students))
@@ -6044,7 +6329,8 @@ API 키: 비워둠</pre>
         self._set_scaled_column_width(self.table_data, 1, 110)  # 이름
         score_n = len(score_headers)
         for i in range(2, 2 + score_n):
-            self._set_scaled_column_width(self.table_data, i, 92)
+            width = 74 if i in (self._data_grade9_col, self._data_grade5_col) else 92
+            self._set_scaled_column_width(self.table_data, i, width)
         for i in range(2 + score_n, len(headers)):
             self._set_scaled_column_width(self.table_data, i, 56)
 
@@ -6076,6 +6362,18 @@ API 키: 비워둠</pre>
             it_lv.setBackground(QBrush(QColor(level_color)))
             it_lv.setForeground(QBrush(_contrast_text_for_fill(level_color)))
             self.table_data.setItem(r, col, it_lv); col += 1
+
+            grade9 = grade9_labels[r] if r < len(grade9_labels) else "-"
+            it_g9 = NaturalItem(grade9, int(grade9) if str(grade9).isdigit() else 99)
+            it_g9.setTextAlignment(Qt.AlignCenter)
+            it_g9.setToolTip("9등급제 상대 석차 기준")
+            self.table_data.setItem(r, col, it_g9); col += 1
+
+            grade5 = grade5_labels[r] if r < len(grade5_labels) else "-"
+            it_g5 = NaturalItem(grade5, int(grade5) if str(grade5).isdigit() else 99)
+            it_g5.setTextAlignment(Qt.AlignCenter)
+            it_g5.setToolTip("5등급제 상대 석차 기준")
+            self.table_data.setItem(r, col, it_g5); col += 1
 
             # 원점수 — 표시는 반올림 정수, 정렬은 float
             it_fs = NaturalItem(f"{round(s.final_score)}", float(s.final_score))
