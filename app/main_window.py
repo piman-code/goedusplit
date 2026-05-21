@@ -89,6 +89,7 @@ AI_REVIEW_LOCAL_CHUNK_SIZE = 3
 AI_REVIEW_CLOUD_CHUNK_SIZE = 5
 AI_REVIEW_CHUNK_SOURCE_LIMIT = 9_000
 AI_REVIEW_CHUNK_REFERENCE_LIMIT = 8_000
+PRIVACY_REAL_TEXT_ROLE = Qt.UserRole + 601
 
 
 def _app_icon_path() -> Path | None:
@@ -173,6 +174,7 @@ LUCIDE_PATHS = {
     "rotate": '<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/>',
     "moon": '<path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/>',
     "sun": '<circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/>',
+    "shield": '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.2 1.2 0 0 1 1.52 0C14.5 3.8 17 5 19 5a1 1 0 0 1 1 1z"/>',
     "chevron-down": '<path d="m6 9 6 6 6-6"/>',
     "chevron-right": '<path d="m9 18 6-6-6-6"/>',
 }
@@ -389,6 +391,16 @@ class MainWindow(QMainWindow):
         h.addWidget(ver)
         h.addStretch(1)
 
+        self.btn_counsel_mode = QToolButton()
+        self.btn_counsel_mode.setCheckable(True)
+        self.btn_counsel_mode.setProperty("role", "iconbtn")
+        self.btn_counsel_mode.setToolTip(
+            "상담 모드 (Ctrl+Shift+H): 검색한 학생 외 이름과 반/번호를 화면에서 가립니다."
+        )
+        self.btn_counsel_mode.toggled.connect(self._on_counseling_mode_changed)
+        self._apply_tool_icon(self.btn_counsel_mode, "shield")
+        h.addWidget(self.btn_counsel_mode)
+
         # 줌 컨트롤
         self.btn_zoom_out = QToolButton()
         self.btn_zoom_out.setToolTip("화면 축소 (Ctrl+−, 최소 50%)")
@@ -428,6 +440,12 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl++"), self, activated=lambda: self._set_zoom(self._zoom + 10))
         QShortcut(QKeySequence("Ctrl+-"), self, activated=lambda: self._set_zoom(self._zoom - 10))
         QShortcut(QKeySequence("Ctrl+0"), self, activated=lambda: self._set_zoom(100))
+        QShortcut(
+            QKeySequence("Ctrl+Shift+H"),
+            self,
+            activated=lambda: self.btn_counsel_mode.setChecked(not self.btn_counsel_mode.isChecked())
+            if hasattr(self, "btn_counsel_mode") else None,
+        )
 
     def _zoom_factor(self) -> float:
         return max(0.5, min(1.6, float(self._zoom) / 100.0))
@@ -546,6 +564,7 @@ class MainWindow(QMainWindow):
     def _refresh_header_icons(self):
         for button, icon_name in (
             (getattr(self, "btn_sidebar", None), "menu"),
+            (getattr(self, "btn_counsel_mode", None), "shield"),
             (getattr(self, "btn_zoom_out", None), "minus"),
             (getattr(self, "btn_zoom_in", None), "plus"),
             (getattr(self, "btn_zoom_reset", None), "rotate"),
@@ -737,14 +756,137 @@ class MainWindow(QMainWindow):
             return []
         return [i for i, st in enumerate(self.exam.students) if self._student_matches_terms(st, terms)]
 
+    def _counseling_mode_enabled(self) -> bool:
+        return bool(
+            hasattr(self, "btn_counsel_mode")
+            and self.btn_counsel_mode.isChecked()
+        )
+
+    def _counseling_only_target_enabled(self) -> bool:
+        return bool(
+            hasattr(self, "chk_counsel_only_target")
+            and self.chk_counsel_only_target.isChecked()
+        )
+
+    def _real_item_text(self, item: QTableWidgetItem | None) -> str:
+        if item is None:
+            return ""
+        real = item.data(PRIVACY_REAL_TEXT_ROLE)
+        return str(real if real is not None else item.text())
+
+    def _data_privacy_target_indices(self, text: str | None = None) -> set[int]:
+        if self.exam is None:
+            return set()
+        raw = self.le_search.text() if text is None and hasattr(self, "le_search") else (text or "")
+        return set(self._matching_student_indices(raw))
+
+    def _mask_identity_cell(self, item: QTableWidgetItem | None, real_text: str, masked_text: str, reveal: bool):
+        if item is None:
+            return
+        if item.data(PRIVACY_REAL_TEXT_ROLE) is None:
+            item.setData(PRIVACY_REAL_TEXT_ROLE, real_text)
+        if reveal:
+            item.setText(real_text or "상담 학생")
+            item.setToolTip(real_text or "상담 학생")
+        else:
+            item.setText(masked_text)
+            item.setToolTip("상담 모드에서 개인정보를 가렸습니다.")
+
+    def _apply_data_privacy_masks(self):
+        if not hasattr(self, "table_data") or self.table_data.rowCount() == 0:
+            return
+        privacy = self._counseling_mode_enabled()
+        targets = self._data_privacy_target_indices()
+        sorting_enabled = self.table_data.isSortingEnabled()
+        self.table_data.setSortingEnabled(False)
+        for r in range(self.table_data.rowCount()):
+            cls_item = self.table_data.item(r, 0)
+            name_item = self.table_data.item(r, 1)
+            original_idx = cls_item.data(Qt.UserRole + 101) if cls_item is not None else None
+            is_target = privacy and bool(targets) and original_idx in targets
+            real_cls = self._real_item_text(cls_item)
+            real_name = self._real_item_text(name_item)
+            if privacy:
+                self._mask_identity_cell(cls_item, real_cls, "비공개", is_target)
+                self._mask_identity_cell(name_item, real_name, f"익명 {r + 1:03d}", is_target)
+            else:
+                self._mask_identity_cell(cls_item, real_cls, real_cls, True)
+                self._mask_identity_cell(name_item, real_name, real_name or "-", True)
+        self.table_data.setSortingEnabled(sorting_enabled)
+        frozen = getattr(self.table_data, "frozenView", None)
+        if frozen is not None:
+            for r in range(self.table_data.rowCount()):
+                frozen.setRowHidden(r, self.table_data.isRowHidden(r))
+        refresh_frozen_columns(self.table_data)
+
+    def _portfolio_privacy_target_rows(self) -> set[int]:
+        if not hasattr(self, "table_portfolio"):
+            return set()
+        terms = self._search_terms(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
+        if not terms:
+            return set()
+        targets = set()
+        for r in range(self.table_portfolio.rowCount()):
+            cls = self._real_item_text(self.table_portfolio.item(r, 3)).lower()
+            name = self._real_item_text(self.table_portfolio.item(r, 4)).lower()
+            if any(term in cls or term in name for term in terms):
+                targets.add(r)
+        return targets
+
+    def _apply_portfolio_privacy_masks(self):
+        if not hasattr(self, "table_portfolio"):
+            return
+        privacy = self._counseling_mode_enabled()
+        targets = self._portfolio_privacy_target_rows()
+        sorting_enabled = self.table_portfolio.isSortingEnabled()
+        self.table_portfolio.setSortingEnabled(False)
+        for r in range(self.table_portfolio.rowCount()):
+            cls_item = self.table_portfolio.item(r, 3)
+            name_item = self.table_portfolio.item(r, 4)
+            real_cls = self._real_item_text(cls_item)
+            real_name = self._real_item_text(name_item)
+            is_target = privacy and bool(targets) and r in targets
+            if privacy:
+                self._mask_identity_cell(cls_item, real_cls, "비공개", is_target)
+                self._mask_identity_cell(name_item, real_name, f"익명 {r + 1:03d}", is_target)
+            else:
+                self._mask_identity_cell(cls_item, real_cls, real_cls, True)
+                self._mask_identity_cell(name_item, real_name, real_name or "-", True)
+        self.table_portfolio.setSortingEnabled(sorting_enabled)
+
+    def _apply_privacy_to_visible_surfaces(self):
+        self._apply_data_privacy_masks()
+        self._apply_portfolio_privacy_masks()
+        if hasattr(self, "le_search"):
+            self._filter_data_table(self.le_search.text())
+        if hasattr(self, "le_portfolio_search"):
+            self._filter_portfolio_table(self.le_portfolio_search.text())
+
+    def _on_counseling_mode_changed(self, enabled: bool):
+        if hasattr(self, "chk_counsel_only_target"):
+            self.chk_counsel_only_target.setEnabled(enabled)
+        if hasattr(self, "btn_counsel_mode"):
+            self.btn_counsel_mode.setToolTip(
+                "상담 모드 켜짐: 검색 학생 외 이름과 반/번호를 가립니다. 다시 누르면 해제됩니다."
+                if enabled else
+                "상담 모드 (Ctrl+Shift+H): 검색한 학생 외 이름과 반/번호를 화면에서 가립니다."
+            )
+        self._apply_privacy_to_visible_surfaces()
+        message = (
+            "상담 모드 켜짐 · 검색한 학생 외 이름과 반/번호를 가립니다."
+            if enabled else "상담 모드 꺼짐 · 학생 이름을 다시 표시합니다."
+        )
+        self.statusBar().showMessage(message, 6000)
+
     def _highlight_data_from_search(self, text: str) -> tuple[list[float], list[str]]:
         matches = self._matching_student_indices(text)
         scores, labels = [], []
         if self.exam is None:
             return scores, labels
-        for idx in matches[:10]:
+        privacy = self._counseling_mode_enabled()
+        for seq, idx in enumerate(matches[:10], start=1):
             st = self.exam.students[idx]
-            name = st.name or st.class_no or st.sid
+            name = f"상담 학생 {seq}" if privacy else (st.name or st.class_no or st.sid)
             scores.append(float(st.final_score))
             labels.append(f"{name} {st.final_score:.1f}")
         return scores, labels
@@ -800,12 +942,16 @@ class MainWindow(QMainWindow):
         level_col = getattr(self, "_data_level_col", 2)
         grade9_col = getattr(self, "_data_grade9_col", 3)
         grade5_col = getattr(self, "_data_grade5_col", 4)
+        privacy = self._counseling_mode_enabled()
+        targets = self._data_privacy_target_indices(text)
+        target_only = privacy and self._counseling_only_target_enabled() and bool(terms)
         visible_rows = []
         for r in range(self.table_data.rowCount()):
             cls_item = self.table_data.item(r, 0)
             name_item = self.table_data.item(r, 1)
-            cls = (cls_item.text() if cls_item else "").lower()
-            name = (name_item.text() if name_item else "").lower()
+            cls = self._real_item_text(cls_item).lower()
+            name = self._real_item_text(name_item).lower()
+            original_idx = cls_item.data(Qt.UserRole + 101) if cls_item is not None else None
             level = self.table_data.item(r, level_col).text() if self.table_data.item(r, level_col) else ""
             grade9 = self.table_data.item(r, grade9_col).text() if self.table_data.item(r, grade9_col) else ""
             grade5 = self.table_data.item(r, grade5_col).text() if self.table_data.item(r, grade5_col) else ""
@@ -813,7 +959,8 @@ class MainWindow(QMainWindow):
             level_match = not level_filter or level == level_filter
             grade9_match = not grade9_filter or grade9 == str(grade9_filter)
             grade5_match = not grade5_filter or grade5 == str(grade5_filter)
-            visible = text_match and level_match and grade9_match and grade5_match
+            target_match = not target_only or original_idx in targets
+            visible = text_match and level_match and grade9_match and grade5_match and target_match
             if visible:
                 self.table_data.setRowHidden(r, False)
                 self._sync_frozen_row_hidden(r, False)
@@ -821,13 +968,20 @@ class MainWindow(QMainWindow):
             else:
                 self.table_data.setRowHidden(r, True)
                 self._sync_frozen_row_hidden(r, True)
-        if not terms and not any([level_filter, grade9_filter, grade5_filter]):
+        if privacy and not terms:
+            self.lbl_search_status.setText("상담 모드: 학생 이름·반번호를 가렸습니다. 상담 학생을 검색하면 해당 학생만 실제 이름으로 보입니다.")
+        elif privacy:
+            self.lbl_search_status.setText(
+                f"상담 모드 · 표시 {len(visible_rows)}명 · 다른 학생 이름·반번호 비공개"
+                if visible_rows else "상담 모드 · 검색 결과 없음"
+            )
+        elif not terms and not any([level_filter, grade9_filter, grade5_filter]):
             self.lbl_search_status.setText("")
         else:
             names = []
             for r in visible_rows[:4]:
-                cls = self.table_data.item(r, 0).text() if self.table_data.item(r, 0) else ""
-                name = self.table_data.item(r, 1).text() if self.table_data.item(r, 1) else ""
+                cls = self._real_item_text(self.table_data.item(r, 0))
+                name = self._real_item_text(self.table_data.item(r, 1))
                 score_item = self.table_data.item(r, score_col) if self.table_data.columnCount() > score_col else None
                 score = f" {score_item.text()}점" if score_item is not None else ""
                 names.append(f"{name}({cls}{score})")
@@ -840,6 +994,7 @@ class MainWindow(QMainWindow):
             first_item = self.table_data.item(visible_rows[0], 0)
             if first_item is not None:
                 self.table_data.scrollToItem(first_item, QAbstractItemView.PositionAtCenter)
+        self._apply_data_privacy_masks()
         self._render_score_histogram_for_search(text)
 
     def _portfolio_store_dir(self) -> Path:
@@ -946,7 +1101,9 @@ class MainWindow(QMainWindow):
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     self.table_portfolio.setItem(r, c, item)
                 else:
-                    _set_item(self.table_portfolio, r, c, value, align_left=c in (1, 2, 4))
+                    item = _set_item(self.table_portfolio, r, c, value, align_left=c in (1, 2, 4))
+                    if c in (3, 4):
+                        item.setData(PRIVACY_REAL_TEXT_ROLE, value)
         self.table_portfolio.setSortingEnabled(True)
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
@@ -959,16 +1116,25 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "table_portfolio"):
             return
         terms = self._search_terms(text)
+        privacy = self._counseling_mode_enabled()
+        target_only = privacy and self._counseling_only_target_enabled() and bool(terms)
         for r in range(self.table_portfolio.rowCount()):
             if not terms:
                 self.table_portfolio.setRowHidden(r, False)
                 continue
             row_text = " ".join(
-                self.table_portfolio.item(r, c).text().lower()
+                self._real_item_text(self.table_portfolio.item(r, c)).lower()
                 for c in range(self.table_portfolio.columnCount())
                 if self.table_portfolio.item(r, c)
             )
-            self.table_portfolio.setRowHidden(r, not any(term in row_text for term in terms))
+            student_text = " ".join([
+                self._real_item_text(self.table_portfolio.item(r, 3)).lower(),
+                self._real_item_text(self.table_portfolio.item(r, 4)).lower(),
+            ])
+            general_match = any(term in row_text for term in terms)
+            target_match = not target_only or any(term in student_text for term in terms)
+            self.table_portfolio.setRowHidden(r, not (general_match and target_match))
+        self._apply_portfolio_privacy_masks()
 
     def show_portfolio_store_location(self):
         QMessageBox.information(
@@ -1744,6 +1910,11 @@ class MainWindow(QMainWindow):
             self.combo_filter_grade5.addItem(f"5등급 {grade}", str(grade))
         self.combo_filter_grade5.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
         search_row.addWidget(self.combo_filter_grade5)
+        self.chk_counsel_only_target = QCheckBox("검색 학생만 보기")
+        self.chk_counsel_only_target.setToolTip("상담 모드에서 검색한 학생만 표에 남깁니다. 검색어가 없으면 전체를 익명으로 보여줍니다.")
+        self.chk_counsel_only_target.setEnabled(False)
+        self.chk_counsel_only_target.toggled.connect(lambda _: self._apply_privacy_to_visible_surfaces())
+        search_row.addWidget(self.chk_counsel_only_target)
         self.lbl_search_status = QLabel("")
         self.lbl_search_status.setProperty("role", "muted")
         search_row.addWidget(self.lbl_search_status)
@@ -1791,7 +1962,8 @@ class MainWindow(QMainWindow):
 
         self.lbl_data_note = QLabel(
             "▸ 표 머리글을 클릭하면 정렬됩니다 ▸ 학생 검색과 성취도/9등급/5등급 필터를 함께 사용할 수 있습니다 ▸ 그래프 위 마우스 휠로 확대/축소\n"
-            "성취수준은 환산점수를 반올림한 원점수 기준, 9등급/5등급은 현재 분석 집단 안의 상대 석차 기준입니다."
+            "성취수준은 환산점수를 반올림한 원점수 기준, 9등급/5등급은 현재 분석 집단 안의 상대 석차 기준입니다. "
+            "상담 모드(Ctrl+Shift+H)를 켜면 검색 학생 외 이름과 반/번호를 가립니다."
         )
         self.lbl_data_note.setProperty("role", "muted"); self.lbl_data_note.setWordWrap(True)
         layout.addWidget(self.lbl_data_note)
@@ -1820,7 +1992,8 @@ class MainWindow(QMainWindow):
 
         self.lbl_portfolio_note = QLabel(
             "Data 탭의 '포트폴리오 저장'을 누르면 과목별 학생 결과가 이곳에 쌓입니다. "
-            "다른 과목 자료를 분석한 뒤 같은 방식으로 저장하면 특정 학생의 여러 과목 흐름을 함께 볼 수 있습니다."
+            "다른 과목 자료를 분석한 뒤 같은 방식으로 저장하면 특정 학생의 여러 과목 흐름을 함께 볼 수 있습니다. "
+            "상담 모드에서는 검색 대상 외 학생 이름과 반/번호가 가려집니다."
         )
         self.lbl_portfolio_note.setProperty("role", "muted")
         self.lbl_portfolio_note.setWordWrap(True)
@@ -6024,6 +6197,7 @@ API 키: 비워둠</pre>
           <li><b>환산점수 분포</b>: 학생 점수가 어디에 모여 있는지 성취수준 색으로 보여주고, A/B/C/D/E 분할점수와 9등급·5등급 경계 점수를 함께 표시합니다.</li>
           <li><b>학생 검색·필터</b>: 이름이나 반/번호를 입력하고, 성취도·9등급·5등급 콤보를 함께 써서 표를 좁혀 봅니다. 여러 명은 쉼표로 구분합니다.</li>
           <li>검색된 학생은 그래프 위에 세로선과 이름으로 표시되어, 분포 안 위치를 바로 볼 수 있습니다.</li>
+          <li><b>상담 모드</b>: 상단 방패 아이콘 또는 Ctrl+Shift+H로 켭니다. 검색한 학생 외 다른 학생의 이름과 반/번호는 화면에서 가려지며, <b>검색 학생만 보기</b>를 켜면 상담 대상만 표에 남깁니다.</li>
           <li><b>포트폴리오 저장</b>: 현재 과목 결과를 저장해 다른 과목 분석 결과와 함께 학생별 이력으로 쌓을 수 있습니다.</li>
           <li><b>정규분포·점검</b>: 평균, ±1표준편차, ±2표준편차와 정규분포 곡선을 함께 보여줍니다.</li>
           <li><b>모니터링 탭</b>: 성취평가 외부점검 지표를 별도 탭에서 더 자세히 확인합니다.</li>
@@ -6031,7 +6205,8 @@ API 키: 비워둠</pre>
 
         <h2>학생 포트폴리오 탭</h2>
         <p>과목별 분석이 끝난 뒤 Data 탭의 <b>포트폴리오 저장</b>을 누르면 학생별 성취도, 9등급, 5등급, 환산점수가 저장됩니다.
-        이후 다른 과목을 분석하고 다시 저장하면 같은 학생의 여러 과목 결과를 한 표에서 검색할 수 있습니다.</p>
+        이후 다른 과목을 분석하고 다시 저장하면 같은 학생의 여러 과목 결과를 한 표에서 검색할 수 있습니다.
+        상담 모드가 켜져 있으면 포트폴리오에서도 검색 대상 외 학생 이름과 반/번호를 가립니다.</p>
 
         <h2>모니터링 탭</h2>
         <ul>
@@ -6347,11 +6522,13 @@ API 키: 비워둠</pre>
             it_cls = NaturalItem(cls_text, sort_value)
             it_cls.setTextAlignment(Qt.AlignCenter)
             it_cls.setData(Qt.UserRole + 101, r)
+            it_cls.setData(PRIVACY_REAL_TEXT_ROLE, cls_text)
             self.table_data.setItem(r, 0, it_cls)
 
             # 이름
-            _set_item(self.table_data, r, 1, s.name or "-", align_left=True,
-                      tooltip=s.name)
+            it_name = _set_item(self.table_data, r, 1, s.name or "-", align_left=True,
+                                tooltip=s.name)
+            it_name.setData(PRIVACY_REAL_TEXT_ROLE, s.name or "-")
 
             col = 2
             # 성취도 — 표시는 A/B/.../미도달, 정렬은 1~6 (NaturalItem)
