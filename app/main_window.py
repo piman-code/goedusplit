@@ -57,6 +57,8 @@ from .grade_cut_calculator import (
     format_score as _format_score,
     grade5_cut_summary as _grade5_cut_summary,
     load_grade5_cut_reports as _load_grade5_cut_reports,
+    relative_grade_cut_points as _official_relative_grade_cut_points,
+    relative_grade_labels as _official_relative_grade_labels,
 )
 from .ai_client import (
     AIProviderConfig, default_endpoint, default_model, list_ollama_models,
@@ -135,45 +137,11 @@ def _normal_cdf(x: float, mean: float, std: float) -> float:
 
 
 def _relative_grade_labels(scores: list[float], cumulative: list[tuple[str, float]]) -> list[str]:
-    if not scores:
-        return []
-    values = [float(score) for score in scores]
-    sorted_unique = sorted(set(values), reverse=True)
-    rank_by_score: dict[float, int] = {}
-    greater = 0
-    for value in sorted_unique:
-        rank_by_score[value] = greater + 1
-        greater += values.count(value)
-    n = len(values)
-    labels = []
-    for value in values:
-        rank_percent = rank_by_score[value] / n * 100.0
-        label = cumulative[-1][0]
-        for grade, boundary in cumulative:
-            if rank_percent <= boundary + 1e-9:
-                label = grade
-                break
-        labels.append(label)
-    return labels
+    return _official_relative_grade_labels(scores, cumulative)
 
 
 def _relative_grade_cut_points(scores: list[float], cumulative: list[tuple[str, float]], prefix: str) -> list[dict]:
-    if not scores:
-        return []
-    sorted_scores = sorted([float(score) for score in scores], reverse=True)
-    n = len(sorted_scores)
-    cut_points = []
-    for idx in range(len(cumulative) - 1):
-        grade, boundary = cumulative[idx]
-        next_grade = cumulative[idx + 1][0]
-        rank = max(1, min(n, math.ceil(n * boundary / 100.0)))
-        score = sorted_scores[rank - 1]
-        cut_points.append({
-            "score": score,
-            "label": f"{prefix} {grade}/{next_grade}",
-            "kind": prefix,
-        })
-    return cut_points
+    return _official_relative_grade_cut_points(scores, cumulative, prefix)
 
 LUCIDE_PATHS = {
     "menu": '<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>',
@@ -1683,6 +1651,7 @@ class MainWindow(QMainWindow):
                 f"<td>{row['rank']}등</td>"
                 f"<td><b>{_format_score(row['score'])}점</b></td>"
                 f"<td>{row['included']}명 ({row['included_pct']:.1f}%)</td>"
+                f"<td>{'예' if row.get('boundary_tie') else '-'}</td>"
                 "</tr>"
                 for row in summary["cut_rows"]
             )
@@ -1702,7 +1671,7 @@ class MainWindow(QMainWindow):
               </div>
               <h3>누적비율 기준 컷</h3>
               <table>
-                <thead><tr><th>구분</th><th>기준</th><th>반올림 석차</th><th>컷 점수</th><th>동점자 포함 시</th></tr></thead>
+                <thead><tr><th>구분</th><th>기준</th><th>반올림 석차</th><th>컷 점수</th><th>해당 등급 인원</th><th>경계 동점</th></tr></thead>
                 <tbody>{cut_rows}</tbody>
               </table>
               <h3>등급별 예상 인원</h3>
@@ -1728,7 +1697,7 @@ class MainWindow(QMainWindow):
         <p class="muted">파일: {html.escape(Path(path).name)}</p>
         <div class="note">
           기준은 1등급 상위 10%, 2등급 누적 34%, 3등급 누적 66%, 4등급 누적 90%, 5등급 누적 100%입니다.
-          여기서 컷 점수는 수강자수×누적비율을 반올림한 석차의 점수입니다. 같은 점수의 학생이 경계에 걸리면 실제 등급 인원은 기준 비율보다 달라질 수 있습니다.
+          먼저 수강자수×누적비율을 반올림해 기준 석차를 잡고, 같은 점수의 학생이 등급 경계에 걸릴 때는 중간석차백분율로 그 동점자 묶음 전체 등급을 정합니다.
         </div>
         {''.join(sections)}
         </body></html>
@@ -1743,7 +1712,8 @@ class MainWindow(QMainWindow):
             for row in summary["cut_rows"]:
                 lines.append(
                     f"- {row['grade']}등급 컷: {_format_score(row['score'])}점 "
-                    f"(상위 누적 {row['boundary']:.0f}%, 반올림 석차 {row['rank']}등, 동점자 포함 {row['included']}명)"
+                    f"(상위 누적 {row['boundary']:.0f}%, 반올림 석차 {row['rank']}등, 해당 등급 {row['included']}명"
+                    f"{', 경계 동점' if row.get('boundary_tie') else ''})"
                 )
             counts = ", ".join(f"{grade}등급 {summary['counts'].get(grade, 0)}명" for grade, _ in GRADE5_CUMULATIVE)
             lines.append(f"- 예상 인원: {counts}")
