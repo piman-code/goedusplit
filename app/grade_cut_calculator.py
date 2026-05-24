@@ -147,36 +147,107 @@ def load_grade5_cut_reports(path: str) -> list[dict]:
     return reports
 
 
-def _relative_labels(scores: list[float], cumulative: list[tuple[str, float]]) -> list[str]:
+def _rounded_cumulative_limits(total: int, cumulative: list[tuple[str, float]]) -> list[tuple[str, int, float]]:
+    limits = []
+    for grade, boundary in cumulative:
+        limit = max(1, min(total, int(math.floor(total * boundary / 100.0 + 0.5))))
+        limits.append((grade, limit, boundary))
+    if limits:
+        last_grade, _, last_boundary = limits[-1]
+        limits[-1] = (last_grade, total, last_boundary)
+    return limits
+
+
+def _grade_for_rank(rank: float, limits: list[tuple[str, int, float]]) -> str:
+    for grade, limit, _ in limits:
+        if rank <= limit + 1e-9:
+            return grade
+    return limits[-1][0]
+
+
+def _grade_for_middle_percent(mid_rank: float, total: int, cumulative: list[tuple[str, float]]) -> str:
+    pct = mid_rank / total * 100.0
+    for grade, boundary in cumulative:
+        if pct <= boundary + 1e-9:
+            return grade
+    return cumulative[-1][0]
+
+
+def official_grade_groups(scores: list[float], cumulative: list[tuple[str, float]]) -> list[dict]:
+    """Return score groups graded by school-record rules.
+
+    Normal boundaries use rounded cumulative student counts. If a same-score
+    group crosses a boundary, that group uses middle-rank percentage.
+    """
     values = [float(score) for score in scores]
-    sorted_unique = sorted(set(values), reverse=True)
-    rank_by_score: dict[float, int] = {}
-    greater = 0
-    for value in sorted_unique:
-        rank_by_score[value] = greater + 1
-        greater += values.count(value)
-    labels = []
     total = len(values)
-    for value in values:
-        rank_percent = rank_by_score[value] / total * 100.0
-        label = cumulative[-1][0]
-        for grade, boundary in cumulative:
-            if rank_percent <= boundary + 1e-9:
-                label = grade
-                break
-        labels.append(label)
-    return labels
+    if total == 0:
+        return []
+    counts = {value: values.count(value) for value in set(values)}
+    limits = _rounded_cumulative_limits(total, cumulative)
+    groups = []
+    greater = 0
+    for score in sorted(counts, reverse=True):
+        count = counts[score]
+        start = greater + 1
+        end = greater + count
+        mid = start + (count - 1) / 2.0
+        crosses_boundary = any(start <= limit < end for _, limit, _ in limits[:-1])
+        if crosses_boundary:
+            grade = _grade_for_middle_percent(mid, total, cumulative)
+        else:
+            grade = _grade_for_rank(start, limits)
+        groups.append({
+            "score": score,
+            "count": count,
+            "start": start,
+            "end": end,
+            "middle": mid,
+            "middle_pct": mid / total * 100.0,
+            "grade": grade,
+            "crosses_boundary": crosses_boundary,
+        })
+        greater += count
+    return groups
+
+
+def relative_grade_labels(scores: list[float], cumulative: list[tuple[str, float]]) -> list[str]:
+    groups = official_grade_groups(scores, cumulative)
+    grade_by_score = {group["score"]: group["grade"] for group in groups}
+    return [grade_by_score.get(float(score), cumulative[-1][0]) for score in scores]
+
+
+def relative_grade_cut_points(scores: list[float], cumulative: list[tuple[str, float]], prefix: str) -> list[dict]:
+    groups = official_grade_groups(scores, cumulative)
+    cut_points = []
+    for grade, _ in cumulative[:-1]:
+        grade_scores = [group["score"] for group in groups if group["grade"] == grade]
+        if not grade_scores:
+            continue
+        cut_points.append({
+            "score": min(grade_scores),
+            "label": f"{prefix} {grade}/{int(grade) + 1 if str(grade).isdigit() else ''}".rstrip("/"),
+            "kind": prefix,
+        })
+    return cut_points
 
 
 def grade5_cut_summary(scores: list[float]) -> dict:
     sorted_scores = sorted([float(value) for value in scores], reverse=True)
     total = len(sorted_scores)
+    groups = official_grade_groups(sorted_scores, GRADE5_CUMULATIVE)
     cut_rows = []
     for grade, boundary in GRADE5_CUMULATIVE[:-1]:
-        # 학교 석차등급 산출의 누적인원은 수강자수×누적비율을 반올림해 잡는다.
         rank = max(1, min(total, int(math.floor(total * boundary / 100.0 + 0.5))))
-        score = sorted_scores[rank - 1]
-        included = sum(1 for value in sorted_scores if value >= score)
+        grade_groups = [group for group in groups if group["grade"] == grade]
+        if grade_groups:
+            score = min(group["score"] for group in grade_groups)
+            included = sum(group["count"] for group in grade_groups)
+            boundary_tie = any(group["crosses_boundary"] and group["score"] == score for group in grade_groups)
+        else:
+            score = sorted_scores[rank - 1]
+            included = 0
+            boundary_tie = False
         cut_rows.append({
             "grade": grade,
             "boundary": boundary,
@@ -184,8 +255,9 @@ def grade5_cut_summary(scores: list[float]) -> dict:
             "score": score,
             "included": included,
             "included_pct": included / total * 100.0,
+            "boundary_tie": boundary_tie,
         })
-    labels = _relative_labels(sorted_scores, GRADE5_CUMULATIVE)
+    labels = relative_grade_labels(sorted_scores, GRADE5_CUMULATIVE)
     counts = {grade: labels.count(grade) for grade, _ in GRADE5_CUMULATIVE}
     return {
         "n": total,
