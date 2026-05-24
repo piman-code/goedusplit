@@ -52,6 +52,12 @@ from .theme import ThemeManager
 from .cuts_loader import load_cut_scores
 from .perform_loader import load_perform
 from . import fonts as font_pack
+from .grade_cut_calculator import (
+    GRADE5_CUMULATIVE,
+    format_score as _format_score,
+    grade5_cut_summary as _grade5_cut_summary,
+    load_grade5_cut_reports as _load_grade5_cut_reports,
+)
 from .ai_client import (
     AIProviderConfig, default_endpoint, default_model, list_ollama_models,
     list_openai_compatible_models, normalize_endpoint, parse_review_rows,
@@ -77,7 +83,6 @@ DEFAULT_CUTS = {"A": 90.0, "B": 80.0, "C": 70.0, "D": 60.0, "E": 40.0}
 PERFORM_DEFAULT_RATES = {"A": 0.90, "B": 0.80, "C": 0.70, "D": 0.60, "E": 0.40}
 LEVELS_AE = ["A", "B", "C", "D", "E"]
 GRADE9_CUMULATIVE = [("1", 4.0), ("2", 11.0), ("3", 23.0), ("4", 40.0), ("5", 60.0), ("6", 77.0), ("7", 89.0), ("8", 96.0), ("9", 100.0)]
-GRADE5_CUMULATIVE = [("1", 10.0), ("2", 34.0), ("3", 66.0), ("4", 90.0), ("5", 100.0)]
 AI_EXPECTED_HEADERS = [f"{lv} 예상" for lv in LEVELS_AE]
 AI_REVIEW_HEADERS = [
     "구분", "번호/요소", "성취기준 후보", "평가유형", "목표수준 후보", "난이도 후보",
@@ -615,6 +620,22 @@ class MainWindow(QMainWindow):
         cuts_help.setProperty("role", "muted"); cuts_help.setWordWrap(True)
         ff.addWidget(cuts_help)
         v.addWidget(files_box)
+
+        # 2022 개정 5등급 컷 계산
+        grade5_box = QGroupBox("1-5등급 컷 계산")
+        gf = QVBoxLayout(grade5_box); gf.setSpacing(8)
+        self.fs_grade5_report = FileSelector("교과목별 일람표")
+        gf.addWidget(self.fs_grade5_report)
+        self.lbl_grade5_cut_info = QLabel(
+            "지필평가 교과목별 일람표를 넣으면 5등급 누적비율(10·34·66·90%) 기준 컷을 계산합니다."
+        )
+        self.lbl_grade5_cut_info.setProperty("role", "muted")
+        self.lbl_grade5_cut_info.setWordWrap(True)
+        gf.addWidget(self.lbl_grade5_cut_info)
+        btn_grade5_cut = QPushButton("1-5등급 컷 계산")
+        btn_grade5_cut.clicked.connect(self.calculate_grade5_cuts_from_report)
+        gf.addWidget(btn_grade5_cut)
+        v.addWidget(grade5_box)
 
         # 수행평가 (선택)
         perf_box = QGroupBox("수행평가 (선택)")
@@ -1526,6 +1547,10 @@ class MainWindow(QMainWindow):
                 ("수행평가", 80), ("수행 평가", 75),
                 ("수행 결과", 60), ("performance", 50),
             ],
+            "grade5_report": [       # 2022 개정 1~5등급 컷 계산용 교과목별 일람표
+                ("지필평가 교과목별 일람표", 110), ("교과목별 일람표", 100),
+                ("일람표", 70), ("등급컷", 60), ("5등급", 50),
+            ],
         }
 
         # macOS Finder는 한글 파일명을 NFD(분해 형태)로 저장하지만 우리 키워드는 NFC다.
@@ -1553,7 +1578,7 @@ class MainWindow(QMainWindow):
         chosen: dict[str, Path] = {}
         used: set[Path] = set()
         # 카테고리 → 점수 내림차순으로 한 번에 처리
-        order = ["response", "iteminfo", "cuts", "perform"]
+        order = ["response", "iteminfo", "cuts", "perform", "grade5_report"]
         # 첫 패스: 카테고리별 최고 점수 1개씩 잠정 배정
         prelim = {}
         for cat in order:
@@ -1588,6 +1613,9 @@ class MainWindow(QMainWindow):
             self.chk_perform.setChecked(True)
             self.fs_perform.path_edit.setText(str(chosen["perform"]))
             applied.append(("수행평가", chosen["perform"].name))
+        if "grade5_report" in chosen:
+            self.fs_grade5_report.path_edit.setText(str(chosen["grade5_report"]))
+            applied.append(("교과목별 일람표", chosen["grade5_report"].name))
 
         if not applied:
             QMessageBox.information(
@@ -1595,7 +1623,7 @@ class MainWindow(QMainWindow):
                 f"폴더에 .xlsx 파일은 {len(files)}개 있지만 이름이 인식 가능한 패턴이 아닙니다.\n"
                 "파일명에 다음 키워드 중 하나가 들어 있는지 확인해 주세요:\n"
                 "  · 정오표 / 학생답\n  · 문항정보표 / 문항정보\n"
-                "  · 추정분할점수 / 분할점수\n  · 수행평가"
+                "  · 추정분할점수 / 분할점수\n  · 수행평가\n  · 교과목별 일람표"
             )
             return
 
@@ -1610,6 +1638,135 @@ class MainWindow(QMainWindow):
             msg += "\n\n⚠ 정오표·문항정보표 중 일부가 인식되지 않아, 수동으로 지정해 주세요."
         self.statusBar().showMessage(f"폴더 일괄 불러오기 · {len(applied)}개 채움", 5000)
         QMessageBox.information(self, "폴더 일괄 불러오기", msg)
+
+    def calculate_grade5_cuts_from_report(self):
+        path = self.fs_grade5_report.path() if hasattr(self, "fs_grade5_report") else ""
+        if not path:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                "지필평가 교과목별 일람표 선택",
+                str(Path.home() / "Downloads"),
+                "Excel 통합문서 (*.xlsx)",
+            )
+            if path:
+                self.fs_grade5_report.path_edit.setText(path)
+        if not path:
+            return
+
+        try:
+            reports = _load_grade5_cut_reports(path)
+        except Exception as exc:
+            QMessageBox.warning(self, "1-5등급 컷 계산", str(exc))
+            return
+
+        self._last_grade5_cut_reports = reports
+        first = reports[0]
+        first_summary = _grade5_cut_summary(first["scores"])
+        first_cut = first_summary["cut_rows"][0]["score"] if first_summary["cut_rows"] else 0
+        self.lbl_grade5_cut_info.setText(
+            f"{first['subject']} · {first_summary['n']}명 · 1등급 컷 {_format_score(first_cut)}점"
+        )
+        self.statusBar().showMessage(
+            f"1-5등급 컷 계산 완료 · {first_summary['n']}명 · 1등급 컷 {_format_score(first_cut)}점",
+            7000,
+        )
+        self._show_grade5_cut_dialog(path, reports)
+
+    def _grade5_cut_report_html(self, path: str, reports: list[dict]) -> str:
+        sections = []
+        for report in reports:
+            summary = _grade5_cut_summary(report["scores"])
+            cut_rows = "".join(
+                "<tr>"
+                f"<td>{row['grade']}등급 컷</td>"
+                f"<td>상위 누적 {row['boundary']:.0f}%</td>"
+                f"<td>{row['rank']}등</td>"
+                f"<td><b>{_format_score(row['score'])}점</b></td>"
+                f"<td>{row['included']}명 ({row['included_pct']:.1f}%)</td>"
+                "</tr>"
+                for row in summary["cut_rows"]
+            )
+            grade_rows = "".join(
+                f"<tr><td>{grade}등급</td><td>{summary['counts'].get(grade, 0)}명</td></tr>"
+                for grade, _ in GRADE5_CUMULATIVE
+            )
+            sections.append(f"""
+            <section>
+              <h2>{html.escape(str(report['subject']))}</h2>
+              <p class="muted">시트: {html.escape(str(report['sheet']))} · {html.escape(str(report['source_note']))}</p>
+              <div class="summary">
+                <b>응시 점수 {summary['n']}개</b>
+                <span>최고 {_format_score(summary['max'])}점</span>
+                <span>평균 {_format_score(summary['mean'])}점</span>
+                <span>최저 {_format_score(summary['min'])}점</span>
+              </div>
+              <h3>누적비율 기준 컷</h3>
+              <table>
+                <thead><tr><th>구분</th><th>기준</th><th>반올림 석차</th><th>컷 점수</th><th>동점자 포함 시</th></tr></thead>
+                <tbody>{cut_rows}</tbody>
+              </table>
+              <h3>등급별 예상 인원</h3>
+              <table class="small"><tbody>{grade_rows}</tbody></table>
+            </section>
+            """)
+        return f"""
+        <html><head><style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; }}
+        h1 {{ margin: 0 0 8px 0; font-size: 22px; }}
+        h2 {{ margin: 18px 0 4px 0; font-size: 18px; }}
+        h3 {{ margin: 14px 0 6px 0; font-size: 15px; }}
+        .muted {{ color: #6f7d86; }}
+        .summary {{ display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 10px 0; }}
+        table {{ border-collapse: collapse; width: 100%; margin: 4px 0 10px 0; }}
+        th, td {{ border: 1px solid #d7e1e5; padding: 7px 8px; text-align: center; }}
+        th {{ background: #eaf3f1; }}
+        td:first-child, th:first-child {{ text-align: left; }}
+        .small {{ width: 360px; max-width: 100%; }}
+        .note {{ border-left: 4px solid #2a8f84; padding-left: 10px; margin-top: 12px; }}
+        </style></head><body>
+        <h1>1-5등급 컷 계산 결과</h1>
+        <p class="muted">파일: {html.escape(Path(path).name)}</p>
+        <div class="note">
+          기준은 1등급 상위 10%, 2등급 누적 34%, 3등급 누적 66%, 4등급 누적 90%, 5등급 누적 100%입니다.
+          여기서 컷 점수는 수강자수×누적비율을 반올림한 석차의 점수입니다. 같은 점수의 학생이 경계에 걸리면 실제 등급 인원은 기준 비율보다 달라질 수 있습니다.
+        </div>
+        {''.join(sections)}
+        </body></html>
+        """
+
+    def _grade5_cut_report_text(self, reports: list[dict]) -> str:
+        lines = ["1-5등급 컷 계산 결과", "기준: 10% / 누적 34% / 누적 66% / 누적 90% / 누적 100%"]
+        for report in reports:
+            summary = _grade5_cut_summary(report["scores"])
+            lines.append("")
+            lines.append(f"[{report['subject']}] {summary['n']}명 · {report['source_note']}")
+            for row in summary["cut_rows"]:
+                lines.append(
+                    f"- {row['grade']}등급 컷: {_format_score(row['score'])}점 "
+                    f"(상위 누적 {row['boundary']:.0f}%, 반올림 석차 {row['rank']}등, 동점자 포함 {row['included']}명)"
+                )
+            counts = ", ".join(f"{grade}등급 {summary['counts'].get(grade, 0)}명" for grade, _ in GRADE5_CUMULATIVE)
+            lines.append(f"- 예상 인원: {counts}")
+        return "\n".join(lines)
+
+    def _show_grade5_cut_dialog(self, path: str, reports: list[dict]):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("1-5등급 컷 계산 결과")
+        dialog.resize(self._px(820), self._px(620))
+        layout = QVBoxLayout(dialog)
+        browser = QTextBrowser()
+        browser.setHtml(self._grade5_cut_report_html(path, reports))
+        layout.addWidget(browser, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        copy_btn = QPushButton("결과 복사")
+        copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self._grade5_cut_report_text(reports)))
+        row.addWidget(copy_btn)
+        close_btn = QPushButton("닫기")
+        close_btn.clicked.connect(dialog.accept)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+        dialog.exec()
 
     def _toggle_perform(self, on: bool):
         self.fs_perform.setEnabled(on)
@@ -6518,6 +6675,7 @@ API 키: 비워둠</pre>
           <li><b>학생답 정오표</b>: 학생별 답, 선택형/서답형 점수, 과목총점이 들어 있는 파일입니다.</li>
           <li><b>문항정보표</b>: 문항번호, 성취기준, 난이도, 배점, 정답을 읽습니다.</li>
           <li><b>분할점수</b>: 90, 80, 70, 60, 40이면 <b>고정 분할 방식</b>, 그 밖의 값이면 <b>추정 분할 방식</b>으로 표시합니다.</li>
+          <li><b>1-5등급 컷 계산</b>: 지필평가 교과목별 일람표를 넣으면 2022 개정 5등급 누적비율 기준으로 1등급, 2등급, 3등급, 4등급 컷 점수를 바로 계산합니다. 동점자가 경계에 걸리면 실제 인원이 기준 비율과 달라질 수 있음을 함께 표시합니다.</li>
           <li><b>수행평가</b>: 체크하면 지필과 수행 반영비율을 합산해 최종 환산점수를 계산합니다.</li>
         </ul>
 
