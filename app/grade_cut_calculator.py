@@ -5,6 +5,10 @@ import re
 
 
 GRADE5_CUMULATIVE = [("1", 10.0), ("2", 34.0), ("3", 66.0), ("4", 90.0), ("5", 100.0)]
+NON_SCORE_STATUS_KEYWORDS = (
+    "인정결", "질병결", "미인정결", "기타결", "결시", "결석",
+    "자퇴", "전출", "전입", "위탁", "면제", "유예",
+)
 
 
 def format_score(value: float) -> str:
@@ -48,41 +52,77 @@ def _detect_subject(ws, fallback: str) -> str:
     return fallback
 
 
-def _extract_matrix_scores(ws, max_score: float) -> tuple[list[float], str]:
+def _extract_matrix_scores(ws, max_score: float) -> tuple[list[float], str, list[dict]]:
     header_row = None
+    label_col = None
     for row_idx in range(1, min(ws.max_row, 30) + 1):
-        first = str(ws.cell(row_idx, 1).value or "").replace(" ", "")
-        filled_after = [
-            col_idx
-            for col_idx in range(2, ws.max_column + 1)
-            if ws.cell(row_idx, col_idx).value not in (None, "")
-        ]
-        if ("반번호" in first or first in {"번호", "반/번호"}) and len(filled_after) >= 2:
-            header_row = row_idx
+        for col_idx in range(1, min(ws.max_column, 12) + 1):
+            first = str(ws.cell(row_idx, col_idx).value or "").replace(" ", "").replace("\n", "")
+            filled_after = [
+                next_col
+                for next_col in range(col_idx + 1, ws.max_column + 1)
+                if ws.cell(row_idx, next_col).value not in (None, "")
+            ]
+            if ("반번호" in first or first in {"번호", "반/번호"}) and len(filled_after) >= 2:
+                header_row = row_idx
+                label_col = col_idx
+                break
+        if header_row:
             break
     if not header_row:
-        return [], ""
+        return [], "", []
 
     columns = [
         col_idx
-        for col_idx in range(2, ws.max_column + 1)
+        for col_idx in range((label_col or 1) + 1, ws.max_column + 1)
         if ws.cell(header_row, col_idx).value not in (None, "")
     ]
     scores: list[float] = []
+    excluded_entries: list[dict] = []
     row_count = 0
     for row_idx in range(header_row + 1, ws.max_row + 1):
-        first_text = str(ws.cell(row_idx, 1).value or "").replace(" ", "")
+        first_text = str(ws.cell(row_idx, label_col or 1).value or "").replace(" ", "").replace("\n", "")
         if any(key in first_text for key in ("응시생수", "총점", "평균", "표준편차")):
             break
         row_scores = []
         for col_idx in columns:
-            score = _score_or_none(ws.cell(row_idx, col_idx).value, max_score)
+            value = ws.cell(row_idx, col_idx).value
+            score = _score_or_none(value, max_score)
             if score is not None:
                 row_scores.append(score)
+            else:
+                text = str(value or "").strip()
+                compact = text.replace(" ", "").replace("\n", "")
+                if compact and any(keyword in compact for keyword in NON_SCORE_STATUS_KEYWORDS):
+                    excluded_entries.append({
+                        "row": row_idx,
+                        "col": col_idx,
+                        "class": str(ws.cell(header_row, col_idx).value or "").strip(),
+                        "number": str(ws.cell(row_idx, label_col or 1).value or "").strip(),
+                        "status": text,
+                    })
         if row_scores:
             scores.extend(row_scores)
             row_count += 1
-    return scores, f"반번호 점수표 · {len(columns)}개 반 열 × {row_count}개 번호 행"
+    source_note = f"반번호 점수표 · {len(columns)}개 반 열 × {row_count}개 번호 행"
+    if excluded_entries:
+        source_note += f" · 비점수 제외 {len(excluded_entries)}건"
+    return scores, source_note, excluded_entries
+
+
+def _report_priority(report: dict) -> int:
+    sheet = str(report.get("sheet", ""))
+    note = str(report.get("source_note", ""))
+    score = 0
+    if "일람표" in sheet:
+        score += 30
+    if "자료" == sheet:
+        score += 10
+    if "반번호 점수표" in note:
+        score += 5
+    if "등급" in sheet or "학생 정보" in sheet:
+        score -= 10
+    return score
 
 
 def _extract_column_scores(ws, max_score: float) -> tuple[list[float], str]:
@@ -128,20 +168,35 @@ def load_grade5_cut_reports(path: str) -> list[dict]:
 
     workbook = openpyxl.load_workbook(path, data_only=True, read_only=False)
     reports = []
+    signatures: dict[tuple[float, ...], int] = {}
+
+    def add_report(report: dict):
+        signature = tuple(sorted(round(float(score), 6) for score in report["scores"]))
+        previous_idx = signatures.get(signature)
+        if previous_idx is None:
+            signatures[signature] = len(reports)
+            reports.append(report)
+        elif _report_priority(report) > _report_priority(reports[previous_idx]):
+            reports[previous_idx] = report
+
     for sheet in workbook.worksheets:
         max_score = _detect_max_score(sheet)
         subject = _detect_subject(sheet, sheet.title)
-        scores, source_note = _extract_matrix_scores(sheet, max_score)
+        scores, source_note, excluded_entries = _extract_matrix_scores(sheet, max_score)
         if len(scores) < 3:
             scores, source_note = _extract_column_scores(sheet, max_score)
+            excluded_entries = []
         if len(scores) >= 3:
-            reports.append({
+            report = {
                 "sheet": sheet.title,
                 "subject": subject,
                 "max_score": max_score,
                 "scores": scores,
                 "source_note": source_note,
-            })
+                "excluded_entries": excluded_entries,
+            }
+            add_report(report)
+
     if not reports:
         raise ValueError("점수표를 찾지 못했습니다. '반번호' 점수표 또는 환산점수/총점/원점수 열이 있는 엑셀인지 확인해 주세요.")
     return reports
@@ -176,8 +231,16 @@ def _grade_for_middle_percent(mid_rank: float, total: int, cumulative: list[tupl
 def official_grade_groups(scores: list[float], cumulative: list[tuple[str, float]]) -> list[dict]:
     """Return score groups graded by school-record rules.
 
-    Normal boundaries use rounded cumulative student counts. If a same-score
-    group crosses a boundary, that group uses middle-rank percentage.
+    Basis:
+    - School Records Support Portal, School Record Creation and Management
+      Guideline effective 2026-03-01, Ministry of Education Directive No. 555.
+    - 2026 High School School Records Writing Guide.
+      https://star.moe.go.kr/web/contents/m20103.do
+      https://star.moe.go.kr/web/contents/m21100.do
+
+    First, cumulative student counts are computed by rounding
+    total_students * cumulative_percent. If a same-score group crosses one of
+    those rounded boundaries, that group is graded by middle-rank percentage.
     """
     values = [float(score) for score in scores]
     total = len(values)
@@ -211,54 +274,114 @@ def official_grade_groups(scores: list[float], cumulative: list[tuple[str, float
     return groups
 
 
-def relative_grade_labels(scores: list[float], cumulative: list[tuple[str, float]]) -> list[str]:
+def grade_boundary_notes(scores: list[float], cumulative: list[tuple[str, float]]) -> list[dict]:
     groups = official_grade_groups(scores, cumulative)
-    grade_by_score = {group["score"]: group["grade"] for group in groups}
-    return [grade_by_score.get(float(score), cumulative[-1][0]) for score in scores]
+    total = len(scores)
+    if not groups or total == 0:
+        return []
+    limits = _rounded_cumulative_limits(total, cumulative)
+    cut_rows = cumulative_cut_rows(scores, cumulative)
+    by_score = {float(group["score"]): group for group in groups}
+    notes = []
+    for idx, cut_row in enumerate(cut_rows):
+        grade = str(cut_row["grade"])
+        score = float(cut_row["score"])
+        cut_group = by_score.get(score)
+        official_limit = limits[idx][1] if idx < len(limits) else total
+        official_group = next(
+            (group for group in groups if group["start"] <= official_limit <= group["end"]),
+            cut_group,
+        )
+        messages: list[str] = []
+        if idx < len(cut_rows) - 1 and int(cut_row["rank"]) != official_limit:
+            official_score = official_group["score"] if official_group else score
+            if abs(float(official_score) - score) > 1e-9:
+                messages.append(
+                    f"생활기록부 누적인원 기준은 {official_limit}명, 하한 점수는 {format_score(official_score)}점입니다."
+                )
+            else:
+                messages.append(f"생활기록부 누적인원 기준은 {official_limit}명입니다.")
+        if idx < len(cut_rows) - 1 and cut_group and int(cut_group["count"]) > 1:
+            messages.append(
+                f"컷 점수 동점 {cut_group['count']}명({cut_group['start']}~{cut_group['end']}등)."
+            )
+        if official_group and official_group.get("crosses_boundary"):
+            messages.append(
+                f"경계 동점은 중간석차 {official_group['middle']:.1f}명"
+                f"({official_group['middle_pct']:.2f}%) 기준으로 {official_group['grade']}등급입니다."
+            )
+        if not messages:
+            messages.append("경계 동점 특이사항 없음.")
+        notes.append({
+            "grade": grade,
+            "score": score,
+            "rank": cut_row["rank"],
+            "official_limit": official_limit,
+            "messages": messages,
+        })
+    return notes
+
+
+def relative_grade_labels(scores: list[float], cumulative: list[tuple[str, float]]) -> list[str]:
+    cut_rows = cumulative_cut_rows(scores, cumulative)
+    if not cut_rows:
+        return []
+    labels = []
+    for score in scores:
+        value = float(score)
+        grade = cut_rows[-1]["grade"]
+        for row in cut_rows:
+            if value >= float(row["score"]) - 1e-9:
+                grade = row["grade"]
+                break
+        labels.append(grade)
+    return labels
 
 
 def relative_grade_cut_points(scores: list[float], cumulative: list[tuple[str, float]], prefix: str) -> list[dict]:
-    groups = official_grade_groups(scores, cumulative)
     cut_points = []
-    for grade, _ in cumulative[:-1]:
-        grade_scores = [group["score"] for group in groups if group["grade"] == grade]
-        if not grade_scores:
-            continue
+    for row in cumulative_cut_rows(scores, cumulative)[:-1]:
+        grade = str(row["grade"])
         cut_points.append({
-            "score": min(grade_scores),
+            "score": float(row["score"]),
             "label": f"{prefix} {grade}/{int(grade) + 1 if str(grade).isdigit() else ''}".rstrip("/"),
             "kind": prefix,
         })
     return cut_points
 
 
-def grade5_cut_summary(scores: list[float]) -> dict:
+def cumulative_cut_rows(scores: list[float], cumulative: list[tuple[str, float]]) -> list[dict]:
     sorted_scores = sorted([float(value) for value in scores], reverse=True)
     total = len(sorted_scores)
-    groups = official_grade_groups(sorted_scores, GRADE5_CUMULATIVE)
+    if total == 0:
+        return []
     cut_rows = []
-    for grade, boundary in GRADE5_CUMULATIVE[:-1]:
-        rank = max(1, min(total, int(math.floor(total * boundary / 100.0 + 0.5))))
-        grade_groups = [group for group in groups if group["grade"] == grade]
-        if grade_groups:
-            score = min(group["score"] for group in grade_groups)
-            included = sum(group["count"] for group in grade_groups)
-            boundary_tie = any(group["crosses_boundary"] and group["score"] == score for group in grade_groups)
-        else:
-            score = sorted_scores[rank - 1]
-            included = 0
-            boundary_tie = False
+    for grade, boundary in cumulative:
+        raw_rank = total * boundary / 100.0
+        # The reference workbook uses Excel INT(ratio * total) as the LARGE rank.
+        rank = max(1, min(total, int(math.floor(raw_rank))))
+        score = sorted_scores[rank - 1]
         cut_rows.append({
             "grade": grade,
             "boundary": boundary,
             "rank": rank,
+            "raw_rank": raw_rank,
             "score": score,
-            "included": included,
-            "included_pct": included / total * 100.0,
-            "boundary_tie": boundary_tie,
         })
+    return cut_rows
+
+
+def grade5_cut_summary(scores: list[float]) -> dict:
+    sorted_scores = sorted([float(value) for value in scores], reverse=True)
+    total = len(sorted_scores)
+    cut_rows = cumulative_cut_rows(sorted_scores, GRADE5_CUMULATIVE)
     labels = relative_grade_labels(sorted_scores, GRADE5_CUMULATIVE)
     counts = {grade: labels.count(grade) for grade, _ in GRADE5_CUMULATIVE}
+    official_groups = official_grade_groups(sorted_scores, GRADE5_CUMULATIVE)
+    official_counts = {
+        grade: sum(int(group["count"]) for group in official_groups if str(group["grade"]) == grade)
+        for grade, _ in GRADE5_CUMULATIVE
+    }
     return {
         "n": total,
         "min": min(sorted_scores),
@@ -266,4 +389,6 @@ def grade5_cut_summary(scores: list[float]) -> dict:
         "mean": sum(sorted_scores) / total,
         "cut_rows": cut_rows,
         "counts": counts,
+        "official_counts": official_counts,
+        "boundary_notes": grade_boundary_notes(sorted_scores, GRADE5_CUMULATIVE),
     }

@@ -188,7 +188,7 @@ def _build_qss(c: dict, base_pt: int = 13) -> str:
     QTabWidget::pane {{ border: 1px solid {c['border']}; border-radius: 8px; top: -1px; background: {c['panel']}; }}
     QTabBar::tab {{
         background: transparent; color: {c['muted']};
-        padding: 8px 16px; border: 1px solid transparent;
+        padding: 7px 11px; border: 1px solid transparent;
         border-top-left-radius: 6px; border-top-right-radius: 6px;
         margin-right: 2px;
     }}

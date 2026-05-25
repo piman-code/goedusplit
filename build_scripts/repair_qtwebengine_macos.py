@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -69,7 +70,10 @@ def repair(app_path: Path = APP_PATH) -> bool:
 
 def main() -> int:
     app_path = Path(sys.argv[1]) if len(sys.argv) > 1 else APP_PATH
-    repair(app_path)
+    changed = repair(app_path)
+    if changed:
+        subprocess.run(["codesign", "--force", "--deep", "--sign", "-", str(app_path)], check=True)
+        print("[qtwebengine] 보정 후 ad-hoc 재서명 완료")
     return 0
 
 
