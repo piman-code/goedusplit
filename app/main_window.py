@@ -173,15 +173,23 @@ def _lucide_icon(name: str, color: str, size: int = 18) -> QIcon:
 # ---------------------------------------------------------------------------
 
 class FileSelector(QWidget):
-    """파일 경로 표시+선택 버튼 1줄."""
+    """좁은 사이드바에서도 잘리지 않는 파일 선택 위젯."""
     def __init__(self, label: str, file_filter: str = "Excel (*.xlsx)", parent=None):
         super().__init__(parent)
-        layout = QHBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0)
-        self.label = QLabel(label); self.label.setMinimumWidth(140)
+        layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(4)
+        self.label = QLabel(label)
+        self.label.setWordWrap(True)
+        self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.path_edit = QLineEdit(); self.path_edit.setReadOnly(True)
-        self.btn = QPushButton("찾아보기…")
+        self.path_edit.setPlaceholderText("xlsx")
+        self.btn = QPushButton("찾기…")
+        self.btn.setMinimumWidth(64)
         self.btn.clicked.connect(self._pick)
-        layout.addWidget(self.label); layout.addWidget(self.path_edit, 1); layout.addWidget(self.btn)
+        row = QHBoxLayout(); row.setContentsMargins(0, 0, 0, 0); row.setSpacing(6)
+        row.addWidget(self.path_edit, 1)
+        row.addWidget(self.btn)
+        layout.addWidget(self.label)
+        layout.addLayout(row)
         self.file_filter = file_filter
 
     def _pick(self):
@@ -336,11 +344,11 @@ class MainWindow(QMainWindow):
 
         self.splitter = QSplitter(Qt.Horizontal, self)
         self.input_panel = self._build_input_panel()
-        self.input_panel.setMinimumWidth(self._px(280))
+        self.input_panel.setMinimumWidth(self._px(240))
         self.splitter.addWidget(self.input_panel)
         self.splitter.addWidget(self._build_tabs())
         self.splitter.setStretchFactor(0, 0); self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([330, 990])
+        self.splitter.setSizes([310, 1010])
         # 좁아질 때 자동 접힘 가능
         self.splitter.setCollapsible(0, True)
         self.splitter.setCollapsible(1, False)
@@ -458,7 +466,9 @@ class MainWindow(QMainWindow):
             stepper.btn_minus.setFixedWidth(self._px(32))
             stepper.btn_plus.setFixedWidth(self._px(32))
         for selector in self.findChildren(FileSelector):
-            selector.label.setMinimumWidth(self._px(140))
+            selector.label.setMinimumWidth(0)
+            selector.path_edit.setMinimumWidth(0)
+            selector.btn.setMinimumWidth(self._px(58))
         for button in self.findChildren(QToolButton):
             button.setIconSize(QSize(self._px(18), self._px(18)))
         if hasattr(self, "btn_clear_search"):
@@ -466,7 +476,9 @@ class MainWindow(QMainWindow):
         if hasattr(self, "lbl_zoom"):
             self.lbl_zoom.setMinimumWidth(max(42, self._px(46)))
         if hasattr(self, "input_panel"):
-            self.input_panel.setMinimumWidth(max(180, self._px(280)))
+            self.input_panel.setMinimumWidth(max(210, self._px(240)))
+        if hasattr(self, "score_chart_tabs"):
+            self.score_chart_tabs.setMinimumHeight(max(190, self._px(220)))
         if hasattr(self, "table_serdap"):
             self.table_serdap.setMaximumHeight(max(70, self._px(110)))
         self._send_spliter_zoom()
@@ -496,7 +508,7 @@ class MainWindow(QMainWindow):
         sizes = self.splitter.sizes()
         if sizes[0] <= 4:
             # 펼치기
-            self.splitter.setSizes([330, max(600, sum(sizes) - 330)])
+            self.splitter.setSizes([310, max(600, sum(sizes) - 310)])
         else:
             # 접기
             self.splitter.setSizes([0, sum(sizes)])
@@ -504,12 +516,13 @@ class MainWindow(QMainWindow):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         try:
+            self._apply_responsive_tab_labels()
             w = self.width()
             sizes = self.splitter.sizes()
             if w < 1180 and sizes[0] > 0:
                 self.splitter.setSizes([0, sum(sizes)])
             elif w >= 1280 and sizes[0] == 0:
-                self.splitter.setSizes([330, max(600, sum(sizes) - 330)])
+                self.splitter.setSizes([310, max(600, sum(sizes) - 310)])
             # KPI 카드 자동 줄바꿈
             if hasattr(self, "_kpis") and self._kpis:
                 content_w = max(300, w - sizes[0] - 60)
@@ -557,6 +570,7 @@ class MainWindow(QMainWindow):
 
     def _build_input_panel(self) -> QWidget:
         outer = QScrollArea(); outer.setWidgetResizable(True)
+        outer.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         w = QFrame(); outer.setWidget(w)
         v = QVBoxLayout(w); v.setContentsMargins(12, 12, 12, 12); v.setSpacing(10)
 
@@ -595,7 +609,7 @@ class MainWindow(QMainWindow):
         self.fs_grade5_report = FileSelector("교과목별 일람표")
         gf.addWidget(self.fs_grade5_report)
         self.lbl_grade5_cut_info = QLabel(
-            "지필평가 교과목별 일람표를 넣으면 5등급 누적비율(10·34·66·90%) 기준 컷을 계산합니다."
+            "지필평가 교과목별 일람표의 실제 숫자 점수만 기준으로 계산합니다. 인정결·질병결·자퇴·전출 등 비점수 값은 제외합니다."
         )
         self.lbl_grade5_cut_info.setProperty("role", "muted")
         self.lbl_grade5_cut_info.setWordWrap(True)
@@ -1517,7 +1531,7 @@ class MainWindow(QMainWindow):
             ],
             "grade5_report": [       # 2022 개정 1~5등급 컷 계산용 교과목별 일람표
                 ("지필평가 교과목별 일람표", 110), ("교과목별 일람표", 100),
-                ("일람표", 70), ("등급컷", 60), ("5등급", 50),
+                ("일람표", 70),
             ],
         }
 
@@ -1584,7 +1598,6 @@ class MainWindow(QMainWindow):
         if "grade5_report" in chosen:
             self.fs_grade5_report.path_edit.setText(str(chosen["grade5_report"]))
             applied.append(("교과목별 일람표", chosen["grade5_report"].name))
-
         if not applied:
             QMessageBox.information(
                 self, "폴더 일괄 불러오기",
@@ -1621,6 +1634,16 @@ class MainWindow(QMainWindow):
         if not path:
             return
 
+        compact_name = Path(path).name.replace(" ", "").replace("_", "").replace("-", "")
+        if "등급컷" in compact_name or ("등급" in compact_name and "계산기" in compact_name):
+            QMessageBox.warning(
+                self,
+                "1-5등급 컷 계산",
+                "등급 컷 계산기 파일은 사용하지 않습니다.\n"
+                "지필평가 교과목별 일람표 파일을 선택해 주세요.",
+            )
+            return
+
         try:
             reports = _load_grade5_cut_reports(path)
         except Exception as exc:
@@ -1631,93 +1654,237 @@ class MainWindow(QMainWindow):
         first = reports[0]
         first_summary = _grade5_cut_summary(first["scores"])
         first_cut = first_summary["cut_rows"][0]["score"] if first_summary["cut_rows"] else 0
+        source_label = "일람표 실제 점수 기준"
         self.lbl_grade5_cut_info.setText(
-            f"{first['subject']} · {first_summary['n']}명 · 1등급 컷 {_format_score(first_cut)}점"
+            f"{first['subject']} · {first_summary['n']}명 · {source_label} · 1등급 컷 {_format_score(first_cut)}점"
         )
         self.statusBar().showMessage(
-            f"1-5등급 컷 계산 완료 · {first_summary['n']}명 · 1등급 컷 {_format_score(first_cut)}점",
+            f"1-5등급 컷 계산 완료 · {first_summary['n']}명 · {source_label} · 1등급 컷 {_format_score(first_cut)}점",
             7000,
         )
         self._show_grade5_cut_dialog(path, reports)
 
     def _grade5_cut_report_html(self, path: str, reports: list[dict]) -> str:
+        colors = self.theme.colors if self.theme is not None else {}
+        bg = colors.get("panel", "#ffffff")
+        card = colors.get("card", "#f8fbfb")
+        shade = colors.get("shade", "#eef7f4")
+        text = colors.get("text", "#202326")
+        muted = colors.get("muted", "#6e7781")
+        border = colors.get("border", "#dce3e6")
+        accent = colors.get("accent", "#2a7770")
         sections = []
         for report in reports:
             summary = _grade5_cut_summary(report["scores"])
+            notes_by_grade = {
+                str(note["grade"]): " ".join(html.escape(str(message)) for message in note["messages"])
+                for note in summary.get("boundary_notes", [])
+            }
             cut_rows = "".join(
                 "<tr>"
-                f"<td>{row['grade']}등급 컷</td>"
-                f"<td>상위 누적 {row['boundary']:.0f}%</td>"
-                f"<td>{row['rank']}등</td>"
+                f"<td>{row['grade']}등급</td>"
                 f"<td><b>{_format_score(row['score'])}점</b></td>"
-                f"<td>{row['included']}명 ({row['included_pct']:.1f}%)</td>"
-                f"<td>{'예' if row.get('boundary_tie') else '-'}</td>"
+                f"<td>{row['boundary'] / 100:g}</td>"
+                f"<td>{row['rank']}명</td>"
+                f"<td class=\"note\">{notes_by_grade.get(str(row['grade']), '')}</td>"
                 "</tr>"
                 for row in summary["cut_rows"]
             )
-            grade_rows = "".join(
-                f"<tr><td>{grade}등급</td><td>{summary['counts'].get(grade, 0)}명</td></tr>"
+            official_count_rows = "".join(
+                f"<span>{grade}등급 {summary.get('official_counts', {}).get(grade, 0)}명</span>"
                 for grade, _ in GRADE5_CUMULATIVE
             )
+            source_label = "교과목별 일람표 실제 점수 기준"
+            excluded_entries = report.get("excluded_entries") or []
+            excluded_html = ""
+            if excluded_entries:
+                status_counts = {}
+                for entry in excluded_entries:
+                    status = str(entry.get("status") or "비점수").strip()
+                    status_counts[status] = status_counts.get(status, 0) + 1
+                status_text = ", ".join(f"{html.escape(k)} {v}건" for k, v in status_counts.items())
+                examples = ", ".join(
+                    f"{html.escape(str(entry.get('class') or '?'))}반 {html.escape(str(entry.get('number') or '?'))}번 {html.escape(str(entry.get('status') or ''))}"
+                    for entry in excluded_entries[:8]
+                )
+                excluded_html = (
+                    f"<p class=\"excluded\"><b>비점수 제외:</b> {len(excluded_entries)}건"
+                    f" ({status_text})<br><span>{examples}</span></p>"
+                )
             sections.append(f"""
             <section>
               <h2>{html.escape(str(report['subject']))}</h2>
               <p class="muted">시트: {html.escape(str(report['sheet']))} · {html.escape(str(report['source_note']))}</p>
+              <p class="source-pill">현재 계산 기준: {html.escape(source_label)}</p>
+              {excluded_html}
               <div class="summary">
                 <b>응시 점수 {summary['n']}개</b>
                 <span>최고 {_format_score(summary['max'])}점</span>
                 <span>평균 {_format_score(summary['mean'])}점</span>
                 <span>최저 {_format_score(summary['min'])}점</span>
               </div>
-              <h3>누적비율 기준 컷</h3>
+              <h3>컷 점수와 생활기록부 기준 점검</h3>
               <table>
-                <thead><tr><th>구분</th><th>기준</th><th>반올림 석차</th><th>컷 점수</th><th>해당 등급 인원</th><th>경계 동점</th></tr></thead>
+                <thead><tr><th>구분</th><th>컷 점수</th><th>비율</th><th>조견표 인원</th><th>동점/근거 점검</th></tr></thead>
                 <tbody>{cut_rows}</tbody>
               </table>
-              <h3>등급별 예상 인원</h3>
-              <table class="small"><tbody>{grade_rows}</tbody></table>
+              <p class="muted">생활기록부 중간석차 기준 예상 인원: {official_count_rows}</p>
             </section>
             """)
         return f"""
         <html><head><style>
-        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif; }}
+        html, body {{
+            background: {bg};
+            color: {text};
+            font-family: -apple-system, BlinkMacSystemFont, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+        }}
+        body {{ margin: 0; }}
         h1 {{ margin: 0 0 8px 0; font-size: 22px; }}
         h2 {{ margin: 18px 0 4px 0; font-size: 18px; }}
         h3 {{ margin: 14px 0 6px 0; font-size: 15px; }}
-        .muted {{ color: #6f7d86; }}
+        section {{ background: {bg}; color: {text}; }}
+        .muted {{ color: {muted}; }}
+        .muted span {{ margin-right: 8px; }}
         .summary {{ display: flex; gap: 12px; flex-wrap: wrap; margin: 8px 0 10px 0; }}
+        .source-pill {{
+            display: inline-block;
+            margin: 4px 0 8px 0;
+            padding: 5px 9px;
+            border: 1px solid {border};
+            border-radius: 6px;
+            background: {shade};
+            color: {text};
+            font-weight: 700;
+        }}
+        .excluded {{
+            margin: 4px 0 10px 0;
+            padding: 8px 10px;
+            border: 1px solid {border};
+            border-radius: 6px;
+            background: {card};
+            color: {text};
+            line-height: 1.45;
+        }}
+        .excluded span {{ color: {muted}; }}
         table {{ border-collapse: collapse; width: 100%; margin: 4px 0 10px 0; }}
-        th, td {{ border: 1px solid #d7e1e5; padding: 7px 8px; text-align: center; }}
-        th {{ background: #eaf3f1; }}
+        th, td {{ border: 1px solid {border}; padding: 7px 8px; text-align: center; color: {text}; }}
+        th {{ background: {card}; color: {text}; font-weight: 700; }}
+        td {{ background: {bg}; }}
+        tr:nth-child(even) td {{ background: {shade}; }}
         td:first-child, th:first-child {{ text-align: left; }}
+        .note {{ text-align: left; line-height: 1.45; }}
+        b {{ color: {text}; }}
+        a {{ color: {accent}; }}
         .small {{ width: 360px; max-width: 100%; }}
-        .note {{ border-left: 4px solid #2a8f84; padding-left: 10px; margin-top: 12px; }}
         </style></head><body>
         <h1>1-5등급 컷 계산 결과</h1>
         <p class="muted">파일: {html.escape(Path(path).name)}</p>
-        <div class="note">
-          기준은 1등급 상위 10%, 2등급 누적 34%, 3등급 누적 66%, 4등급 누적 90%, 5등급 누적 100%입니다.
-          먼저 수강자수×누적비율을 반올림해 기준 석차를 잡고, 같은 점수의 학생이 등급 경계에 걸릴 때는 중간석차백분율로 그 동점자 묶음 전체 등급을 정합니다.
-        </div>
         {''.join(sections)}
         </body></html>
         """
 
+    def _grade5_cut_example_text(self, reports: list[dict] | None = None) -> str:
+        if reports:
+            report = reports[0]
+            summary = _grade5_cut_summary(report["scores"])
+            if summary.get("cut_rows"):
+                row = summary["cut_rows"][0]
+                return (
+                    f"현재 결과 예시\n"
+                    f"- 기준 자료: {report.get('subject', '선택 자료')} / 교과목별 일람표 실제 점수\n"
+                    f"- {summary['n']}명의 10%는 {row['raw_rank']:.1f}명이므로 "
+                    f"INT({row['raw_rank']:.1f})={row['rank']}입니다.\n"
+                    f"- 따라서 이 자료에서 1등급 컷 조견표 점수는 "
+                    f"{row['rank']}번째로 큰 점수인 {_format_score(row['score'])}점입니다."
+                )
+        return (
+            "예시\n"
+            "- 총원이 382명이면 10%는 38.2명이므로 INT(38.2)=38입니다.\n"
+            "- 컷 점수 조견표는 선택한 점수 범위에서 38번째로 큰 점수를 표시합니다.\n"
+            "- 경계 점수에 동점자가 있으면 중간석차 기준으로 실제 등급을 함께 확인합니다."
+        )
+
+    def _grade5_cut_basis_text(self, reports: list[dict] | None = None) -> str:
+        return (
+            "근거\n"
+            "- 학교생활기록부 종합지원포털 > 법령·규정 > 학교생활기록 작성 및 관리지침\n"
+            "  [시행 2026.3.1.] [교육부훈령 제555호]\n"
+            "  https://star.moe.go.kr/web/contents/m20103.do\n"
+            "- 학교생활기록부 종합지원포털 > 자료실 > 학교생활기록부 기재요령\n"
+            "  2026학년도 학교생활기록부 기재요령(고등학교)\n\n"
+            "  https://star.moe.go.kr/web/contents/m21100.do\n\n"
+            "5등급 누적 기준\n"
+            "- 1등급: 10% 이하\n"
+            "- 2등급: 10% 초과 ~ 34% 이하\n"
+            "- 3등급: 34% 초과 ~ 66% 이하\n"
+            "- 4등급: 66% 초과 ~ 90% 이하\n"
+            "- 5등급: 90% 초과 ~ 100% 이하\n\n"
+            "컷 점수 조견표 공식\n"
+            "- 인원수 = INT(비율 × 총원)\n"
+            "- 컷 점수 = LARGE(전체 점수 범위, 인원수)\n"
+            "- 여기서 전체 점수 범위는 지필평가 교과목별 일람표의 실제 숫자 점수입니다.\n"
+            "- 인정결·질병결·자퇴·전출처럼 점수가 아닌 값은 계산에서 제외합니다.\n\n"
+            "생활기록부 등급 판정 점검\n"
+            "- 실제 등급 판정은 누적인원 경계와 동점자를 함께 봅니다.\n"
+            "- 경계 점수에 동점자가 걸리면 동석차의 중간석차 백분율로 등급을 확인합니다.\n"
+            "- 그래서 결과표에는 컷 점수와 함께 동점/중간석차 점검을 표시합니다.\n\n"
+            f"{self._grade5_cut_example_text(reports)}"
+        )
+
     def _grade5_cut_report_text(self, reports: list[dict]) -> str:
-        lines = ["1-5등급 컷 계산 결과", "기준: 10% / 누적 34% / 누적 66% / 누적 90% / 누적 100%"]
+        lines = [
+            "1-5등급 컷 계산 결과",
+            self._grade5_cut_basis_text(reports),
+            "공식: 인원수 = INT(비율 × 총원), 컷 점수 = LARGE(전체 점수 범위, 인원수)",
+        ]
         for report in reports:
             summary = _grade5_cut_summary(report["scores"])
             lines.append("")
             lines.append(f"[{report['subject']}] {summary['n']}명 · {report['source_note']}")
+            if report.get("excluded_entries"):
+                excluded = report["excluded_entries"]
+                lines.append(
+                    "비점수 제외: "
+                    + ", ".join(
+                        f"{entry.get('class', '?')}반 {entry.get('number', '?')}번 {entry.get('status', '')}"
+                        for entry in excluded
+                    )
+                )
             for row in summary["cut_rows"]:
+                note = next(
+                    (n for n in summary.get("boundary_notes", []) if str(n.get("grade")) == str(row["grade"])),
+                    None,
+                )
+                note_text = " ".join(str(message) for message in note["messages"]) if note else ""
                 lines.append(
                     f"- {row['grade']}등급 컷: {_format_score(row['score'])}점 "
-                    f"(상위 누적 {row['boundary']:.0f}%, 반올림 석차 {row['rank']}등, 해당 등급 {row['included']}명"
-                    f"{', 경계 동점' if row.get('boundary_tie') else ''})"
+                    f"(비율 {row['boundary'] / 100:g}, 조견표 인원 {row['rank']}명)"
+                    + (f" / {note_text}" if note_text else "")
                 )
-            counts = ", ".join(f"{grade}등급 {summary['counts'].get(grade, 0)}명" for grade, _ in GRADE5_CUMULATIVE)
-            lines.append(f"- 예상 인원: {counts}")
+            official_counts = summary.get("official_counts", {})
+            if official_counts:
+                lines.append(
+                    "생활기록부 중간석차 기준 예상 인원: "
+                    + ", ".join(f"{grade}등급 {official_counts.get(grade, 0)}명" for grade, _ in GRADE5_CUMULATIVE)
+                )
         return "\n".join(lines)
+
+    def _show_grade5_basis_dialog(self, parent: QWidget, reports: list[dict]):
+        dialog = QDialog(parent)
+        dialog.setWindowTitle("1-5등급 컷 공식/근거")
+        dialog.resize(self._px(720), self._px(560))
+        layout = QVBoxLayout(dialog)
+        browser = QTextBrowser()
+        browser.setPlainText(self._grade5_cut_basis_text(reports))
+        browser.setLineWrapMode(QTextBrowser.WidgetWidth)
+        layout.addWidget(browser, 1)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        close_btn = QPushButton("확인")
+        close_btn.clicked.connect(dialog.accept)
+        row.addWidget(close_btn)
+        layout.addLayout(row)
+        dialog.exec()
 
     def _show_grade5_cut_dialog(self, path: str, reports: list[dict]):
         dialog = QDialog(self)
@@ -1729,6 +1896,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(browser, 1)
         row = QHBoxLayout()
         row.addStretch(1)
+        basis_btn = QPushButton("공식/근거 보기")
+        basis_btn.clicked.connect(lambda: self._show_grade5_basis_dialog(dialog, reports))
+        row.addWidget(basis_btn)
         copy_btn = QPushButton("결과 복사")
         copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(self._grade5_cut_report_text(reports)))
         row.addWidget(copy_btn)
@@ -1808,29 +1978,49 @@ class MainWindow(QMainWindow):
         self.tabs = QTabWidget()
         self.tabs.setMovable(True)
         self.tabs.setUsesScrollButtons(True)
+        self.tabs.setElideMode(Qt.ElideRight)
+        self.tabs.tabBar().setExpanding(False)
         self.tab_data = QWidget(); self._init_tab_data()
-        self.tabs.addTab(self.tab_data, "Data")
         self.tab_portfolio = QWidget(); self._init_tab_portfolio()
-        self.tabs.addTab(self.tab_portfolio, "학생 포트폴리오")
         self.tab_overview = QWidget(); self._init_tab_overview()
-        self.tabs.addTab(self.tab_overview, "전체 성취도 분석")
         self.tab_perform = QWidget(); self._init_tab_perform()
-        self.tabs.addTab(self.tab_perform, "수행평가 분석")
         self.tab_items = QWidget(); self._init_tab_items()
-        self.tabs.addTab(self.tab_items, "문항 분석")
         self.tab_choice = QWidget(); self._init_tab_choice()
-        self.tabs.addTab(self.tab_choice, "성취수준별 답지반응 분포")
         self.tab_standard = QWidget(); self._init_tab_standard()
-        self.tabs.addTab(self.tab_standard, "성취기준 분석 결과")
         self.tab_ai_review = QWidget(); self._init_tab_ai_review()
-        self.tabs.addTab(self.tab_ai_review, "AI 문항 검토")
         self.tab_spliter = QWidget(); self._init_tab_spliter()
-        self.tabs.addTab(self.tab_spliter, "예상정답률 입력")
         self.tab_monitor = QWidget(); self._init_tab_monitor()
-        self.tabs.addTab(self.tab_monitor, "모니터링")
         self.tab_help = QWidget(); self._init_tab_help()
-        self.tabs.addTab(self.tab_help, "도움말")
+        self._tab_label_sets = [
+            (self.tab_data, "Data", "Data", "Data"),
+            (self.tab_portfolio, "학생 포트폴리오", "포트폴리오", "학생"),
+            (self.tab_overview, "전체 성취도 분석", "성취도", "성취"),
+            (self.tab_perform, "수행평가 분석", "수행평가", "수행"),
+            (self.tab_items, "문항 분석", "문항", "문항"),
+            (self.tab_choice, "성취수준별 답지반응 분포", "답지반응", "답지"),
+            (self.tab_standard, "성취기준 분석 결과", "성취기준", "기준"),
+            (self.tab_ai_review, "AI 문항 검토", "AI 검토", "AI"),
+            (self.tab_spliter, "예상정답률 입력", "예상정답률", "정답률"),
+            (self.tab_monitor, "모니터링", "모니터링", "모니터"),
+            (self.tab_help, "도움말", "도움말", "도움"),
+        ]
+        for widget, full, _compact, _tiny in self._tab_label_sets:
+            self.tabs.addTab(widget, full)
+            self.tabs.setTabToolTip(self.tabs.indexOf(widget), full)
+        self._apply_responsive_tab_labels()
         return self.tabs
+
+    def _apply_responsive_tab_labels(self):
+        if not hasattr(self, "tabs") or not hasattr(self, "_tab_label_sets"):
+            return
+        width = self.width() or 1600
+        label_index = 3 if width < 1120 else (2 if width < 1480 else 1)
+        for labels in self._tab_label_sets:
+            widget = labels[0]
+            idx = self.tabs.indexOf(widget)
+            if idx >= 0:
+                self.tabs.setTabText(idx, labels[label_index])
+                self.tabs.setTabToolTip(idx, labels[1])
 
     # ---- 예상정답률 입력 ----------------------------------------------
     def _init_tab_spliter(self):
@@ -1920,7 +2110,7 @@ class MainWindow(QMainWindow):
         if index is None:
             self.lbl_spliter_status.setText(
                 "예상정답률 계산기 파일을 찾지 못했습니다. "
-                "/Users/piman/Projects/spliter-ox 에서 npm run build 후 다시 시도해 주세요."
+                "앱을 다시 빌드하거나 예상정답률 계산기 웹 파일이 포함되어 있는지 확인해 주세요."
             )
             return
         if self.exam is not None and self.overall is not None:
@@ -2298,50 +2488,58 @@ class MainWindow(QMainWindow):
         layout.addLayout(self.kpi_grid)
 
         # 학생 검색창 (이름·반/번호로 즉시 필터)
+        search_box = QVBoxLayout()
+        search_box.setSpacing(6)
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("학생 검색:"))
         self.le_search = QLineEdit()
         self.le_search.setPlaceholderText("이름 또는 반/번호 입력 · 여러 명은 쉼표로 구분 (예: 강예서, 신태빈, 1/3)")
+        self.le_search.setMinimumWidth(self._px(160))
         self.le_search.textChanged.connect(self._filter_data_table)
         search_row.addWidget(self.le_search, 1)
+        search_box.addLayout(search_row)
+
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
         self.combo_filter_level = QComboBox()
         self.combo_filter_level.addItem("성취도 전체", "")
         for lv in ["A", "B", "C", "D", "E", "미도달"]:
             self.combo_filter_level.addItem(lv, lv)
         self.combo_filter_level.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
-        search_row.addWidget(self.combo_filter_level)
+        filter_row.addWidget(self.combo_filter_level)
         self.combo_filter_grade9 = QComboBox()
         self.combo_filter_grade9.addItem("9등급 전체", "")
         for grade in range(1, 10):
             self.combo_filter_grade9.addItem(f"9등급 {grade}", str(grade))
         self.combo_filter_grade9.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
-        search_row.addWidget(self.combo_filter_grade9)
+        filter_row.addWidget(self.combo_filter_grade9)
         self.combo_filter_grade5 = QComboBox()
         self.combo_filter_grade5.addItem("5등급 전체", "")
         for grade in range(1, 6):
             self.combo_filter_grade5.addItem(f"5등급 {grade}", str(grade))
         self.combo_filter_grade5.currentIndexChanged.connect(lambda _: self._filter_data_table(self.le_search.text()))
-        search_row.addWidget(self.combo_filter_grade5)
+        filter_row.addWidget(self.combo_filter_grade5)
         self.chk_counsel_only_target = QCheckBox("검색 학생만 보기")
         self.chk_counsel_only_target.setToolTip("상담 모드에서 검색한 학생만 표에 남깁니다. 검색어가 없으면 전체를 익명으로 보여줍니다.")
         self.chk_counsel_only_target.setEnabled(False)
         self.chk_counsel_only_target.toggled.connect(lambda _: self._apply_privacy_to_visible_surfaces())
-        search_row.addWidget(self.chk_counsel_only_target)
+        filter_row.addWidget(self.chk_counsel_only_target)
         self.lbl_search_status = QLabel("")
         self.lbl_search_status.setProperty("role", "muted")
-        search_row.addWidget(self.lbl_search_status)
+        filter_row.addWidget(self.lbl_search_status, 1)
         btn_save_portfolio = QPushButton("포트폴리오 저장")
         btn_save_portfolio.setToolTip("현재 과목 분석 결과를 학생 포트폴리오 스냅샷으로 저장합니다.")
         btn_save_portfolio.clicked.connect(self.save_current_subject_snapshot)
-        search_row.addWidget(btn_save_portfolio)
+        filter_row.addWidget(btn_save_portfolio)
         btn_monitor = QPushButton("모니터링 탭")
         btn_monitor.clicked.connect(self._open_monitoring_tab)
-        search_row.addWidget(btn_monitor)
+        filter_row.addWidget(btn_monitor)
         self.btn_clear_search = QPushButton("✕")
         self.btn_clear_search.setFixedWidth(self._px(32))
         self.btn_clear_search.clicked.connect(lambda: self.le_search.setText(""))
-        search_row.addWidget(self.btn_clear_search)
-        layout.addLayout(search_row)
+        filter_row.addWidget(self.btn_clear_search)
+        search_box.addLayout(filter_row)
+        layout.addLayout(search_box)
 
         chart_option_row = QHBoxLayout()
         chart_option_row.setSpacing(10)
@@ -2371,6 +2569,7 @@ class MainWindow(QMainWindow):
         # 차트 ↔ 표 splitter
         data_split = QSplitter(Qt.Vertical)
         self.score_chart_tabs = QTabWidget()
+        self.score_chart_tabs.setMinimumHeight(max(190, self._px(220)))
         self.canvas_score_hist = CanvasHolder()
         self.score_chart_tabs.addTab(self.canvas_score_hist, "환산점수 분포")
 
@@ -3847,8 +4046,16 @@ API 키: 비워둠</pre>
         raw_clean = [model for model in dict.fromkeys(m.strip() for m in models if m and m.strip())]
         clean = [model for model in raw_clean if self._is_ai_chat_model_candidate(model)]
         removed_count = len(raw_clean) - len(clean)
-        if not clean:
-            clean = raw_clean
+        if raw_clean and not clean:
+            self.cmb_ai_model.blockSignals(True)
+            self.cmb_ai_model.clear()
+            self.cmb_ai_model.setEditText("")
+            self.cmb_ai_model.blockSignals(False)
+            self.lbl_ai_model_hint.setText(
+                f"감지된 모델 {len(raw_clean)}개가 모두 임베딩/비채팅 계열이라 숨겼습니다. "
+                "채팅 모델을 설치하거나 모델명을 직접 입력하세요."
+            )
+            return
         recommended = recommended or self._recommend_ai_model(clean, provider)
         if recommended and recommended not in clean and clean:
             recommended = self._recommend_ai_model(clean, provider)
@@ -4406,34 +4613,43 @@ API 키: 비워둠</pre>
                 except Exception as exc:
                     errors.append(f"{candidate}: {exc}")
                     continue
+                found = [name for name in found if MainWindow._is_ai_chat_model_candidate(name)]
                 if not found:
-                    errors.append(f"{candidate}: 모델 목록이 비어 있습니다.")
+                    errors.append(f"{candidate}: 사용할 수 있는 채팅 모델이 없습니다.")
                     continue
                 models = found
-                preferred = (
-                    config.model
-                    if config.model and config.model in found
-                    else MainWindow._recommend_ai_model(found, "mlx_compatible")
-                )
-                tell(f"모델 목록 확인 성공: {preferred}")
-                tell("짧은 실제 응답 확인 중")
+                recommended = MainWindow._recommend_ai_model(found, "mlx_compatible")
+                ordered = []
+                for name in (config.model, recommended, *found):
+                    name = (name or "").strip()
+                    if name and name in found and name not in ordered:
+                        ordered.append(name)
+                tell(f"모델 목록 확인 성공: {', '.join(ordered[:4])}")
                 probe_config_timeout = min(max(config.timeout, 45), 120)
-                try:
-                    probe_openai_compatible_chat(
-                        candidate,
-                        "",
-                        "mlx_compatible",
-                        preferred,
-                        probe_config_timeout,
-                    )
-                except Exception as exc:
-                    errors.append(f"{candidate}: 모델 목록은 확인됐지만 짧은 응답 실패 - {exc}")
-                    tell(f"응답 지연 또는 실패, 다음 서버 후보로 이동: {candidate}")
-                    continue
-                endpoint = candidate
-                selected_model = preferred
-                tell(f"실제 응답 확인 완료: {candidate}")
-                break
+                probe_errors = []
+                for preferred in ordered[:5]:
+                    tell(f"짧은 실제 응답 확인 중: {preferred}")
+                    try:
+                        probe_openai_compatible_chat(
+                            candidate,
+                            "",
+                            "mlx_compatible",
+                            preferred,
+                            probe_config_timeout,
+                        )
+                    except Exception as exc:
+                        probe_errors.append(f"{preferred}: {exc}")
+                        continue
+                    endpoint = candidate
+                    selected_model = preferred
+                    tell(f"실제 응답 확인 완료: {candidate} · {preferred}")
+                    break
+                if endpoint:
+                    break
+                errors.append(
+                    f"{candidate}: 모델 목록은 확인됐지만 실제 응답 가능한 모델을 찾지 못했습니다. "
+                    + " / ".join(probe_errors[:3])
+                )
             if not endpoint:
                 detail = "\n".join(errors[:4])
                 raise ValueError(
@@ -5649,7 +5865,7 @@ API 키: 비워둠</pre>
             review_type = "선택형"
         elif "유형 서답형" in compact:
             review_type = "서답형"
-        elif any(term in compact for term in ("서답", "서술", "논술", "풀이과정", "증명하")):
+        elif any(term in compact for term in ("서답", "서술", "논술", "풀이과정", "증명하", "구하시오", "설명하시오", "쓰시오", "답하시오", "계산하시오")):
             review_type = "서답형"
         elif any(term in compact for term in ("선택형", "객관식", "보기", "①", "②", "③", "④", "⑤")):
             review_type = "선택형"
@@ -5708,6 +5924,13 @@ API 키: 비워둠</pre>
             ]
         else:
             counts = base
+        target_index = LEVELS_AE.index(target)
+        counts = list(counts)
+        counts[target_index] = 2
+        for idx in range(target_index):
+            counts[idx] = max(counts[idx], 2)
+        for idx in range(target_index + 1, len(counts)):
+            counts[idx] = min(counts[idx], 2)
         prev = 3
         normalized = []
         for value in counts:
@@ -5753,6 +5976,8 @@ API 키: 비워둠</pre>
             "각 문항 또는 수행평가 평가요소의 성취기준, 목표 성취수준 후보, 난이도 후보를 제안하라.\n"
             "중요 원칙: 자동 확정하지 말고, 교사가 검토할 수 있도록 근거 문장을 함께 제시한다.\n"
             "A 수준 문항은 A 수준 최소능력자 3명 중 약 2명이 해결할 수 있는 문항이라는 기준으로 판단한다.\n"
+            "목표수준 후보가 X라면 X 예상은 원칙적으로 2/3으로 둔다. X보다 높은 수준은 2/3~3/3, "
+            "X보다 낮은 수준은 0/3~2/3 범위에서 문항 난이도에 맞춰 조정한다.\n"
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수를 산출할 수 있도록 채점기준표의 행동 표현을 분석한다.\n\n"
             "출력 형식은 표로 한다: 번호/요소 | 성취기준 후보 | 평가유형 | 목표수준 후보 | 난이도 후보 | "
             "A 예상 | B 예상 | C 예상 | D 예상 | E 예상 | 근거 | 추가 확인 질문.\n"
@@ -5804,6 +6029,8 @@ API 키: 비워둠</pre>
             "3) 그 기준에 맞춰 목표수준·난이도·A~E 예상값 제안하기 순서로 한다.\n"
             "AI 판정은 최종 확정이 아니라 교사가 검토할 초안이다.\n"
             "A 수준 문항은 A 수준 최소능력자 3명 중 약 2명이 해결할 수 있다는 기준으로 본다.\n"
+            "목표수준 후보가 X라면 X 예상은 원칙적으로 2/3으로 둔다. X보다 높은 수준은 2/3~3/3, "
+            "X보다 낮은 수준은 0/3~2/3 범위에서 문항 난이도에 맞춰 조정한다.\n"
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수 산정에 도움이 되도록 근거를 쓴다.\n\n"
             "반드시 JSON 배열만 출력하라. 설명 문장, 마크다운, 코드블록을 붙이지 마라.\n"
             "각 객체의 키는 반드시 다음 13개만 사용한다:\n"
@@ -5874,7 +6101,10 @@ API 키: 비워둠</pre>
 
     def _ai_review_merge_chunk_rows(self, local_rows: list[dict], ai_rows: list[dict]) -> list[dict]:
         if len(ai_rows) == len(local_rows):
-            return ai_rows
+            return [
+                self._normalize_ai_review_output_row(ai_row, local_row)
+                for ai_row, local_row in zip(ai_rows, local_rows)
+            ]
         by_key = {
             self._ai_review_row_key(row, idx): row
             for idx, row in enumerate(ai_rows)
@@ -5885,7 +6115,7 @@ API 키: 비워둠</pre>
             key = self._ai_review_row_key(local, idx)
             candidate = by_key.get(key)
             if candidate is not None:
-                merged.append(candidate)
+                merged.append(self._normalize_ai_review_output_row(candidate, local))
                 used_ids.add(id(candidate))
             else:
                 fallback = dict(local)
@@ -5894,8 +6124,67 @@ API 키: 비워둠</pre>
                 merged.append(fallback)
         for row in ai_rows:
             if id(row) not in used_ids:
-                merged.append(row)
+                merged.append(self._normalize_ai_review_output_row(row, {}))
         return merged
+
+    def _normalize_ai_review_output_row(self, ai_row: dict, local_row: dict | None = None) -> dict:
+        row = dict(ai_row or {})
+        local_row = local_row or {}
+        if not (row.get("구분") or row.get("kind")) and local_row:
+            row["구분"] = local_row.get("kind") or local_row.get("구분") or "문항"
+        if not (row.get("번호/요소") or row.get("label")) and local_row:
+            row["번호/요소"] = local_row.get("label") or local_row.get("번호/요소") or ""
+        raw_type = row.get("평가유형") or row.get("review_type") or ""
+        local_type = local_row.get("review_type") or local_row.get("평가유형") or ""
+        if "수행" in str(raw_type):
+            review_type = "수행평가"
+        elif "서답" in str(raw_type) or "서술" in str(raw_type) or "논술" in str(raw_type):
+            review_type = "서답형"
+        elif "선택" in str(raw_type) or "객관" in str(raw_type):
+            review_type = "선택형"
+        elif local_type in {"선택형", "서답형", "수행평가"}:
+            review_type = local_type
+        else:
+            review_type = "선택형"
+        row["평가유형"] = review_type
+        raw_target = row.get("목표수준 후보") or row.get("target") or ""
+        target = self._ai_review_level(raw_target, "")
+        if not target:
+            target = self._ai_review_level(local_row.get("target") or local_row.get("목표수준 후보") or "C", "C")
+        raw_difficulty = str(row.get("난이도 후보") or row.get("difficulty") or "")
+        if any(term in raw_difficulty for term in ("쉬", "보통", "중", "어려", "상", "하")):
+            difficulty = self._ai_review_difficulty(raw_difficulty)
+        else:
+            difficulty = self._ai_review_difficulty(local_row.get("difficulty") or local_row.get("난이도 후보") or "보통")
+        row["목표수준 후보"] = target
+        row["난이도 후보"] = difficulty
+        if review_type == "수행평가":
+            return row
+        counts = {}
+        valid_count = 0
+        for lv in LEVELS_AE:
+            count, denominator = self._parse_expected_count(str(row.get(f"{lv} 예상", "")), 3)
+            if count is not None and denominator > 0:
+                counts[lv] = max(0, min(3, int(round(count / denominator * 3))))
+                valid_count += 1
+        if valid_count < len(LEVELS_AE):
+            defaults = self._ai_default_ox_expected_values(target, difficulty)
+            for lv in LEVELS_AE:
+                count, _ = self._parse_expected_count(defaults.get(f"{lv} 예상", ""), 3)
+                counts[lv] = 0 if count is None else count
+        target_index = LEVELS_AE.index(target)
+        counts[target] = 2
+        for idx, lv in enumerate(LEVELS_AE):
+            if idx < target_index:
+                counts[lv] = max(counts.get(lv, 0), 2)
+            elif idx > target_index:
+                counts[lv] = min(counts.get(lv, 0), 2)
+        prev = 3
+        for lv in LEVELS_AE:
+            value = max(0, min(3, counts.get(lv, 0), prev))
+            row[f"{lv} 예상"] = f"{value}/3"
+            prev = value
+        return row
 
     @staticmethod
     def _ai_review_failed_chunk_rows(local_rows: list[dict], reason: str) -> list[dict]:
@@ -6106,6 +6395,7 @@ API 키: 비워둠</pre>
                     chunk_prompt = scrub_personal_data(chunk_prompt, student_names)
                 sent_prompts.append(f"===== 묶음 {chunk_no}/{len(chunks)} · {scope} =====\n{chunk_prompt}")
                 progress(f"묶음 {chunk_no}/{len(chunks)} 전송 중 · {scope}")
+                chunk_error = ""
                 try:
                     output = run_completion(
                         chunk_prompt,
@@ -6113,16 +6403,23 @@ API 키: 비워둠</pre>
                         max_tokens=max(1200, min(2600, len(chunk_rows) * 750)),
                     )
                 except Exception as exc:
-                    message = f"묶음 {chunk_no}/{len(chunks)} 실패 · 로컬 초안 유지 · {exc}"
-                    progress(message)
-                    failures.append(message)
+                    chunk_error = str(exc)
+                    progress(f"묶음 {chunk_no}/{len(chunks)} 실패 · 1문항씩 재시도 · {exc}")
                     outputs.append(f"===== 묶음 {chunk_no} 실패 =====\n{exc}")
-                    merged_rows.extend(self._ai_review_failed_chunk_rows(chunk_rows, str(exc)))
-                    continue
-                outputs.append(f"===== 묶음 {chunk_no}/{len(chunks)} 응답 =====\n{output}")
-                ai_rows = parse_review_rows(output)
-                if not ai_rows:
-                    progress(f"묶음 {chunk_no}/{len(chunks)} 응답 해석 실패 · 1문항씩 재시도")
+                    ai_rows = []
+                else:
+                    outputs.append(f"===== 묶음 {chunk_no}/{len(chunks)} 응답 =====\n{output}")
+                    ai_rows = parse_review_rows(output)
+                if not ai_rows or len(ai_rows) != len(chunk_rows):
+                    if chunk_error:
+                        progress(f"묶음 {chunk_no}/{len(chunks)} 실패 후 1문항씩 재시도")
+                    elif ai_rows:
+                        progress(
+                            f"묶음 {chunk_no}/{len(chunks)} 응답 수 불일치 "
+                            f"({len(ai_rows)}/{len(chunk_rows)}) · 1문항씩 재시도"
+                        )
+                    else:
+                        progress(f"묶음 {chunk_no}/{len(chunks)} 응답 해석 실패 · 1문항씩 재시도")
                     single_rows = []
                     single_failures = []
                     for offset, (single_row, single_block) in enumerate(zip(chunk_rows, chunk_blocks), start=0):
@@ -6182,6 +6479,8 @@ API 키: 비워둠</pre>
                     failures.extend(single_failures)
                     if single_failures:
                         failures.append(f"묶음 {chunk_no}/{len(chunks)} 일부 재시도 실패")
+                    if chunk_error and not single_failures:
+                        failures.append(f"묶음 {chunk_no}/{len(chunks)}는 실패했지만 1문항 재시도는 완료")
                     continue
                 merged_rows.extend(self._ai_review_merge_chunk_rows(chunk_rows, ai_rows))
                 progress(f"묶음 {chunk_no}/{len(chunks)} 완료 · {len(ai_rows)}개 응답")
@@ -6215,6 +6514,9 @@ API 키: 비워둠</pre>
                 self.txt_ai_review_prompt.setPlainText(
                     prompts[:30000] + "\n\n[AI 원문 출력]\n" + (output or "(빈 응답)")[:20000]
                 )
+                self._ai_review_resume_state = None
+                self._set_ai_review_control_state(running=False, can_resume=False)
+                self._ai_review_cancel_event = None
                 QMessageBox.information(
                     self,
                     "AI 문항 검토",
@@ -6321,10 +6623,12 @@ API 키: 비워둠</pre>
     @staticmethod
     def _ai_review_difficulty(value: str) -> str:
         text = value or ""
-        if "어려" in text:
+        if "어려" in text or re.search(r"\b상\b", text):
             return "어려움"
-        if "쉬" in text:
+        if "쉬" in text or re.search(r"\b하\b", text):
             return "쉬움"
+        if "보통" in text or re.search(r"\b중\b", text):
+            return "보통"
         return "보통"
 
     @staticmethod
