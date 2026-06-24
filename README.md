@@ -13,25 +13,25 @@ Goedu-Split은 학생 성적 자료를 웹 서버에 올리지 않고, 선생님
 
 1. 이 저장소 오른쪽 또는 상단의 **Releases**를 누릅니다.
 2. 가장 위에 있는 **Latest** 버전을 엽니다.
-3. **Assets**에서 `Goedu-Split-...선생님배포...zip` 파일을 다운로드합니다.
-4. 다운로드한 zip 파일을 우클릭하고 **압축 풀기**를 선택합니다.
+3. **Assets**에서 `Goedu-Split-1.0.1.zip` 파일을 다운로드합니다.
+4. 다운로드한 zip 파일을 우클릭하고 **압축 풀기** 또는 **모두 압축 풀기**를 선택합니다.
 5. 압축을 푼 폴더 안의 `Goedu-Split` 폴더를 엽니다.
 6. `Goedu-Split.exe`를 더블클릭합니다.
-7. Windows에서 “PC 보호” 또는 “알 수 없는 게시자” 안내가 뜨면, 신뢰할 수 있는 배포 파일인지 확인한 뒤 **추가 정보 > 실행**을 누릅니다.
+7. Windows에서 “PC 보호” 또는 “알 수 없는 게시자” 안내가 뜨면, GitHub에서 받은 파일이 맞는지 확인한 뒤 **추가 정보 > 실행**을 누릅니다.
 
-처음 실행할 때는 Windows 보안 안내가 뜰 수 있습니다. 현재 배포 파일은 디지털 코드 서명 인증서로 서명되어 있지 않기 때문입니다. 파일을 받기 전에는 반드시 GitHub Releases의 제작자, 버전, SHA256 값을 확인해 주세요.
+처음 실행할 때 Windows 보안 안내가 뜰 수 있습니다. 현재 배포 파일은 디지털 코드 서명 인증서로 서명되어 있지 않기 때문입니다. 파일을 받기 전에는 GitHub Releases의 제작자, 버전, SHA256 값을 확인해 주세요.
 
 ## 업데이트 받는 방법
 
-새 버전이 나오면 기존 프로그램 위에 덮어쓰지 말고, 새 zip을 다시 받아 압축을 푸는 방식을 권장합니다.
+새 버전이 나오면 기존 프로그램에 덮어쓰지 말고, 최신 zip 파일을 다시 받아 새 폴더에 압축을 푸는 방식을 권장합니다.
 
 1. Goedu-Split을 종료합니다.
 2. GitHub **Releases**에서 가장 최신 버전을 다운로드합니다.
 3. 새 폴더에 압축을 풉니다.
 4. 새 폴더의 `Goedu-Split.exe`를 실행합니다.
-5. 이전 버전 폴더는 새 버전이 정상 실행되는 것을 확인한 뒤 삭제해도 됩니다.
+5. 새 버전이 정상 실행되는 것을 확인한 뒤 이전 버전 폴더는 삭제해도 됩니다.
 
-성적 엑셀 파일은 프로그램 폴더 안에 보관하지 않는 편이 좋습니다. 학교 업무 폴더에 따로 보관하면 프로그램을 업데이트해도 자료가 섞이지 않습니다.
+학생 성적 엑셀 파일은 프로그램 폴더 안에 넣지 말고, 평소 사용하는 학교 업무 폴더에 따로 보관하는 것을 권장합니다.
 
 ## 개인정보와 보안
 
@@ -44,16 +44,21 @@ Goedu-Split은 학생 성적 자료를 웹 서버에 올리지 않고, 선생님
 
 더 자세한 보안 정책은 [SECURITY.md](SECURITY.md)를 참고하세요.
 
-## 현재 배포 후보 체크섬
+## 파일 확인값 SHA256
 
-아래 값은 2026-06-22 Windows 배포 후보를 기준으로 기록한 SHA256입니다. Release에 첨부된 파일을 받은 뒤 PowerShell에서 `Get-FileHash -Algorithm SHA256 파일명.zip`으로 비교할 수 있습니다.
+아래 값은 `Goedu-Split-1.0.1.zip`의 “파일 지문”입니다. 다운로드한 파일이 원본과 같은지 확인할 때 사용합니다.
 
 | 파일 | SHA256 |
 | --- | --- |
-| `Goedu-Split-1.0.1-선생님배포-fixed-20260622.zip` | `BBC1F79B6F410B6929D1513A078CC52064D1884E2D2152A8624D04AEA538F387` |
-| `Goedu-Split-Windows-1.0.1-source-fixed-20260622.zip` | `387BB885AE1831DE4392AA78D22FF189912405ED795181ECFFB1B474C656F86E` |
+| `Goedu-Split-1.0.1.zip` | `BBC1F79B6F410B6929D1513A078CC52064D1884E2D2152A8624D04AEA538F387` |
 
-완성된 zip 파일은 용량이 크므로 `main` 브랜치에 직접 커밋하지 않습니다. 실행 파일 배포본은 GitHub **Releases**의 첨부파일로 제공합니다.
+일반 사용자는 꼭 확인하지 않아도 됩니다. 다만 파일이 바뀌지 않았는지 확인하고 싶다면 PowerShell에서 아래 명령을 실행해 비교할 수 있습니다.
+
+```powershell
+Get-FileHash -Algorithm SHA256 .\Goedu-Split-1.0.1.zip
+```
+
+나온 값이 위의 SHA256 값과 완전히 같으면 정상 파일입니다. 한 글자라도 다르면 다시 다운로드해 주세요.
 
 ## 주요 기능
 
@@ -103,7 +108,7 @@ python build_scripts\windows_release_audit.py --source .
 python -m PyInstaller --noconfirm --clean goedusplit.spec
 python build_scripts\slim_windows_dist.py
 python build_scripts\privacy_release_audit.py dist\Goedu-Split
-Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.1-windows.zip -Force
+Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.1.zip -Force
 ```
 
 빌드 후 선생님께는 `dist\Goedu-Split` 폴더 전체가 들어 있는 zip 파일을 전달해야 합니다. `Goedu-Split.exe`만 따로 보내면 `_internal` 폴더가 없어 실행되지 않습니다.
@@ -124,7 +129,7 @@ Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split
 
 ```text
 app/                    앱 코드
-app/spliter_ox_web/      내장 예상정답률 계산기 정적 웹앱
+app/spliter_ox_web/     내장 예상정답률 계산기 정적 웹앱
 assets/                 아이콘과 번들 리소스
 build_scripts/          빌드/감사/패키징 스크립트
 distribution/           사용자 안내와 QA 문서
