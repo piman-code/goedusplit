@@ -1,185 +1,157 @@
-# Goedu-Split – 성취평가 결과 분석 데스크톱 앱
+# Goedu-Split
 
-> 제작자 · **이준서**  
-> © 2026 이준서. All rights reserved.
+성취평가 결과 분석과 예상정답률 설계를 돕는 Windows/macOS 데스크톱 앱입니다.
 
-KICE의 [성취평가 결과 분석 web-app 2.1.2](https://kice-se.shinyapps.io/webapp_test/)를 참고해 동일한 분석을 **로컬 데스크톱 앱**으로 재구성한 도구입니다. 데이터는 본 PC를 떠나지 않으며, macOS와 Windows에서 단독 실행 파일로 빌드할 수 있습니다.
+제작자: 이준서  
+© 2026 이준서. All rights reserved.
 
-> ⚠️ 본 프로그램은 KICE Shiny 웹앱의 공개된 화면·도움말을 토대로 동등한 분석을 재구성한 것이며, 원본 R/Shiny 코드를 복제한 것이 아닙니다(추정). 일부 수치는 원본과 미세하게 다를 수 있습니다.
+Goedu-Split은 학생 성적 자료를 웹 서버에 올리지 않고, 선생님 PC에서 분석하도록 만든 로컬 실행형 도구입니다. KICE의 성취평가 결과 분석 web-app 2.1.2 화면과 도움말을 참고해 분석 흐름을 재구성했으며, 원본 R/Shiny 코드를 복제한 것은 아닙니다.
+
+## 선생님용 빠른 안내
+
+대부분의 선생님은 소스코드를 내려받을 필요가 없습니다. 아래 순서대로 완성된 Windows 배포 파일을 받으면 됩니다.
+
+1. 이 저장소 오른쪽 또는 상단의 **Releases**를 누릅니다.
+2. 가장 위에 있는 **Latest** 버전을 엽니다.
+3. **Assets**에서 `Goedu-Split-...선생님배포...zip` 파일을 다운로드합니다.
+4. 다운로드한 zip 파일을 우클릭하고 **압축 풀기**를 선택합니다.
+5. 압축을 푼 폴더 안의 `Goedu-Split` 폴더를 엽니다.
+6. `Goedu-Split.exe`를 더블클릭합니다.
+7. Windows에서 “PC 보호” 또는 “알 수 없는 게시자” 안내가 뜨면, 신뢰할 수 있는 배포 파일인지 확인한 뒤 **추가 정보 > 실행**을 누릅니다.
+
+처음 실행할 때는 Windows 보안 안내가 뜰 수 있습니다. 현재 배포 파일은 디지털 코드 서명 인증서로 서명되어 있지 않기 때문입니다. 파일을 받기 전에는 반드시 GitHub Releases의 제작자, 버전, SHA256 값을 확인해 주세요.
+
+## 업데이트 받는 방법
+
+새 버전이 나오면 기존 프로그램 위에 덮어쓰지 말고, 새 zip을 다시 받아 압축을 푸는 방식을 권장합니다.
+
+1. Goedu-Split을 종료합니다.
+2. GitHub **Releases**에서 가장 최신 버전을 다운로드합니다.
+3. 새 폴더에 압축을 풉니다.
+4. 새 폴더의 `Goedu-Split.exe`를 실행합니다.
+5. 이전 버전 폴더는 새 버전이 정상 실행되는 것을 확인한 뒤 삭제해도 됩니다.
+
+성적 엑셀 파일은 프로그램 폴더 안에 보관하지 않는 편이 좋습니다. 학교 업무 폴더에 따로 보관하면 프로그램을 업데이트해도 자료가 섞이지 않습니다.
+
+## 개인정보와 보안
+
+- 기본 분석은 선생님 PC 안에서 실행됩니다.
+- 학생 이름, 반/번호, 응답 자료를 별도 서버에 자동 업로드하지 않습니다.
+- AI 검토 기능은 선택 기능입니다. 기본 초안은 로컬 규칙으로 만들고, 외부 AI를 사용할 때는 사용자가 설정한 연결 방식에 따릅니다.
+- Codex CLI 방식은 API Key가 아니라 `codex login`의 ChatGPT OAuth 로그인을 사용하도록 안내합니다.
+- 클라우드/외부 서버로 보낼 때는 학생 이름과 반/번호 제거 옵션을 제공합니다.
+- 배포 전에는 `windows_release_audit.py`와 `privacy_release_audit.py`로 소스/배포 폴더를 점검합니다.
+
+더 자세한 보안 정책은 [SECURITY.md](SECURITY.md)를 참고하세요.
+
+## 현재 배포 후보 체크섬
+
+아래 값은 2026-06-22 Windows 배포 후보를 기준으로 기록한 SHA256입니다. Release에 첨부된 파일을 받은 뒤 PowerShell에서 `Get-FileHash -Algorithm SHA256 파일명.zip`으로 비교할 수 있습니다.
+
+| 파일 | SHA256 |
+| --- | --- |
+| `Goedu-Split-1.0.1-선생님배포-fixed-20260622.zip` | `BBC1F79B6F410B6929D1513A078CC52064D1884E2D2152A8624D04AEA538F387` |
+| `Goedu-Split-Windows-1.0.1-source-fixed-20260622.zip` | `387BB885AE1831DE4392AA78D22FF189912405ED795181ECFFB1B474C656F86E` |
+
+완성된 zip 파일은 용량이 크므로 `main` 브랜치에 직접 커밋하지 않습니다. 실행 파일 배포본은 GitHub **Releases**의 첨부파일로 제공합니다.
 
 ## 주요 기능
 
-- **Data 탭**: 점수 분포 히스토그램(성취수준별 색상), 학생별 응답표
-- **전체 성취도 분석**: 성취수준 비율 누적 막대, 성취수준별 평균±표준편차, 학급별 평균
-- **문항 분석**: Cronbach α, 정답률·변별도·답지반응분포·성취수준별 정답률을 한 줄에 모두 보는 통합표
-- **답지반응분포**: 문항별 성취수준×답지(1~5,무응답) 매트릭스 + 누적 막대
-- **성취기준 분석**: 성취기준별 전체/성취수준별 정답률 매트릭스 (50% 이하 음영)
-- **예상정답률 계산기 통합**: 분석된 학생 성취수준·문항 정오 데이터를 바탕으로 새 문항의 A/B/C/D/E 최소능력자 O/X 판단을 웹앱 안에서 바로 설계
-- **결과 CSV 내보내기**: 학생결과/문항분석/성취기준별/성취수준분포 4개 파일
-- **라이트/다크/자동 테마**: `보기` 메뉴(Ctrl+1/2/3). 자동 모드는 18:00~06:00 다크
-- **추정분할점수 자동 적용**: `예상추정분할점수 조회` 엑셀을 지정하면 5개 분할점수가
-  자동으로 채워집니다 (`평균` 행의 값 사용)
-
-성취수준 판정은 **반올림한 정수 원점수** 기준(원본 도움말의 안내와 동일).
+- 학생답 정오표와 문항정보표를 불러와 성취수준을 분석합니다.
+- 전체 성취도, 문항 분석, 답지반응분포, 성취기준 분석을 표와 그래프로 확인합니다.
+- 예상정답률 입력 탭에서 A/B, B/C, C/D, D/E 예상 분할점수를 계산하고 NEIS 입력표 작성에 활용할 수 있습니다.
+- 문항별 목표 성취수준과 난이도, 배점, 예상정답률을 조정할 수 있습니다.
+- 분석 결과를 CSV/XLSX로 내보낼 수 있습니다.
+- 라이트/다크/자동 테마와 확대/축소를 지원합니다.
+- 상담 모드에서 다른 학생의 이름과 반/번호를 가릴 수 있습니다.
 
 ## 입력 파일
 
-| 파일 | 형식 | 비고 |
+| 파일 | 형식 | 설명 |
 | --- | --- | --- |
-| 학생답 정오표 | NEIS 다운로드 .xlsx | 머리글에 `반/번호`, 행에 `정답`, `배점`, 학생별 응답(`.`=정답, 숫자=오답 답지) |
-| 문항정보표 | 학교 양식 .xlsx | 머리글에 `문항번호`, `내용영역`, `성취기준`, `난이도`, `배점`, `정답` |
-| (선택) 예상추정분할점수 조회 | .xlsx | 머리글에 `A/B`,`B/C`,`C/D`,`D/E`,`E/미도달`, `평균` 행이 자동 적용 |
-| (선택) 수행평가 결과 | .xlsx | 다음 버전에서 통합 지원 예정 |
+| 학생답 정오표 | `.xlsx` | NEIS에서 내려받은 학생별 정오표 |
+| 문항정보표 | `.xlsx` | 문항번호, 내용영역, 성취기준, 난이도, 배점, 정답이 들어 있는 문항 정보표 |
+| 예상추정분할점수 조회 | `.xlsx` | 선택 파일. A/B, B/C, C/D, D/E, E/미도달 분할점수 자동 입력에 사용 |
+| 수행평가 결과 | `.xlsx` | 선택 파일. 지원 범위는 버전에 따라 다를 수 있음 |
 
-샘플은 `sample_data/`에 포함되어 있습니다.
+학교마다 엑셀 양식이 조금씩 다를 수 있습니다. 양식이 크게 다르면 일부 열을 자동으로 인식하지 못할 수 있습니다.
 
-## 예상정답률 계산기 사용 흐름
+## 소스코드로 직접 실행하기
 
-1. 정오표·문항정보표·추정분할점수를 넣고 `분석 실행`을 누릅니다.
-2. `예상정답률 입력` 탭으로 이동합니다.
-3. `현재 분석자료 바로 보내기`를 누르면, 내장 웹앱의 분석 근거 영역에 학생 수준별 근거가 자동 반영됩니다.
-4. 새 문항을 만들며 `선택 문항 딸깍 적용` 또는 `전체 문항 딸깍 적용`으로 A/B/C/D/E 최소능력자 O/X 판단을 시작점으로 사용할 수 있습니다.
-5. 계산기 표에서 여러 문항을 체크하거나 Cmd/Ctrl+A로 모두 선택한 뒤 추천을 일괄 반영할 수 있습니다.
-6. 기본 추천 기준인 `난이도 전체평균`은 모든 학생의 난이도별 정오·부분점수 응답을 수준별로 모아 평균을 내며, 서답형은 정오표의 `서답형점수 / 서답형 만점`을 부분점수율 근거로 함께 반영합니다.
-7. 대표학생 기준을 고른 경우 `다시 추천`으로 표본을 바꿀 수 있습니다.
+개발자나 관리자는 소스코드를 내려받아 직접 실행할 수 있습니다.
 
-GoeduSplit의 라이트/다크 전환은 내장 예상정답률 계산기에도 함께 적용됩니다.
-
-필요하면 `예상정답률 근거 JSON 내보내기…`로 같은 근거자료를 별도 웹앱에서도 불러올 수 있습니다.
-
-## 빠른 시작 (3가지 시나리오)
-
-### 가) 내 컴퓨터에서 한 번 써 보기 (가장 간단)
-
-```bash
-# macOS
-bash build_scripts/run_dev.sh
-
-# Windows (PowerShell)
-python -m venv .venv
+```powershell
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
 python run.py
 ```
 
-처음 실행 시 가상환경 생성과 의존성 설치로 1~3분 걸리고, 그 다음부터는 즉시 열립니다.
+## Windows 배포본 직접 빌드하기
 
-### 나) 단독 실행 .app / .exe 만들기
+Windows용 `.exe`는 Windows에서 빌드해야 합니다.
 
-```bash
-# macOS
-bash build_scripts/build_mac.sh
-open dist/Goedu-Split.app
-
-# Windows
-build_scripts\build_windows.bat
-dist\Goedu-Split\Goedu-Split.exe
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+python -m py_compile app\main_window.py app\ai_client.py
+python -m unittest discover -s tests -v
+python build_scripts\windows_release_audit.py --source .
+python -m PyInstaller --noconfirm --clean goedusplit.spec
+python build_scripts\slim_windows_dist.py
+python build_scripts\privacy_release_audit.py dist\Goedu-Split
+Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.1-windows.zip -Force
 ```
 
-빌드는 5~10분 정도 걸리고, 결과물(약 100~150MB)은 본인 PC에서 더블클릭으로 동작합니다.
+빌드 후 선생님께는 `dist\Goedu-Split` 폴더 전체가 들어 있는 zip 파일을 전달해야 합니다. `Goedu-Split.exe`만 따로 보내면 `_internal` 폴더가 없어 실행되지 않습니다.
 
-### 다) 다른 선생님께 배포하기
+## 배포 전 점검표
 
-```bash
-# macOS  →  dist/Goedu-Split-1.0.1-mac.dmg 한 파일 생성
-bash build_scripts/pack_mac.sh
+배포자는 새 버전을 올리기 전에 아래를 확인합니다.
 
-# Windows  →  dist\Goedu-Split-1.0.1-windows.zip 한 파일 생성
-build_scripts\pack_windows.bat
+- `python -m py_compile app\main_window.py app\ai_client.py` 통과
+- `python -m unittest discover -s tests -v` 통과
+- `python build_scripts\windows_release_audit.py --source .` 통과
+- `python build_scripts\privacy_release_audit.py dist\Goedu-Split` 통과
+- 새 exe를 직접 실행해 첫 화면이 뜨는지 확인
+- zip 안에 `.git`, `.env`, `.venv`, `__pycache__`, `build`, `dist`, `sample_data`, 개인 엑셀 자료, API Key, 토큰 파일이 없는지 확인
+- README의 SHA256 값을 새 배포 파일 기준으로 갱신
 
-# Windows 설치파일  →  dist\Goedu-Split-1.0.1-windows-setup.exe 생성
-build_scripts\pack_windows_installer.bat
+## 저장소 구조
+
+```text
+app/                    앱 코드
+app/spliter_ox_web/      내장 예상정답률 계산기 정적 웹앱
+assets/                 아이콘과 번들 리소스
+build_scripts/          빌드/감사/패키징 스크립트
+distribution/           사용자 안내와 QA 문서
+tests/                  자동 테스트
+requirements.txt        Python 의존성
+goodusplit.spec         PyInstaller 빌드 설정
+run.py                  앱 진입점
 ```
 
-만들어진 .dmg, .zip 또는 Windows setup.exe **한 파일만** 메일/USB/네이버드라이브로 전달하면 됩니다. 받는 분은 [distribution/USER_GUIDE.md](distribution/USER_GUIDE.md)의 안내를 따라 더블클릭만으로 실행할 수 있습니다.
+## 라이선스와 사용 범위
 
-## 단독 실행 파일(.app/.exe) 빌드
+본 저장소의 소스코드는 투명한 검토와 학교 업무 활용을 위해 공개될 수 있습니다. 별도 라이선스가 명시되지 않은 한 저작권은 제작자 이준서에게 있으며, 무단 상업적 재배포나 명의 변경 배포는 허용하지 않습니다.
 
-PyInstaller는 빌드를 실행한 OS의 실행 파일만 생성합니다. macOS .app은 Mac에서, Windows .exe는 Windows에서 빌드해야 합니다.
-
-### macOS
-
-```bash
-bash build_scripts/build_mac.sh
-# 결과: dist/Goedu-Split.app
-open dist/Goedu-Split.app
-```
-
-처음 실행 시 Gatekeeper가 차단할 수 있습니다. 차단 해제:
-
-```bash
-xattr -dr com.apple.quarantine dist/Goedu-Split.app
-```
-
-### Windows
-
-```bat
-build_scripts\build_windows.bat
-:: 결과: dist\Goedu-Split\Goedu-Split.exe
-
-build_scripts\pack_windows_installer.bat
-:: 결과: dist\Goedu-Split-1.0.1-windows-setup.exe
-```
-
-`dist\Goedu-Split\` 폴더 전체를 zip으로 전달해도 되고, Inno Setup 6이 설치되어 있으면 설치파일 setup.exe를 만들 수 있습니다.
-
-## 폴더 구조
-
-```
-goedusplit/
-├── app/
-│   ├── data_loader.py     # 정오표·문항정보표 파서
-│   ├── analysis.py        # 성취수준, 변별도, Cronbach α, 매트릭스
-│   ├── charts.py          # matplotlib 차트
-│   ├── main_window.py     # PySide6 메인 GUI
-│   └── spliter_ox_web/    # 내장 예상정답률 계산기 정적 웹앱
-├── build_scripts/
-│   ├── build_mac.sh
-│   ├── build_windows.bat
-│   └── run_dev.sh
-├── sample_data/           # 첨부받은 샘플
-├── goedusplit.spec        # PyInstaller 사양
-├── requirements.txt
-└── run.py                 # 진입점
-```
-
-## 한계 및 주의
-
-- NEIS 양식이 크게 달라진 경우 `data_loader.py`의 키워드 인식부(`반/번호`, `문항번호` 등)를 보완해야 할 수 있습니다.
-- 수행평가를 포함한 통합 분석(반영비율 합산)은 **현재 미구현** 상태이며, 화면에 비활성 처리되어 있습니다.
-- Cronbach α·변별도 산식은 표준식을 따르지만, 원본 Shiny 앱의 정확한 구현을 보지 못해(코드 미공개) 약간의 수치 차이가 날 수 있습니다(추정).
-- 한글 글꼴은 시스템에 설치된 `Apple SD Gothic Neo`(Mac), `Malgun Gothic`(Win), `NanumGothic` 등을 자동 탐색합니다.
-
-## 출처(추정)
-
-- KICE, 2025, *성취평가 선도교원 강사 워크숍 자료집* (PPT 슬라이드 45–48 인용 표기 기준)
-- 첨부 PPT: *2026 성취평가현장지원단 워크숍2 (2026.5.9)*, 정은식 (안산강서고등학교)
-- 원본 웹앱: <https://kice-se.shinyapps.io/webapp_test/> (성취평가 결과 분석 web-app 2.1.2)
-
-## 라이선스
-
-본 코드는 제작자 **이준서**의 학교 업무 활용을 전제로 작성되었습니다. © 2026 이준서. All rights reserved.
+학교 현장에서 도구를 내려받아 사용하는 것은 허용합니다. 수정본을 공개 배포하려면 제작자에게 먼저 확인해 주세요.
 
 ## 변경 이력
 
-- **1.0.1** (2026-05-14) — 검색/정규분포 점검/배포 UX 개선
-  - 학생 검색 다중 입력, 검색 학생 그래프 위치 표시, 반/번호 기본 오름차순 정렬
-  - 환산점수 정규분포·모니터링 지표 탭 추가
-  - 예상정답률 계산기 상단 카드 접힘, 제작자/도움말/아이콘/패키징 정리
+### 1.0.1
 
-- **1.0.0** (2026-05-10) — KICE 원본 웹앱과 **수치 완전 일치 달성** 🎯
-  - ① **변별도 산식 정정**: `corr(0/1 정답여부, 과목총점)` — 샘플 18문항 모두 소수점 셋째자리까지 원본과 일치 (0.588, 0.389, 0.569, 0.602, … 18개 검증)
-  - ② **서답형 분석 별도 표** 추가 — 최소·최대·평균·표준편차·정답률·변별도·성취수준별 정답률 (원본의 모든 값과 일치: 평균 4.52, std 3.91, 변별도 0.841 …)
-  - ③ **환산점수 → 반올림 원점수** 표시 (컬럼명 '원점수', 정렬은 float 유지, 툴팁에 원본 소수 표시)
-  - ④ **도넛 차트 중복 % 제거** — 안쪽 알파벳만, 바깥에 'A 40.8% (42명)' 한 줄로. 도넛 영역 4.8→6.4 inch 확대 + 제목 pad 18로 잘림 해소
-  - ⑤ **틀고정 진짜 동작** — `setViewportMargins`로 메인 표 viewport를 frozen 폭만큼 우측에서 시작. 메인 표의 첫 N 컬럼이 frozen과 겹치지 않음. frozen 헤더 클릭으로 반/번호·이름도 정렬 가능
-  - ⑥ 도움말 산식 섹션 업데이트 (원본 일치 검증 결과 포함)
-- **0.9.0** (2026-05-10) – ① **폴더 일괄 불러오기 NFC 정규화** — macOS Finder가 한글 파일명을 NFD로 저장하던 문제 해결, ② **Data 탭 성취도가 1~6 숫자로 보이던 버그 수정** — NaturalItem 서브클래스 도입(표시 텍스트와 정렬 키 분리), 환산점수·지필총점 등 모든 수치 컬럼에 적용, ③ **문항 분석 기본 정렬 = 문1→문18** (sortByColumn + 자연 정렬), ④ **성취기준 키 정규화** — 띄어쓰기·문장부호 차이로 빈 행이 분리되던 문제 해결, ⑤ 성취기준 차트 좌측 마진 30→42% 확대 (라벨 잘림 완전 해결), ⑥ 도넛 라벨 정돈: 안쪽은 알파벳+큰조각은 % 추가, 바깥은 `A 40.8% (42명)` 한 줄로 모든 정보, ⑦ **CSV 내보내기에 그래프 PNG 옵션** — 도넛/히스토그램/문항 정답률·변별도/성취기준 등 7장을 `그래프/` 폴더에 자동 저장, ⑧ **틀 고정(Freeze Column)** — Data 탭(반/번호·이름) + 문항 분석 탭(문항번호) 좌측에 진짜 고정(가로 스크롤해도 항상 보임, QTableView 트릭), ⑨ 도움말 탭 전면 갱신
-- **0.8.0** (2026-05-10) – ① 반/번호 컬럼이 '001-...'로 잘려 보이던 문제 해결 (NaturalItem 서브클래스로 표시 텍스트와 정렬 키 분리, '1/3' 그대로 표시되고 정렬은 (반,번호) 튜플로 자연 정렬), 컬럼 폭 95/110/92px로 확대, ② **도넛 차트 안쪽 라벨 = 'A 40.8%'** (알파벳+퍼센트), **바깥 라벨 = '42명'**만 (숫자 중복 제거), 작은 조각은 한 줄로 통합, ③ 성취기준 차트 폭 9.6→11.0 inch, 좌측 마진 36→30%, **막대에 마우스 hover 시 풀텍스트 + 정답률을 차트 안 박스로 표시**, ④ QToolTip QSS 추가(테마 색상 적용), 모든 표에 mouseTracking 활성화로 hover 툴팁 즉시 노출
-- **0.7.0** (2026-05-10) – ① 도넛 차트 텍스트 가독성 — **wedge 색 명도(WCAG luminance)에 따라 안쪽 글자색이 흰/검 자동 결정**, 바깥 라벨은 테마 글자색, ② **모든 탭에 splitter** 통일(Data·전체성취도·문항분석·답지반응분포·성취기준), ③ 줌 ±/기본 작동 — QSS `*` 선택자에 font-size, matplotlib rcParams 줌 비례 스케일(13pt=100% 기준), 줌마다 모든 차트 자동 재렌더, ④ **표 정렬(헤더 클릭) + 학생 검색창**(이름·반/번호 즉시 필터), ⑤ 셀 데이터에 정렬용 EditRole 부여(반/번호는 '1/3→001-003'식 자연 정렬, 성취도 A>B>C>D>E>미도달), ⑥ **ItemBarDelegate 재작성**: super().paint()로 표준 셀(텍스트·배경) 먼저 그린 뒤 알파 58~100의 옅은 막대를 덮어 — 막대도 보이고 숫자도 또렷, ⑦ 셀 툴팁 임계값 14→8자, 성취기준 셀은 무조건 풀텍스트 툴팁, ⑧ 차트 더블클릭·휠클릭 원상복귀(저장된 초기 limit으로 복원)
-- **0.6.0** (2026-05-10) – ① **표 셀 안 가로 막대**(웹앱과 동일, 수치 뒤로 옅은 진척도 막대) — 문항 분석의 정답률·변별도, 성취기준 표의 성취율에 모두 적용, ② 전체 성취도 **누적 막대 → 도넛 차트** (각 섹션 바깥에 ABCDE 라벨, 안쪽에 비율, 가운데에 총원), ③ **마우스 휠로 차트 확대/축소 + 더블클릭 원상복귀**, ④ 사이드바에 **↺ 적용값 복원** 버튼(분석 직전 입력 스냅샷), ⑤ 헤더에 **줌 % 표시 + 기본 버튼**, ⑥ 폴더 일괄 불러오기 **점수 기반 매칭**(여러 키워드 가중치 + 충돌 시 점수 우선), ⑦ 모든 탭에 **수직 splitter** 추가(표/차트 비율 자유 조절), 좌우/상하 핸들 시각 강화, ⑧ 변별도/정답률 **차트 폭이 문항 수에 비례**, 라벨 위치 균일, ⑨ 성취기준 차트 **좌측 마진 확대 + ScrollArea**로 잘림 방지, ⑩ 환산점수 분포 **범례를 차트 바깥**으로
-- **0.5.0** (2026-05-10) – ① 분할점수·반영비율 입력을 **±버튼이 양옆에 큼직하게 붙은 StepperSpinBox**로 교체(작동 확실성 100%), ② 줌 −/0/+ 동작을 **QSS 재빌드 방식**으로 고쳐 모든 위젯이 일관되게 커지게 함, ③ 헤더에 **사이드바 토글(☰)**, **창이 좁으면 자동으로 사이드바 접힘 + KPI 카드 그리드 자동 줄바꿈** (모바일/태블릿 대응), ④ 표 **줄바꿈 제거 + 한 줄 말줄임 + 호버 툴팁**으로 한눈에 들어오게, ⑤ Data 탭에서 **학번 컬럼 제거 → 반/번호·이름·성취도·환산점수가 앞쪽 고정 폭**, ⑥ **폴더 일괄 불러오기** 버튼(파일명 패턴으로 4종 자동 분류), ⑦ 라벨 '학생답 정오표 data'로 통일
-- **0.4.0** (2026-05-10) – Gowun Dodum + NanumGothic 폰트 번들(시스템 글꼴 없어도 일관된 모양), 헤더바에 라이트/다크 토글(☀/🌙)과 ＋／－／○ 줌 컨트롤(Ctrl±/0), 스핀박스 화살표 SVG 인라인으로 또렷하게, 표는 word-wrap·Stretch 모드로 가로 스크롤 최소화, 답지반응분포 차트 컴팩트화
-- **0.3.0** (2026-05-10) – 학생 이름 자동 인식, 수행평가 통합 분석(반영비율 합산 환산점수), 한글 글꼴 우선순위 강화(Pretendard·Apple SD Gothic Neo·Malgun Gothic), 스핀박스 화살표·표·차트 가독성 대폭 개선, 차트 라벨 잘림 해소
-- **0.2.0** (2026-05-10) – 라이트/다크/자동 테마, 예상추정분할점수 자동 적용, 사이드바·KPI 카드·테이블 셀 강조 색을 테마 연동, 제작자 표기 추가
-- **0.1.0** (2026-05-10) – 초기 버전 (PySide6 GUI, 정오표·문항정보표 파서, Cronbach α·변별도·답지반응분포·성취기준 분석, .app/.exe 빌드 스크립트)
+- Windows 배포 안내와 보안 감사 절차 정리
+- 예상정답률 입력 탭의 상단 배너 접기/펼치기 개선
+- 문항별 목표 성취수준 변경 시 예상 분할점수 재계산
+- Codex CLI OAuth 연결 안내와 초보자용 설치 안내 보강
+- Windows 배포 폴더 개인정보/비밀값 감사 통과
+
+### 1.0.0
+
+- 성취평가 결과 분석 데스크톱 앱 기본 기능 구성
+- Data, 전체 성취도, 문항 분석, 답지반응분포, 성취기준 분석 탭 제공
+- 예상정답률 계산기 통합
