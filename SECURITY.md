@@ -42,7 +42,7 @@ python build_scripts\privacy_release_audit.py dist\Goedu-Split
 사용자는 PowerShell에서 아래 명령으로 파일이 바뀌지 않았는지 확인할 수 있습니다.
 
 ```powershell
-Get-FileHash -Algorithm SHA256 .\Goedu-Split-1.0.1-선생님배포-fixed-20260622.zip
+Get-FileHash -Algorithm SHA256 .\Goedu-Split-1.0.1.zip
 ```
 
 README에 적힌 SHA256과 결과가 다르면 실행하지 말고 다시 다운로드해 주세요.
