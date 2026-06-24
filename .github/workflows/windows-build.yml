@@ -6,7 +6,7 @@ on:
       checkout_ref:
         description: "Branch, tag, or commit to build"
         required: false
-        default: "feature/ai-assessment-workflow"
+        default: "main"
   push:
     tags:
       - "windows-v*"
