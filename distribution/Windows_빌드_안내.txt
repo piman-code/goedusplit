@@ -5,6 +5,9 @@ Goedu-Split  성취평가 결과 분석 — Windows 빌드 안내
 
 이 zip 파일은 "Windows PC에서 .exe를 빌드"하기 위한 소스 패키지입니다.
 Mac에서는 .exe 파일을 직접 만들 수 없기 때문에 이 절차가 필요합니다.
+용량을 줄이기 위해 소스 패키지에는 Git 기록, 가상환경, 기존 dist/build,
+샘플 자료, 캐시, macOS 전용 스크립트는 넣지 않았습니다.
+한글 번들 폰트는 포함되어 있으며, 빠져 있거나 손상된 경우 Windows 빌드 중 build_scripts\fetch_fonts.py가 자동으로 다시 확보합니다.
 
 준비물
 ------
@@ -36,8 +39,18 @@ Mac에서는 .exe 파일을 직접 만들 수 없기 때문에 이 절차가 필
 
        build_scripts\build_windows.bat
 
-  4) "[1/6] 가상환경 생성" 부터 "[6/6] PyInstaller 빌드" 까지 5~10분 대기
+  4) "[0/9] Windows 소스 키트 보안/구성 감사" 부터 "[9/9] 배포 폴더 구성 확인" 까지 5~10분 대기
   5) 마지막에 "[OK] 완료" 메시지가 나오면 성공
+
+  보안/구성 감사는 다음 항목을 확인합니다.
+    - 필수 파일 누락 여부
+    - .git, .venv, build, dist, __pycache__ 같은 배포 금지 폴더 포함 여부
+    - OPENAI_API_KEY, CODEX_API_KEY, sk- 형태 비밀값 패턴 포함 여부
+    - Windows에서 깨지는 /private/tmp 고정 경로 여부
+    - 아이콘 생성에 필요한 Pillow 의존성 포함 여부
+
+  빌드가 끝나면 dist\slim-windows-report.txt 파일도 생성됩니다.
+  이 파일은 Windows 배포 폴더에서 제거한 저위험 리소스 목록입니다.
 
 
 [4단계] 다른 분께 보낼 .zip 만들기
@@ -47,6 +60,8 @@ Mac에서는 .exe 파일을 직접 만들 수 없기 때문에 이 절차가 필
        build_scripts\pack_windows.bat
 
   결과 파일:  dist\Goedu-Split-1.0.1-windows.zip
+
+  pack_windows.bat도 zip을 만들기 전에 개인정보/비밀값 감사를 다시 실행합니다.
 
   설치파일(setup.exe)로 만들고 싶다면 Inno Setup 6 설치 후 다음 명령:
 
@@ -76,6 +91,16 @@ Q. 의존성 설치 단계에서 멈춰요.
 Q. 빌드는 됐는데 더블클릭해도 안 켜져요.
   → cmd 창에서 dist\Goedu-Split\Goedu-Split.exe 를 직접 실행하면
     오류 메시지가 보입니다. 그 메시지를 캡처해 제작자에게 전달해 주세요.
+
+Q. AI 검토에서 Codex CLI를 못 찾는다고 떠요.
+  → Windows 터미널에서 where codex, codex --version, codex login status 를 차례로 확인하세요.
+    터미널에서는 되는데 앱에서만 실패하면 CODEX_CLI_PATH 환경변수에 codex.cmd 전체 경로를 지정한 뒤 앱을 다시 여세요.
+
+Q. 용량을 더 줄이고 싶어요.
+  → QtWebEngine 기반 예상정답률 계산기 때문에 실행 폴더가 어느 정도 커집니다.
+    현재 소스 키트는 폰트와 macOS 전용 파일까지 제외해 최소화했습니다.
+    build_scripts\slim_windows_dist.py 는 번역/sample/test/bytecode 같은 저위험 파일만 제거합니다.
+    QtWebEngine, Qt QML, plugins 폴더는 화면 흰 화면/실행 실패를 막기 위해 제거하지 않습니다.
 
 
 © 2026 이준서. All rights reserved.

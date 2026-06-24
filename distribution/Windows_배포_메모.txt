@@ -1,0 +1,31 @@
+Goedu-Split Windows 배포 메모
+
+현재 Mac 환경에서는 Windows용 .exe 또는 setup.exe를 직접 생성할 수 없습니다.
+PyInstaller는 빌드를 실행한 운영체제의 실행파일만 만들 수 있으므로,
+Windows용 실행파일은 Windows PC 또는 GitHub Actions의 Windows 빌더에서 만들어야 합니다.
+
+이 폴더에 들어 있는 Goedu-Split-Windows 폴더 또는 Goedu-Split-1.0.1-source.zip은
+Windows 배포본을 만들기 위한 소스/빌드 키트입니다.
+학생 자료, 샘플 엑셀, 개인 PC 경로, Google Drive 계정 정보는 포함하지 않습니다.
+용량 최적화를 위해 Git 기록, 가상환경, 기존 빌드 결과물, 캐시, macOS 전용 파일,
+번들 폰트 파일은 제외했습니다. Windows 빌드 중 필요한 폰트와 아이콘은 자동 확보/생성됩니다.
+
+Windows PC에서 배포파일 만들기
+
+1. Goedu-Split-1.0.1-source.zip을 압축 해제합니다.
+2. 압축을 푼 폴더 안에서 build_scripts\build_windows.bat를 실행합니다.
+3. 빌드가 끝나면 dist\Goedu-Split\Goedu-Split.exe가 생깁니다.
+   빌드 스크립트는 PyInstaller 빌드 후 저위험 리소스 경량화와 개인정보/비밀값 감사를 자동 실행합니다.
+4. 다른 선생님께 폴더째 전달하려면 build_scripts\pack_windows.bat를 실행합니다.
+   결과: dist\Goedu-Split-1.0.1-windows.zip
+5. 설치파일로 전달하려면 Windows PC에 Inno Setup 6을 설치한 뒤
+   build_scripts\pack_windows_installer.bat를 실행합니다.
+   결과: dist\Goedu-Split-1.0.1-windows-setup.exe
+
+배포 전 확인
+
+- 지필평가 교과목별 일람표로 1-5등급 컷 계산이 되는지 확인합니다.
+- 등급 컷 계산기.xlsx 파일은 앱에서 사용하지 않습니다.
+- 상담 화면을 사용할 때는 상단 모드(Ctrl+Shift+H)로 다른 학생 이름과 반/번호를 가릴 수 있습니다.
+- AI 문항 검토는 Ollama 로컬 서버 또는 Codex CLI OAuth가 준비되어 있을 때만 AI 보강이 동작합니다.
+- QtWebEngine, Qt QML, plugins 폴더는 예상정답률 계산기 안정성을 위해 제거하지 않습니다.

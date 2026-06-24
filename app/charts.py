@@ -243,6 +243,8 @@ def fig_score_histogram_colored(
     levels_arr,
     title: str = "환산점수 분포",
     *,
+    achievement_cuts: dict | None = None,
+    grade_cut_points: list[dict] | None = None,
     highlight_scores: list[float] | None = None,
     highlight_labels: list[str] | None = None,
 ) -> Figure:
@@ -268,25 +270,72 @@ def fig_score_histogram_colored(
         bar_handles[lv] = bars[0]
         bottom += cnt
     ymax = max(1, int(bottom.max()) if bottom.size else 1)
+    headroom = 1.3
+    if achievement_cuts:
+        for i, lv in enumerate(["A", "B", "C", "D", "E"]):
+            if lv not in achievement_cuts:
+                continue
+            x = float(achievement_cuts[lv])
+            ax.axvline(x, color=COLOR_LEVELS.get(lv, "#555"), linestyle="--", linewidth=1.0, alpha=0.72)
+            y = max(0.75, ymax * (0.93 - (i % 2) * 0.12))
+            ax.text(
+                x, y, lv,
+                ha="center", va="center", fontsize=8.0, fontweight="bold",
+                color=COLOR_LEVELS.get(lv, THEME_COLORS["chart_text"]),
+                bbox=dict(
+                    boxstyle="round,pad=0.12",
+                    facecolor=THEME_COLORS["chart_bg"],
+                    edgecolor="none",
+                    alpha=0.70,
+                ),
+            )
+        headroom = max(headroom, 1.5)
+    if grade_cut_points:
+        style_by_kind = {
+            "9등급": ("#64748b", ":"),
+            "5등급": ("#8b5cf6", "-."),
+        }
+        for i, point in enumerate(grade_cut_points):
+            x = float(point.get("score", 0.0))
+            label = str(point.get("label", "등급"))
+            kind = str(point.get("kind", ""))
+            color, linestyle = style_by_kind.get(kind, ("#475569", ":"))
+            ax.axvline(x, color=color, linestyle=linestyle, linewidth=0.9, alpha=0.55)
+            if i < 14:
+                y = max(0.75, ymax * (0.92 - (i % 4) * 0.13))
+                ax.text(
+                    x, y, label,
+                    ha="center", va="center", fontsize=6.4, rotation=90,
+                    color=color,
+                    bbox=dict(
+                        boxstyle="round,pad=0.08",
+                        facecolor=THEME_COLORS["chart_bg"],
+                        edgecolor="none",
+                        alpha=0.62,
+                    ),
+                )
+        headroom = max(headroom, 1.7)
     if highlight_scores:
         labels = highlight_labels or ["" for _ in highlight_scores]
         for i, (score, label) in enumerate(zip(highlight_scores, labels)):
             x = round(float(score))
             color = "#ef4444" if i % 2 == 0 else "#f59e0b"
             ax.axvline(x, color=color, linestyle="--", linewidth=1.4, alpha=0.95)
-            ax.scatter([x], [ymax + 0.35 + (i % 3) * 0.22], s=34,
+            marker_y = max(0.75, ymax * (0.82 - (i % 3) * 0.12))
+            ax.scatter([x], [marker_y], s=34,
                        color=color, edgecolor="white", linewidth=0.7, zorder=5)
             if i < 5 and label:
-                ax.text(x, ymax + 0.78 + (i % 3) * 0.28, label,
-                        ha="center", va="bottom", fontsize=8,
+                ax.text(x, marker_y + 0.24, label,
+                        ha="center", va="bottom", fontsize=7.6,
                         rotation=25, color=THEME_COLORS["chart_text"],
                         bbox=dict(boxstyle="round,pad=0.18", facecolor=THEME_COLORS["chart_bg"],
                                   edgecolor=color, linewidth=0.8, alpha=0.9))
-        ax.set_ylim(0, ymax + 2.6)
+        headroom = max(headroom, 1.8)
+    ax.set_ylim(0, ymax + headroom)
     ax.set_xlabel("환산점수 (반올림 정수 원점수)")
     ax.set_ylabel("학생 수")
     ax.set_xlim(-1, 101)
-    ax.set_title(title)
+    ax.set_title(title, pad=10)
     # 범례를 막대와 겹치지 않게 차트 바깥(우측)에 표시
     legend_order = ["A", "B", "C", "D", "E", "미도달"]
     handles = [bar_handles[lv] for lv in legend_order if lv in bar_handles]
@@ -295,7 +344,7 @@ def fig_score_histogram_colored(
               fontsize=8.5, frameon=False, title_fontsize=9)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", linestyle=":", alpha=0.4)
-    fig.subplots_adjust(left=0.08, right=0.86, top=0.88, bottom=0.16)
+    fig.subplots_adjust(left=0.08, right=0.86, top=0.82, bottom=0.18)
     return fig
 
 

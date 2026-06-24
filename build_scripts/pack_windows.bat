@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem 빌드된 dist\Goedu-Split 폴더를 .zip으로 패키징.
 rem 사용:  build_scripts\pack_windows.bat
 rem 결과:  dist\Goedu-Split-<버전>-windows.zip
@@ -13,6 +14,14 @@ if not exist "dist\Goedu-Split" (
   exit /b 1
 )
 
+echo [1/3] 개인정보/비밀값 감사
+python build_scripts\privacy_release_audit.py dist\Goedu-Split
+if errorlevel 1 (
+  echo.
+  echo [X] 개인정보/비밀값 감사 실패. 패키징을 중단합니다.
+  exit /b 1
+)
+
 rem 버전 추출
 set PY=python
 if exist ".venv\Scripts\python.exe" set PY=.venv\Scripts\python.exe
@@ -21,9 +30,10 @@ for /f %%v in ('%PY% -c "from app.main_window import APP_VERSION; print(APP_VERS
 set ZIP=dist\Goedu-Split-%VER%-windows.zip
 if exist "%ZIP%" del "%ZIP%"
 
-rem 사용 안내문 동봉
+echo [2/3] 사용 안내문 동봉
 if exist distribution\USER_GUIDE.md copy /y distribution\USER_GUIDE.md "dist\Goedu-Split\사용 안내.md" >nul
 
+echo [3/3] zip 생성
 powershell -NoLogo -NoProfile -Command ^
   "Compress-Archive -Path 'dist\Goedu-Split\*' -DestinationPath '%ZIP%' -Force"
 

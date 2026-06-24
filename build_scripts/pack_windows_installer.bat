@@ -1,4 +1,5 @@
 @echo off
+chcp 65001 >nul
 rem 빌드된 dist\Goedu-Split 폴더를 Windows 설치파일(.exe)로 패키징합니다.
 rem 필요: Inno Setup 6 (ISCC.exe)
 rem 사용:  build_scripts\pack_windows_installer.bat
@@ -12,6 +13,14 @@ if not exist "dist\Goedu-Split\Goedu-Split.exe" (
   echo [X] dist\Goedu-Split\Goedu-Split.exe 가 없습니다.
   echo     먼저 다음을 실행해 빌드하세요:
   echo     build_scripts\build_windows.bat
+  exit /b 1
+)
+
+echo [1/4] 개인정보/비밀값 감사
+python build_scripts\privacy_release_audit.py dist\Goedu-Split
+if errorlevel 1 (
+  echo.
+  echo [X] 개인정보/비밀값 감사 실패. 설치파일 생성을 중단합니다.
   exit /b 1
 )
 
@@ -32,8 +41,10 @@ if "%ISCC%"=="" (
   exit /b 1
 )
 
+echo [2/4] 사용 안내문 동봉
 if exist distribution\USER_GUIDE.md copy /y distribution\USER_GUIDE.md "dist\Goedu-Split\사용 안내.md" >nul
 
+echo [3/4] Inno Setup 스크립트 생성
 set ISS=dist\Goedu-Split-installer.iss
 (
   echo #define MyAppName "Goedu-Split"
@@ -69,14 +80,15 @@ set ISS=dist\Goedu-Split-installer.iss
   echo.
   echo [Icons]
   echo Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-  echo Name: "{group}\사용 안내"; Filename: "{app}\사용 안내.md"; Check: FileExists(ExpandConstant('{app}\사용 안내.md'))
+  echo Name: "{group}\사용 안내"; Filename: "{app}\사용 안내.md"
   echo Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
   echo.
   echo [Run]
-  echo Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+  echo Filename: "{app}\{#MyAppExeName}"; Description: "Goedu-Split 실행"; Flags: nowait postinstall skipifsilent
 ) > "%ISS%"
 
 pushd dist >nul
+echo [4/4] 설치파일 빌드
 "%ISCC%" "Goedu-Split-installer.iss"
 set BUILD_STATUS=%ERRORLEVEL%
 popd >nul

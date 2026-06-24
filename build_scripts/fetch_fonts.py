@@ -24,12 +24,12 @@ def _download(url: str, dest: Path) -> bool:
     if dest.exists() and dest.stat().st_size > 1024:
         return True
     try:
-        print(f"  → {dest.name} 다운로드 …")
+        print(f"  [download] {dest.name}")
         with urllib.request.urlopen(url, timeout=20) as r, open(dest, "wb") as f:
             shutil.copyfileobj(r, f)
         return dest.stat().st_size > 1024
     except Exception as e:
-        print(f"    실패: {e}")
+        print(f"    [fail] {e}")
         if dest.exists():
             try: dest.unlink()
             except OSError: pass
@@ -86,11 +86,11 @@ def main() -> int:
     a = fetch_nanum_via_pip()
     b = fetch_gowun_dodum()
     msg = []
-    msg.append(("✓" if a else "✗") + " NanumGothic")
-    msg.append(("✓" if b else "✗") + " GowunDodum")
+    msg.append(("[OK] " if a else "[FAIL] ") + "NanumGothic")
+    msg.append(("[OK] " if b else "[FAIL] ") + "GowunDodum")
     print("[fonts] 결과: " + " | ".join(msg))
     if not a and not b:
-        print("⚠ 한글 폰트 다운로드에 모두 실패했지만, 시스템에 설치된 한글 폰트로 자동 폴백됩니다.")
+        print("[WARN] 한글 폰트 다운로드에 모두 실패했지만, 시스템에 설치된 한글 폰트로 자동 폴백됩니다.")
     return 0
 
 

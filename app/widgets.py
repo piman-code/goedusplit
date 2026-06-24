@@ -24,22 +24,35 @@ from PySide6.QtWidgets import (
 class StepperSpinBox(QWidget):
     """[ - ][   값   ][ + ] 형태의 더블 스핀 위젯."""
     valueChanged = Signal(float)
+    BASE_HEIGHT = 48
+    BUTTON_BASE_HEIGHT = 44
+    BUTTON_BASE_WIDTH = 38
+    VALUE_MIN_BASE_WIDTH = 118
+    SIDEBAR_BASE_HEIGHT = 40
+    SIDEBAR_BUTTON_BASE_HEIGHT = 36
+    SIDEBAR_BUTTON_BASE_WIDTH = 32
+    SIDEBAR_VALUE_MIN_BASE_WIDTH = 96
+    SIDEBAR_ROW_BASE_HEIGHT = 82
 
     def __init__(self, *, value: float = 0.0, minimum: float = 0.0,
                  maximum: float = 100.0, step: float = 1.0, decimals: int = 2,
                  suffix: str = "", parent=None):
         super().__init__(parent)
+        self.setFixedHeight(self.BASE_HEIGHT)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         h = QHBoxLayout(self); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(4)
 
         self.btn_minus = QPushButton("−")
         self.btn_minus.setProperty("role", "stepper")
-        self.btn_minus.setFixedWidth(32)
+        self.btn_minus.setFixedWidth(self.BUTTON_BASE_WIDTH)
+        self.btn_minus.setFixedHeight(self.BUTTON_BASE_HEIGHT)
         self.btn_minus.setAutoRepeat(True)
         self.btn_minus.setAutoRepeatInterval(80)
         self.btn_minus.setAutoRepeatDelay(350)
         self.btn_minus.setFocusPolicy(Qt.NoFocus)
 
         self.spin = QDoubleSpinBox()
+        self.spin.setProperty("role", "stepper-spin")
         self.spin.setRange(minimum, maximum)
         self.spin.setValue(value)
         self.spin.setDecimals(decimals)
@@ -47,12 +60,15 @@ class StepperSpinBox(QWidget):
         if suffix:
             self.spin.setSuffix(suffix)
         self.spin.setButtonSymbols(QDoubleSpinBox.NoButtons)  # 내장 화살표 제거
-        self.spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.spin.setAlignment(Qt.AlignCenter)
+        self.spin.setFixedHeight(self.BUTTON_BASE_HEIGHT)
+        self.spin.setMinimumWidth(self.VALUE_MIN_BASE_WIDTH)
         self.spin.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         self.btn_plus = QPushButton("+")
         self.btn_plus.setProperty("role", "stepper")
-        self.btn_plus.setFixedWidth(32)
+        self.btn_plus.setFixedWidth(self.BUTTON_BASE_WIDTH)
+        self.btn_plus.setFixedHeight(self.BUTTON_BASE_HEIGHT)
         self.btn_plus.setAutoRepeat(True)
         self.btn_plus.setAutoRepeatInterval(80)
         self.btn_plus.setAutoRepeatDelay(350)

@@ -5,7 +5,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont, ImageFilter
+try:
+    from PIL import Image, ImageDraw, ImageFont, ImageFilter
+except ImportError:
+    Image = ImageDraw = ImageFont = ImageFilter = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -219,6 +222,14 @@ def _write_iconset(base: Image.Image) -> None:
 
 def main() -> int:
     ASSET_DIR.mkdir(parents=True, exist_ok=True)
+    existing_icon = ASSET_DIR / "goedusplit.ico"
+    existing_png = ASSET_DIR / "goedusplit.png"
+    if Image is None:
+        if existing_icon.exists() and existing_png.exists():
+            print("Pillow is not installed; keeping existing Windows icon assets.")
+            return 0
+        print("Pillow is required to generate app icons. Install requirements.txt first.", file=sys.stderr)
+        return 1
 
     variants = [
         ("01-split-grid", split_grid_icon()),
@@ -248,7 +259,14 @@ def main() -> int:
 
     if sys.platform == "darwin":
         _write_iconset(selected)
-        subprocess.run(["iconutil", "-c", "icns", str(ICONSET_DIR), "-o", str(ASSET_DIR / "goedusplit.icns")], check=True)
+        icns_path = ASSET_DIR / "goedusplit.icns"
+        try:
+            subprocess.run(["iconutil", "-c", "icns", str(ICONSET_DIR), "-o", str(icns_path)], check=True)
+        except subprocess.CalledProcessError:
+            if icns_path.exists():
+                print(f"warning: iconutil failed; keeping existing {icns_path}")
+            else:
+                print("warning: iconutil failed and no .icns file exists; app will build without a fresh macOS icon")
 
     print(f"wrote {ASSET_DIR}")
     return 0

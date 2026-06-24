@@ -217,7 +217,7 @@ def load_item_info(path) -> tuple[list[ItemInfo], dict]:
         # 합계 행 등 스킵
         if "총합계" in joined or "비율(%)" in joined:
             continue
-        if "/" in joined and ("서해고등학교" in joined or len(joined) < 30):
+        if "/" in joined and len(joined) < 30:
             # 페이지 번호/푸터 스킵
             continue
 
