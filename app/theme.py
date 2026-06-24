@@ -46,12 +46,9 @@ def _build_qss(c: dict, base_pt: int = 13) -> str:
     arrow_color = c['text']
     return f"""
     /* 한글이 섞인 환경에서 자연스러운 글꼴을 우선순위로 적용
-       (앱 시작 시 fonts.register_fonts()가 Gowun Dodum/NanumGothic을 등록한다) */
+       (앱 시작 시 fonts.register_fonts()가 번들 폰트를 등록한다) */
     * {{
-        font-family: "Gowun Dodum", "NanumGothic", "Nanum Gothic",
-                     "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic",
-                     "맑은 고딕", "Noto Sans CJK KR", "Noto Sans KR",
-                     -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-family: "NanumGothic";
         font-size: {base_pt}px;
     }}
     QWidget {{
@@ -188,7 +185,7 @@ def _build_qss(c: dict, base_pt: int = 13) -> str:
     QTabWidget::pane {{ border: 1px solid {c['border']}; border-radius: 8px; top: -1px; background: {c['panel']}; }}
     QTabBar::tab {{
         background: transparent; color: {c['muted']};
-        padding: 8px 16px; border: 1px solid transparent;
+        padding: 7px 11px; border: 1px solid transparent;
         border-top-left-radius: 6px; border-top-right-radius: 6px;
         margin-right: 2px;
     }}
