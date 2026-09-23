@@ -1,13 +1,15 @@
 """Keep student identity out of exported files unless the teacher opts in.
 
-Pseudonyms replace direct identifiers (학번, 반/번호, 이름). This is
-pseudonymization, not anonymization: row order, class and scores can still
-re-identify a student for anyone holding the roster.
+Pseudonyms replace direct identifiers (학번, 반/번호, 이름). Numbers are
+shuffled so they do not follow roster order. This is pseudonymization, not
+anonymization: class and scores can still re-identify a student for anyone
+holding the roster.
 """
 
 from __future__ import annotations
 
 import copy
+import random
 import re
 
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -20,8 +22,11 @@ REAL_IDENTITY_WARNING = (
 )
 
 
-def pseudonym_id(index: int) -> str:
-    return f"학생 {index + 1:03d}"
+def pseudonym_ids(count: int, rng: random.Random | None = None) -> list[str]:
+    """One pseudonym per student, numbered in shuffled order."""
+    numbers = list(range(1, count + 1))
+    (rng or random.SystemRandom()).shuffle(numbers)
+    return [f"학생 {number:03d}" for number in numbers]
 
 
 def csv_safe_cell(value):
@@ -31,18 +36,21 @@ def csv_safe_cell(value):
     return value
 
 
-def student_result_table(students, levels, *, include_identity: bool) -> tuple[list[str], list[list]]:
-    """Headers and rows for 학생결과.csv."""
+def student_result_table(students, levels, *, include_identity: bool,
+                         pseudonyms: list[str] | None = None) -> tuple[list[str], list[list]]:
+    """Headers and rows for 학생결과.csv. Pseudonymized rows are sorted by pseudonym."""
     score_headers = ["학급", "선택형", "서답형", "기타", "지필총점", "수행환산", "환산점수", "성취도"]
     id_headers = ["학번", "반/번호", "이름"] if include_identity else ["가명 ID"]
     rows = []
     for index, st in enumerate(students):
-        identity = [st.sid, st.class_no, st.name] if include_identity else [pseudonym_id(index)]
+        identity = [st.sid, st.class_no, st.name] if include_identity else [pseudonyms[index]]
         rows.append(identity + [
             st.grade_class, st.multi_score, st.serdap_score, st.etc_score,
             round(st.total, 2), round(st.perform_score, 2), round(st.final_score, 2),
             levels[index],
         ])
+    if not include_identity:
+        rows.sort(key=lambda row: row[0])
     return id_headers + score_headers, rows
 
 
@@ -50,12 +58,15 @@ def _file_name_only(path) -> str:
     return re.split(r"[\\/]", str(path or ""))[-1]
 
 
-def pseudonymize_evidence_payload(payload: dict) -> dict:
-    """Copy of the spliter evidence payload without student identity or local folders."""
+def pseudonymize_evidence_payload(payload: dict, pseudonyms: list[str]) -> dict:
+    """Copy of the spliter evidence payload without student identity or local folders.
+
+    Student order is kept: the calculator breaks score ties by input order.
+    """
     result = copy.deepcopy(payload)
     for index, student in enumerate(result.get("students", [])):
-        student["id"] = pseudonym_id(index)
-        student["name"] = pseudonym_id(index)
+        student["id"] = pseudonyms[index]
+        student["name"] = pseudonyms[index]
         student["classNo"] = ""
     result["sourceFiles"] = {
         key: _file_name_only(value) for key, value in (result.get("sourceFiles") or {}).items()

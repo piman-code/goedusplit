@@ -3,9 +3,9 @@
 어느 플랫폼(Codex, Claude Code, Kilo 등)이든 이 파일과 git 기록만으로 이어서 작업할 수 있게 유지한다.
 완료 조건 하나를 끝낼 때마다 **테스트 → 이 파일 갱신 → 로컬 커밋** 순서로 남긴다. 끝에 몰아서 쓰지 않는다.
 
-- 마지막 갱신: 2026-09-24 KST (조건 6 완료, 독립 검토 대기)
+- 마지막 갱신: 2026-09-24 KST (독립 검토 반영 완료, 사용자 결정 대기)
 - 작업 브랜치: `work/1.0.3-hardening`
-- 마지막 체크포인트 커밋: 이 파일을 추가한 커밋 (`git log -1 -- docs/HANDOFF.md`로 확인)
+- 마지막 체크포인트 커밋: 이 파일을 마지막으로 바꾼 커밋 (`git log -1 -- docs/HANDOFF.md`로 확인)
 
 ## 최종 목표
 
@@ -16,7 +16,7 @@ NEIS 정오표·문항정보표 기반 성취평가 분석과 **추정분할점�
 
 | 단계 | 내용 | 추천 모델 / 강도 | 상태 |
 |---|---|---|---|
-| 1 | 작업 보존, 내보내기 가명화, CSV 수식 차단, CI 테스트, 이 인계 파일 | Claude Code `claude-opus-5-5` 또는 Codex `gpt-6-sol` / high | 코드 완료, Windows·CI 미검증 |
+| 1 | 작업 보존, 내보내기 가명화, CSV 수식 차단, CI 테스트, 이 인계 파일 | Claude Code `claude-opus-5-5` 또는 Codex `gpt-6-sol` / high | 조건부 완료, Windows·CI 미검증 |
 | 2 | 예측-실측 보정 리포트 (교사 예상정답률 vs 실제 수준별 정답률) | `gpt-6-sol` / medium | 대기 |
 | 3 | 시험지(HWP/HWPX/PDF)에서 문항 번호·배점·유형만 로컬 추출 (kordoc 동봉) | `gpt-6-sol` / high, 패키징 설계만 `gpt-6-astra` / high | 대기 |
 | 4 | 선택형 온라인 검토 모듈 (로컬 규칙 점검 → 복사-붙여넣기 브리지 → Jev 전송 게이트) | 설계·보안 `gpt-6-astra` / high → 구현 `gpt-6-sol` / high | 대기 |
@@ -31,29 +31,47 @@ NEIS 정오표·문항정보표 기반 성취평가 분석과 **추정분할점�
       stash@{0}의 코드·테스트는 `archive/exam-issue-2026-07` (`ed7a27a`)에 xlsx 없이 보존.
 - [x] 2. 이 인계 파일 생성
 - [x] 3. 내보내기 기본값 가명화 (`app/export_privacy.py`, 테스트 `tests/test_export_privacy.py`)
-      - 결과 CSV `학생결과.csv`: 기본 `가명 ID`(학생 001…), 실명은 확인란 + 경고 확인 후에만.
-      - 근거 엑셀: 저장 전 선택 창, 기본 가명, 실명은 확인란 + 경고.
+      - 가명 번호는 분석 자료마다 한 번 무작위로 섞어 매긴다(`_student_pseudonyms`). 같은 분석의 CSV·근거 엑셀·계산기는 같은 가명을 쓴다.
+      - 결과 CSV `학생결과.csv`: 기본 `가명 ID`, 행도 가명 순서. 실명은 확인란 + 경고 확인 후에만.
+      - 근거 엑셀: 저장 전 선택 창, 기본 가명(행도 가명 순서), 실명은 확인란 + 경고.
       - 계산기로 보내는 분석자료(`_build_spliter_evidence_payload`): 항상 가명, 원본 파일은 폴더 없이 파일 이름만.
+        학생 순서는 바꾸지 않는다. 계산기 `Na` 함수가 점수 동률을 입력 순서로 가르므로 순서를 바꾸면 추정값이 달라질 수 있다.
         계산기 화면의 근거 학생 표시와 계산기 '작업 저장' JSON도 가명이 된다. 상담 모드를 켜도 실명이 보이던 문제도 함께 해소.
       - 그래프 PNG: 학생 이름 없음(확인), 화면 그래프 저장 버튼 없음.
       - 포트폴리오: 파일 내보내기 경로 없음. 내부 스냅샷(앱 저장 폴더, 실명)은 과목 간 연결에 필요해 유지 — 후속 결정 필요.
 - [x] 4. CSV 수식 주입 차단 (`= + - @` 탭·CR 시작 값 앞에 `'`). 근거 엑셀도 수식처럼 보이는 문자열을 글자로 저장하도록 보완
       (openpyxl 기본값은 수식 `f`임을 확인). 분할점수 검토표의 기존 방어는 그대로.
-- [x] 5. `.github/workflows/windows-build.yml`: 소스 개인정보 감사 → Node 20 설정 → Python 테스트 → 계산기 웹 테스트 → (빌드) → 빌드 결과 개인정보 감사.
+- [x] 5. `.github/workflows/windows-build.yml`: 소스 개인정보 감사 → Node 22 설정 → Python 테스트 → 계산기 웹 테스트 → (빌드) → 빌드 결과 개인정보 감사.
       - 테스트는 명령마다 단계를 나눴다. GitHub Actions의 `cmd` 단계는 마지막 명령의 종료 코드만 본다.
       - Python 테스트는 `QT_QPA_PLATFORM=offscreen`, `PYTHONIOENCODING=utf-8`. 파일 인코딩 문제를 가리지 않도록 `PYTHONUTF8`은 쓰지 않았다.
       - 소스 감사는 테스트 전에 둔다(테스트가 만드는 `__pycache__`를 감사 스크립트가 차단 경로로 보기 때문).
       - README의 `windows_release_audit.py --source .`는 소스 키트 폴더용이라 `.git`이 있는 체크아웃에서는 실패하므로 CI에 넣지 않았다.
-      - 로컬 확인: YAML 파싱(Python·Ruby) 통과, `git archive HEAD`로 꺼낸 깨끗한 소스에서 소스 감사 통과, Python 73·Node 43 통과.
+      - 로컬 확인: YAML 파싱(시스템 python3의 PyYAML, Ruby) 통과, `git archive HEAD`로 꺼낸 깨끗한 소스에서 소스 감사 통과, Python 73·Node 43 통과.
       - **미검증: 실제 Windows 러너에서의 첫 실행.** push 승인 후 `workflow_dispatch`로 한 번 돌려 봐야 한다.
+        주의: 입력 `checkout_ref` 기본값이 `main`이라 그대로 두면 main을 빌드하고 `missing: docs`로 소스 감사가 실패한다.
 - [x] 6. Windows 실기 검증 체크리스트 작성 (아래). **실행은 사람 작업이며 아직 하지 않음.**
+
+## 독립 검토 결과 (2026-09-24)
+
+- 검토관: 맥락을 공유하지 않은 별도 Claude 서브에이전트, 읽기 전용. 다른 계열(GPT-6-Astra, GPT-5.6-Sol)은 opencodex 경로가 두 번 모두
+  `model_not_found`(404)로 실패해 쓰지 못했다. **같은 계열 검토라는 한계가 있다.**
+- 판정: 조건부 완료. 테스트는 보호 기능 8가지를 각각 끈 변형에서 모두 실패해 의미 있는 검증으로 인정됐다.
+- 반영함: 가명이 명부 순서대로라 학급 열과 합치면 반/번호가 드러나는 문제 → 무작위 가명 + 파일 행 가명 순 정렬.
+  CI 수동 실행의 `checkout_ref` 함정 → 체크리스트 0번에 명시. Node 20(지원 종료) → 22. 인계 파일 문구 정정.
+- 사용자 결정 필요:
+  1. 포트폴리오 스냅샷이 실명으로 앱 저장 폴더(Windows `%APPDATA%`)에 경고 없이 저장된다. 과목 간 연결에 식별자가 필요해 유지했다.
+     선택지: 그대로 두기 / 저장 시 안내 문구 / 학번 해시로 바꾸기(기존 스냅샷 호환 필요).
+  2. 계산기 화면의 근거 학생 표시가 교사 본인 화면에서도 가명이 되었다(상담 모드와 무관). 원래 승인 범위보다 넓은 변경이다.
+- 기록만 함(범위 밖): 1-5등급 컷 '결과 복사'에 제외 학생의 반/번호가 클립보드로 들어간다(파일 아님).
 
 ## 다음 첫 작업
 
-1단계 코드 작업은 끝났다. 독립 검토 결과를 이 파일에 반영한 뒤, 사용자가 다음을 결정한다.
-- push 승인 여부 → 승인되면 CI 첫 실행과 Windows 체크리스트 진행.
-- stash 안 xlsx 4개와 `sample_data/`의 실제 자료 의심 파일 처리 방법.
-- 2단계(예측-실측 보정 리포트) 시작. 추천: `gpt-6-sol` / medium.
+1. **계산기 '작업 저장'·'CSV 내보내기' 버튼이 데스크톱 앱에서 실제로 파일을 남기는지 확인** (가장 먼저).
+   번들은 Blob 다운로드(`va`)를 쓰는데 앱에 `downloadRequested` 처리 코드가 없다. Qt WebEngine은 처리하지 않은 다운로드를 취소하므로
+   교사가 작업을 저장했다고 믿고 잃을 위험이 있다(추측, 실제 화면 미확인). 사용 설명서 2·5장은 이 버튼으로 저장한다고 안내한다.
+   확인되면 `main_window.py`에서 프로필의 `downloadRequested`를 받아 저장 위치를 묻고 `accept()`하는 작은 수정으로 고칠 수 있다.
+2. 사용자 결정: push 승인(→ CI 첫 실행·Windows 체크리스트), 위 '사용자 결정 필요' 2건, stash 안 xlsx 4개와 `sample_data/` 의심 파일 처리.
+3. 2단계(예측-실측 보정 리포트) 시작. 추천: `gpt-6-sol` / medium.
 
 ## 후속 단계로 넘긴 것 (1단계 범위 밖)
 
@@ -69,7 +87,7 @@ QT_QPA_PLATFORM=offscreen .venv/bin/python -m unittest discover -s tests
 node --test tests/test_expected_rate_web.cjs
 ```
 
-1단계 시작 시점 기준: Python 65개, Node 43개 통과. 조건 3·4 이후: Python 73개, Node 43개 통과.
+1단계 시작 시점 기준: Python 65개, Node 43개 통과. 독립 검토 반영 후: Python 75개, Node 43개 통과.
 
 ## 경계 (현재 유효한 사용자 승인)
 
@@ -85,14 +103,17 @@ node --test tests/test_expected_rate_web.cjs
   stash는 push되지 않지만 로컬 git 객체에 남아 있다. 처리 방법은 사용자 결정 필요.
 - `stash@{1}` (2026-06-11): `app/spliter_ox_source/` React 원본(Vite+TS)이 있다. 이후 빌드 JS를 직접 수정해 왔으므로 복구 시 현재 번들과 대조가 필요하다.
 - `sample_data/` (gitignore): `학생답 정오표(1학기 1차)data.xlsx`는 이름에 '샘플'이 없어 실제 자료일 수 있음, 내용 미열람.
-- `archive/exam-issue-2026-07` push 전: 테스트 픽스처의 가짜 경로 `/Users/<로컬 사용자>/Desktop/...`를 일반 이름으로 바꿀 것.
+- `archive/exam-issue-2026-07` push 전: 실제 로컬 사용자명이 든 경로 `/Users/<로컬 사용자>/...`를 일반 이름으로 바꿀 것.
+  위치: `app/main_window.py`(예시 문구), `build_scripts/generate_exam_issue_qa_samples.py`, `distribution/MANUAL_QA_CHECKLIST.md`,
+  `distribution/USER_GUIDE.md`, `tests/test_exam_issue_review_gui_flow.py` 등. 코드·테스트 외에 문서 2개(`MANUAL_QA_CHECKLIST.md`, `QUALITY_AUDIT.md`)도 함께 보관됐다.
 - 원격 `origin`은 GitHub 저장소다(공개 여부 미확인). push 전 개인정보 감사를 먼저 돌린다.
 
 ## Windows 실기 검증 체크리스트 (사람 작업)
 
 에이전트가 Mac에서 대신할 수 없다. Windows PC에서 합성 자료로 확인한다.
 
-0. CI 첫 실행(push 승인 후): GitHub Actions `Build Windows Distribution`을 `workflow_dispatch`로 이 브랜치에 실행.
+0. CI 첫 실행(push 승인 후): GitHub Actions `Build Windows Distribution`을 `workflow_dispatch`로 실행하면서
+   입력 `checkout_ref`에 `work/1.0.3-hardening`을 직접 적는다(기본값 `main`이면 이 브랜치가 아니라 main을 빌드한다).
    소스 감사·Python 테스트·웹 테스트·빌드 감사가 모두 초록인지, 실패하면 어느 단계인지 기록.
 1. 빌드: `python -m PyInstaller --noconfirm --clean goedusplit.spec` 성공, `dist\Goedu-Split\Goedu-Split.exe` 실행. 창 제목의 버전이 1.0.3인지.
 2. 첫 실행: SmartScreen 안내 문구, 한글 폰트, 창 크기 1280x800·1366x768에서 입력 패널 접기.
@@ -121,4 +142,5 @@ node --test tests/test_expected_rate_web.cjs
 - 2026-09-23: 1단계 시작. 조건 1·2 완료.
 - 2026-09-24: 조건 3·4 완료 (한 커밋). 새 테스트 8개, 보호 기능을 끄면 해당 테스트가 실패하는 것도 확인.
 - 2026-09-24: 조건 5 완료 (로컬 확인만, Windows 러너 미실행).
-- 2026-09-24: 조건 6 완료 (체크리스트 작성). 독립 검토 대기.
+- 2026-09-24: 조건 6 완료 (체크리스트 작성).
+- 2026-09-24: 독립 검토(조건부 완료) 반영. 무작위 가명·행 정렬, CI 안내, Node 22. 테스트 Python 75·Node 43 통과.

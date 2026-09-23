@@ -42,7 +42,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
 
       # cmd 단계는 마지막 명령의 결과만 보므로 테스트는 단계를 나눈다.
       - name: Python tests
