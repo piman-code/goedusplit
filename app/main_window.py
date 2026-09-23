@@ -55,7 +55,7 @@ from .expected_rates import (
     write_estimation_workbook,
 )
 from .export_privacy import (
-    REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell,
+    REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, pseudonym_ids,
     pseudonymize_evidence_payload, student_result_table,
 )
 from .perform_loader import load_perform
@@ -9327,7 +9327,14 @@ codex login status</pre>
             "items": evidence_items,
             "students": students,
         }
-        return payload if include_identity else pseudonymize_evidence_payload(payload)
+        return payload if include_identity else pseudonymize_evidence_payload(payload, self._student_pseudonyms())
+
+    def _student_pseudonyms(self) -> list[str]:
+        """분석 자료마다 한 번 섞은 가명. 같은 자료의 CSV·근거 엑셀·계산기가 같은 가명을 쓴다."""
+        cached = getattr(self, "_pseudonym_cache", None)
+        if cached is None or cached[0] is not self.exam or len(cached[1]) != len(self.exam.students):
+            self._pseudonym_cache = (self.exam, pseudonym_ids(len(self.exam.students)))
+        return self._pseudonym_cache[1]
 
     @staticmethod
     def _excel_cell_value(value):
@@ -10516,6 +10523,8 @@ codex login status</pre>
             path += ".xlsx"
 
         payload = self._build_spliter_evidence_payload(include_identity=include_identity)
+        if not include_identity:
+            payload["students"].sort(key=lambda student: student["id"])  # 행 순서로 명부 순서가 드러나지 않게
         students = payload["students"]
         evidence_items = payload["items"]
         select_count = len(self.exam.select_items)
@@ -10568,7 +10577,8 @@ codex login status</pre>
         ov = self.overall
         try:
             self._write_csv(out / "학생결과.csv", *student_result_table(
-                self.exam.students, ov.levels_arr, include_identity=include_identity))
+                self.exam.students, ov.levels_arr, include_identity=include_identity,
+                pseudonyms=None if include_identity else self._student_pseudonyms()))
             self._write_csv(out / "문항분석.csv",
                 ["문항","예상난이도","정답률(%)","변별도",
                  "응답1(%)","응답2(%)","응답3(%)","응답4(%)","응답5(%)","무응답(%)",
