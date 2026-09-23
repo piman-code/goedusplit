@@ -1410,6 +1410,7 @@ class MainWindow(QMainWindow):
                 "pencil_total": round(float(st.total), 2),
                 "perform_score": round(float(st.perform_score), 2),
             })
+        students.sort(key=lambda student: student["student_hash"])  # 목록 순서로 명부 순서가 드러나지 않게
         return {
             "version": 2,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
@@ -2459,22 +2460,26 @@ class MainWindow(QMainWindow):
             target = target.with_suffix(suffix)
         request.setDownloadDirectory(str(target.parent))
         request.setDownloadFileName(target.name)
-        request.isFinishedChanged.connect(lambda: self._on_spliter_download_finished(request))
+        request.isFinishedChanged.connect(lambda: self._on_spliter_download_finished(request, csv_file=suffix == ".csv"))
         request.accept()
 
-    def _on_spliter_download_finished(self, request):
+    def _on_spliter_download_finished(self, request, csv_file: bool | None = None):
         if not request.isFinished():
             return
         target = Path(request.downloadDirectory()) / request.downloadFileName()
         if request.state() != QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
             QMessageBox.warning(self, "계산기 파일 저장", f"저장하지 못했습니다.\n{target}\n{request.interruptReasonString()}")
             return
-        if target.suffix.lower() == ".csv":
+        if csv_file if csv_file is not None else target.suffix.lower() == ".csv":
             try:
                 with open(target, encoding="utf-8", newline="") as f:
                     text = f.read()
-                with open(target, "w", encoding="utf-8", newline="") as f:
+                if not text.startswith("\ufeff"):
+                    text = "\ufeff" + text  # 한글 Excel이 UTF-8로 열도록
+                temp = target.with_name(target.name + ".goedu-tmp")
+                with open(temp, "w", encoding="utf-8", newline="") as f:
                     f.write(sanitize_csv_text(text))
+                os.replace(temp, target)
             except (OSError, UnicodeError, csv.Error) as exc:
                 QMessageBox.warning(self, "계산기 파일 저장", f"저장한 CSV를 점검하지 못했습니다.\n{target}\n{exc}")
                 return
@@ -8552,7 +8557,7 @@ codex login status</pre>
 
         <h2>시험 후 예측-실측 비교</h2>
         <p>시험 후 분석을 실행하고 시험 전 작업을 계산기에 불러온 뒤 <b>자료</b> 메뉴의 <b>예측-실측 비교</b>를 누르면,
-        문항별 A~E 예상정답률과 각 수준 경계 학생(수준 내 하위 1/3)의 실제 정답률을 비교합니다.
+        문항별 A~E 예상정답률과 각 분할점수 위아래로 가장 가까운 경계 학생의 실제 정답률을 비교합니다.
         실제 수준은 이번 분할점수로 나눈 결과이므로 다음 예측을 위한 참고 자료로 보세요.</p>
 
         <h2>내보내기와 학생 정보</h2>
@@ -10588,15 +10593,15 @@ codex login status</pre>
         dialog.setWindowTitle("예측-실측 비교")
         dialog.resize(self._px(1100), self._px(680))
         layout = QVBoxLayout(dialog)
-        counts = " · ".join(f"{lv} {report['counts'][lv]}명(경계 {report['border_counts'][lv]}명)" for lv in LEVELS_AE)
+        counts = " · ".join(f"{lv} 수준 {report['counts'][lv]}명(경계 학생 {report['border_counts'][lv]}명)" for lv in LEVELS_AE)
         intro = QLabel(
-            "실측은 각 성취수준에서 점수가 낮은 1/3 학생(최소능력자에 가까운 경계 학생)의 정답률입니다. "
+            "실측은 각 분할점수 위아래로 가장 가까운 학생(최소능력자에 가까운 경계 학생)의 정답률이며, 위쪽과 아래쪽을 같은 비중으로 평균합니다. "
             "실제 성취수준은 이번 분할점수로 나눈 결과이므로 다음 예측을 위한 참고 자료로 보세요.\n" + counts
         )
         intro.setWordWrap(True)
         intro.setProperty("role", "muted")
         layout.addWidget(intro)
-        notes = summary_lines(report)
+        notes = summary_lines(report) + report["notes"]
         if report["unmatched"]:
             notes.append("분석 자료에서 찾지 못한 예측 문항: " + ", ".join(report["unmatched"]))
         if report["not_designed"]:
