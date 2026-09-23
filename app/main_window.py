@@ -10523,8 +10523,6 @@ codex login status</pre>
             path += ".xlsx"
 
         payload = self._build_spliter_evidence_payload(include_identity=include_identity)
-        if not include_identity:
-            payload["students"].sort(key=lambda student: student["id"])  # 행 순서로 명부 순서가 드러나지 않게
         students = payload["students"]
         evidence_items = payload["items"]
         select_count = len(self.exam.select_items)
