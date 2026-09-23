@@ -58,6 +58,7 @@ from .export_privacy import (
     REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, new_student_hash_key,
     pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash, student_result_table,
 )
+from .calibration import LARGE_GAP, build_calibration, summary_lines, write_calibration_workbook
 from .perform_loader import load_perform
 from . import fonts as font_pack
 from .grade_cut_calculator import (
@@ -2388,6 +2389,7 @@ class MainWindow(QMainWindow):
         data_menu.addAction("분석자료 보내기", self.send_spliter_evidence_to_web)
         data_menu.addAction("문항 구성안", self.suggest_expected_rate_blueprint)
         data_menu.addAction("근거 엑셀", self.export_spliter_evidence)
+        data_menu.addAction("예측-실측 비교", self.show_calibration_report)
         data_menu.addAction("가명 ↔ 실명 확인", self.show_pseudonym_mapping)
         data_menu.addSeparator()
         data_menu.addAction("계산기 새로고침", lambda: self._load_spliter_web(force_recreate=True))
@@ -8548,6 +8550,11 @@ codex login status</pre>
         <p>시험지 PDF/HWP 문항 검토, 오류 후보 탐지와 AI 연결은 후속 버전으로 미룹니다.
         현재 버전은 시험지 자동 반영이나 AI 제공자 연결 화면을 제공하지 않습니다.</p>
 
+        <h2>시험 후 예측-실측 비교</h2>
+        <p>시험 후 분석을 실행하고 시험 전 작업을 계산기에 불러온 뒤 <b>자료</b> 메뉴의 <b>예측-실측 비교</b>를 누르면,
+        문항별 A~E 예상정답률과 각 수준 경계 학생(수준 내 하위 1/3)의 실제 정답률을 비교합니다.
+        실제 수준은 이번 분할점수로 나눈 결과이므로 다음 예측을 위한 참고 자료로 보세요.</p>
+
         <h2>내보내기와 학생 정보</h2>
         <p>결과 CSV, 근거 엑셀, 계산기로 보내는 분석자료는 기본적으로 가명(학생 001…)을 씁니다.
         실명은 저장 창의 <b>실명 포함</b>을 켜고 경고를 확인한 경우에만 들어갑니다.
@@ -10551,6 +10558,112 @@ codex login status</pre>
         buttons.addWidget(btn_close)
         layout.addLayout(buttons)
         dialog.exec()
+
+    def show_calibration_report(self):
+        """시험 후: 계산기에 입력한 예상정답률과 실제 수준별 정답률을 비교한다."""
+        if self.exam is None or self.overall is None:
+            QMessageBox.information(self, "예측-실측 비교", "먼저 시험 후 정오표와 문항정보표로 분석을 실행해 주세요.")
+            return
+        self._fetch_spliter_project(self._on_calibration_project, title="예측-실측 비교")
+
+    def _on_calibration_project(self, project):
+        try:
+            designs = self._neis_design_items_from_spliter_project(project)
+        except ValueError as exc:
+            QMessageBox.warning(self, "예측-실측 비교", str(exc))
+            return
+        if not designs:
+            QMessageBox.information(
+                self, "예측-실측 비교",
+                "계산기에 예측값이 없습니다. 시험 전에 저장한 작업을 '작업 불러오기'로 연 뒤 다시 시도해 주세요.",
+            )
+            return
+        self._show_calibration_dialog(build_calibration(designs, self.exam, list(self.overall.levels_arr)))
+
+    def _show_calibration_dialog(self, report: dict):
+        def pct(value):
+            return "-" if value is None else f"{value:.0f}"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("예측-실측 비교")
+        dialog.resize(self._px(1100), self._px(680))
+        layout = QVBoxLayout(dialog)
+        counts = " · ".join(f"{lv} {report['counts'][lv]}명(경계 {report['border_counts'][lv]}명)" for lv in LEVELS_AE)
+        intro = QLabel(
+            "실측은 각 성취수준에서 점수가 낮은 1/3 학생(최소능력자에 가까운 경계 학생)의 정답률입니다. "
+            "실제 성취수준은 이번 분할점수로 나눈 결과이므로 다음 예측을 위한 참고 자료로 보세요.\n" + counts
+        )
+        intro.setWordWrap(True)
+        intro.setProperty("role", "muted")
+        layout.addWidget(intro)
+        notes = summary_lines(report)
+        if report["unmatched"]:
+            notes.append("분석 자료에서 찾지 못한 예측 문항: " + ", ".join(report["unmatched"]))
+        if report["not_designed"]:
+            notes.append("예측값이 없는 시험 문항: " + ", ".join(report["not_designed"]))
+        summary = QLabel("\n".join(notes))
+        summary.setWordWrap(True)
+        layout.addWidget(summary)
+
+        cut_table = QTableWidget(1, len(report["cuts"]))
+        cut_table.setHorizontalHeaderLabels([c["boundary"] for c in report["cuts"]])
+        cut_table.setVerticalHeaderLabels(["예측 → 실측 (100점 환산)"])
+        for c, cut in enumerate(report["cuts"]):
+            text = pct(cut["predicted_scaled"]) + " → " + pct(cut["actual_scaled"])
+            _set_item(cut_table, 0, c, text)
+        cut_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        cut_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        cut_table.setFixedHeight(cut_table.horizontalHeader().sizeHint().height() + cut_table.rowHeight(0) + 2 * cut_table.frameWidth())
+        cut_table.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(cut_table)
+
+        headers = ["구분", "번호", "난이도", "목표", "배점", *[f"{lv} 예측→실측(차이)" for lv in LEVELS_AE]]
+        table = QTableWidget(len(report["rows"]), len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        for r, row in enumerate(report["rows"]):
+            for c, value in enumerate((row["type"], row["number"], row["difficulty"], row["target"], f"{row['points']:g}")):
+                _set_item(table, r, c, value)
+            for c, lv in enumerate(LEVELS_AE, start=5):
+                diff = row["diff"][lv]
+                text = f"{pct(row['predicted'][lv])}→{pct(row['border'][lv])}"
+                if diff is not None:
+                    text += f" ({diff:+.0f})"
+                item = _set_item(table, r, c, text, tooltip=f"수준 전체 평균 {pct(row['all'][lv])}%")
+                if diff is not None and abs(diff) >= LARGE_GAP:
+                    item.setBackground(QBrush(QColor(255, 225, 200)))
+                    item.setForeground(QBrush(QColor(20, 20, 20)))
+        table.resizeColumnsToContents()
+        for column in range(5, len(headers)):
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_save = QPushButton("엑셀 저장")
+        btn_save.clicked.connect(lambda: self._save_calibration_xlsx(report))
+        btn_close = QPushButton("닫기")
+        btn_close.clicked.connect(dialog.accept)
+        buttons.addWidget(btn_save)
+        buttons.addWidget(btn_close)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _save_calibration_xlsx(self, report: dict):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "예측-실측 비교 저장", str(Path.home() / "Desktop" / "예측-실측_비교.xlsx"), "Excel 통합문서 (*.xlsx)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:
+            write_calibration_workbook(path, report)
+        except Exception as exc:
+            QMessageBox.critical(self, "예측-실측 비교", f"저장하지 못했습니다.\n{exc}")
+            return
+        self.statusBar().showMessage(f"예측-실측 비교를 저장했습니다 · {path}", 8000)
 
     def show_pseudonym_mapping(self):
         """가명과 실제 학생을 화면에만 보여 준다. 파일로 저장하지 않는다."""
