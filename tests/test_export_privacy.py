@@ -136,8 +136,10 @@ class ExportPrivacyHelperTests(unittest.TestCase):
     def test_student_hash_is_keyed_and_hides_identifiers(self):
         key, other = b"k" * 32, b"o" * 32
         value = student_hash(key, "S900", "1/1", "합성학생가")
-        self.assertEqual(value, student_hash(key, " S900 ", "2/9", "다른이름"))  # 학번이 있으면 학번으로 연결
-        self.assertNotEqual(value, student_hash(other, "S900"))
+        self.assertEqual(value, student_hash(key, " S900 ", " 1/1 ", "합성학생가"))
+        # 예전 포트폴리오 키처럼 학번·반/번호·이름이 모두 같아야 같은 학생 (연번 학번 재사용 대비)
+        self.assertNotEqual(value, student_hash(key, "S900", "2/9", "다른이름"))
+        self.assertNotEqual(value, student_hash(other, "S900", "1/1", "합성학생가"))
         self.assertNotIn("S900", value)
         self.assertEqual(len(value), 24)
         self.assertEqual(student_hash(key, "", "1/1", "가"), student_hash(key, None, "1/1", "가"))
@@ -275,6 +277,8 @@ class ExportPrivacyWindowTests(unittest.TestCase):
             for value in ("S900", "1/1", "합성학생가", "HYPERLINK"):
                 self.assertNotIn(value, text)
             self.assertEqual(snapshot["version"], 2)
+            hashes = [student["student_hash"] for student in snapshot["students"]]
+            self.assertEqual(hashes, sorted(hashes))  # 명부 순서가 아니라 해시 순서
             key_hex = window.settings.value("privacy/portfolio_hash_key")
             self.assertEqual(len(bytes.fromhex(key_hex)), 32)
             self.assertEqual(window._portfolio_hash_key().hex(), key_hex)  # 두 번째 호출은 같은 키

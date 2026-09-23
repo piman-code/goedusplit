@@ -10,25 +10,32 @@ try:
 except ModuleNotFoundError:
     MainWindow = None
 
+CUTS = {"A": 80, "B": 60, "C": 50, "D": 20, "E": 10}
+
 
 def _exam():
-    """6 synthetic students: A has 3 (scores 95, 90, 85), C has 3 (70, 65, 60)."""
+    """6 synthetic students. With 6 students, 2 are taken from each side of a cut.
+
+    A cut 80: below [78, 70], above [82, 90]. B cut 60: below [52], above [70].
+    C cut 50: below [48], above [52]. D and E: nobody within 10 points.
+    """
     exam = ExamData(subject="합성")
+    exam.cut_scores = dict(CUTS)
     exam.items = [
         ItemInfo(number=1, item_type="선택형", difficulty="쉬움", score=40.0, answer="1"),
         ItemInfo(number=2, item_type="선택형", difficulty="어려움", score=40.0, answer="2"),
         ItemInfo(number=1, item_type="서답형", difficulty="보통", score=20.0),
     ]
-    data = [  # (final score, item1, item2, serdap score)
-        (95, ".", ".", 20), (90, ".", ".", 16), (85, ".", "3", 10),
-        (70, ".", "3", 10), (65, "2", "3", 8), (60, "2", "3", 0),
+    data = [  # (final score, item1, item2, serdap score out of 20)
+        (90, ".", ".", 20), (82, ".", "3", 16), (78, ".", "3", 12),
+        (70, "2", ".", 10), (52, "2", "3", 4), (48, "2", "3", 0),
     ]
     for i, (score, a1, a2, serdap) in enumerate(data):
         exam.students.append(StudentResponse(
             sid=f"S{i}", class_no=f"합성반{i}", name=f"합성{i}", answers={1: a1, 2: a2},
             serdap_score=serdap, total=score, final_score=score,
         ))
-    return exam, ["A", "A", "A", "C", "C", "C"]
+    return exam, ["A", "A", "B", "B", "C", "미도달"]
 
 
 def _design(kind, number, difficulty, points, rates, item):
@@ -36,64 +43,95 @@ def _design(kind, number, difficulty, points, rates, item):
             "rates": dict(zip("ABCDE", rates)), "source_item": item}
 
 
-class CalibrationTests(unittest.TestCase):
-    def test_borderline_is_lowest_third_of_each_level(self):
-        scores = [95, 90, 85, 70, 65, 60, 50]
-        levels = ["A", "A", "A", "C", "C", "C", "C"]
-        self.assertEqual(borderline_indices(scores, levels), {"A": [2], "C": [6, 5]})
+def _standard_designs(exam):
+    item1, item2, serdap = exam.items
+    return [
+        _design("선택형", 1, "쉬움", 40.0, (90, 80, 70, 60, 50), item1),
+        _design("선택형", 2, "어려움", 40.0, (80, 60, 40, 20, 10), item2),
+        _design("서답형", 1, "보통", 20.0, (70, 60, 50, 40, 30), serdap),
+    ]
 
-    def test_item_rates_diffs_bias_and_cuts(self):
+
+class CalibrationTests(unittest.TestCase):
+    def test_borderline_takes_both_sides_of_each_cut(self):
+        exam, _ = _exam()
+        border = borderline_indices([st.final_score for st in exam.students], CUTS)
+        self.assertEqual(border["A"], [[2, 3], [1, 0]])
+        self.assertEqual(border["B"], [[4], [3]])
+        self.assertEqual(border["C"], [[5], [4]])
+        self.assertNotIn("D", border)
+        # 한쪽에만 학생이 있으면 그쪽만, 동점은 함께 포함
+        self.assertEqual(borderline_indices([55, 52, 52, 30], {"A": 60}), {"A": [[0, 1, 2]]})
+
+    def test_rates_average_both_sides_and_weight_bias_by_points(self):
         exam, levels = _exam()
-        item1, item2, serdap = exam.items
-        designs = [
-            _design("선택형", 1, "쉬움", 40.0, (90, 80, 70, 60, 50), item1),
-            _design("선택형", 2, "어려움", 40.0, (80, 60, 40, 20, 10), item2),
-            _design("서답형", 1, "보통", 20.0, (70, 60, 50, 40, 30), serdap),
-        ]
-        report = build_calibration(designs, exam, levels)
+        report = build_calibration(_standard_designs(exam), exam, levels)
         rows = {(r["type"], r["number"]): r for r in report["rows"]}
         one, two, group = rows[("선택형", "1")], rows[("선택형", "2")], rows[("서답형 묶음", "1")]
-        # A 경계 = 85점 학생(1번 정답, 2번 오답, 서답 10/20), C 경계 = 60점 학생(모두 오답, 서답 0)
-        self.assertEqual((one["border"]["A"], one["border"]["C"]), (100.0, 0.0))
-        self.assertEqual((two["border"]["A"], two["border"]["C"]), (0.0, 0.0))
-        self.assertEqual((group["border"]["A"], group["border"]["C"]), (50.0, 0.0))
-        self.assertAlmostEqual(one["all"]["C"], 100 / 3)
-        self.assertIsNone(one["border"]["B"])
-        self.assertEqual((one["diff"]["A"], two["diff"]["A"], group["diff"]["A"]), (10.0, -80.0, -20.0))
-        self.assertAlmostEqual(report["bias"]["A"], (10 - 80 - 20) / 3)
-        self.assertIsNone(report["bias"]["B"])
-        self.assertEqual(report["large_gaps"], 5)  # A: 2번·서답, C: 1번·2번·서답
+        self.assertEqual([one["border"][lv] for lv in "ABC"], [75.0, 0.0, 0.0])      # A: 아래 50, 위 100
+        self.assertEqual([two["border"][lv] for lv in "ABC"], [50.0, 50.0, 0.0])
+        self.assertAlmostEqual(group["border"]["A"], 72.5)                             # 아래 55, 위 90
+        self.assertAlmostEqual(group["border"]["B"], 35.0)
+        self.assertIsNone(one["border"]["D"])
+        self.assertEqual(one["all"]["A"], 100.0)
+        self.assertEqual((one["diff"]["A"], two["diff"]["A"], group["diff"]["A"]), (-15.0, -30.0, 2.5))
+        self.assertAlmostEqual(report["bias"]["A"], (40 * -15 + 40 * -30 + 20 * 2.5) / 100)
+        self.assertAlmostEqual(report["bias"]["B"], -41.0)
+        self.assertIsNone(report["bias"]["D"])
+        self.assertEqual(report["large_gaps"], 7)  # A: 1·2번, B: 1번·서답, C: 1·2번·서답
         cuts = {c["level"]: c for c in report["cuts"]}
-        self.assertAlmostEqual(cuts["A"]["predicted_scaled"], (40 * 90 + 40 * 80 + 20 * 70) / 100)
-        self.assertAlmostEqual(cuts["A"]["actual_scaled"], (40 * 100 + 40 * 0 + 20 * 50) / 100)
-        self.assertIsNone(cuts["B"]["actual_scaled"])
-        self.assertEqual(report["counts"], {"A": 3, "B": 0, "C": 3, "D": 0, "E": 0})
+        self.assertAlmostEqual(cuts["A"]["predicted_scaled"], 82.0)
+        self.assertAlmostEqual(cuts["A"]["actual_scaled"], 64.5)
+        # 배점 가중 평균 차이 = 분할점수 차이 (모든 문항에 실측이 있을 때)
+        self.assertAlmostEqual(cuts["A"]["actual_scaled"] - cuts["A"]["predicted_scaled"], report["bias"]["A"])
+        self.assertIsNone(cuts["D"]["actual_scaled"])
+        self.assertEqual(report["counts"], {"A": 2, "B": 2, "C": 1, "D": 0, "E": 0})
+        self.assertEqual(report["border_counts"], {"A": 4, "B": 2, "C": 2, "D": 0, "E": 0})
 
-    def test_unmatched_and_undesigned_items_are_listed(self):
+    def test_serdap_group_is_point_weighted_and_needs_every_serdap_item(self):
         exam, levels = _exam()
+        exam.items.append(ItemInfo(number=2, item_type="서답형", difficulty="보통", score=30.0))
+        s1, s2 = exam.items[2], exam.items[3]
+        both = [_design("서답형", 1, "보통", 10.0, (80, 70, 60, 50, 40), s1),
+                _design("서답형", 2, "보통", 30.0, (40, 30, 20, 10, 0), s2)]
+        report = build_calibration(both, exam, levels)
+        self.assertEqual(report["rows"][0]["number"], "1, 2")
+        self.assertAlmostEqual(report["rows"][0]["predicted"]["A"], (10 * 80 + 30 * 40) / 40)
+        self.assertEqual(report["notes"], [])
+
+        partial = build_calibration(both[:1] + [_design("서답형", 9, "보통", 5.0, (1, 1, 1, 1, 1), None)], exam, levels)
+        self.assertEqual(partial["rows"], [])
+        self.assertEqual(partial["unmatched"], ["서답형 9번"])
+        self.assertIn("모든 서답형 문항", partial["notes"][0])
+
+    def test_unmatched_undesigned_and_perform_notes(self):
+        exam, levels = _exam()
+        exam.use_perform, exam.weight_perform = True, 30.0
         designs = [_design("선택형", 1, "쉬움", 40.0, (90, 80, 70, 60, 50), exam.items[0]),
                    _design("선택형", 9, "보통", 10.0, (90, 80, 70, 60, 50), None)]
         report = build_calibration(designs, exam, levels)
         self.assertEqual(report["unmatched"], ["선택형 9번"])
         self.assertEqual(report["not_designed"], ["선택형 2번", "서답형 1번"])
-        self.assertEqual(len(report["rows"]), 1)
+        self.assertTrue(any("수행평가" in note for note in report["notes"]))
 
-    def test_summary_wording_follows_sign(self):
+    def test_summary_wording_follows_sign_and_cautions(self):
         exam, levels = _exam()
-        designs = [_design("선택형", 1, "쉬움", 40.0, (50, 50, 90, 50, 50), exam.items[0])]
-        lines = summary_lines(build_calibration(designs, exam, levels))
-        self.assertIn("50.0%p 낮게", lines[0])   # A 실측 100 vs 예측 50
-        self.assertIn("90.0%p 높게", lines[2])   # C 실측 0 vs 예측 90
-        self.assertIn("학생 수가 적어", lines[0])
-        self.assertIn("비교할 수 없습니다", lines[1])
+        designs = [_design("선택형", 1, "쉬움", 40.0, (10, 60, 40, 30, 20), exam.items[0])]
+        report = build_calibration(designs, exam, levels)
+        lines = summary_lines(report)
+        self.assertIn("65.0%p 낮게", lines[0])   # A 실측 75 vs 예측 10
+        self.assertIn("60.0%p 높게", lines[1])   # B 실측 0 vs 예측 60
+        self.assertIn("경계 학생이 적어", lines[0])
+        self.assertIn("학생이 없어 비교할 수 없습니다", lines[3])
+        report["border_one_sided"] = ["A"]
+        self.assertIn("한쪽에만", summary_lines(report)[0])
 
     def test_workbook_has_no_student_identity(self):
         import openpyxl
         exam, levels = _exam()
-        designs = [_design("선택형", 1, "쉬움", 40.0, (90, 80, 70, 60, 50), exam.items[0])]
         with TemporaryDirectory() as directory:
             path = Path(directory) / "보정.xlsx"
-            write_calibration_workbook(path, build_calibration(designs, exam, levels))
+            write_calibration_workbook(path, build_calibration(_standard_designs(exam), exam, levels))
             book = openpyxl.load_workbook(path)
             try:
                 text = " ".join(str(c.value) for sheet in book for row in sheet.iter_rows() for c in row if c.value is not None)
@@ -103,6 +141,7 @@ class CalibrationTests(unittest.TestCase):
         for student in exam.students:
             self.assertNotIn(student.name, text)
             self.assertNotIn(student.class_no, text)
+            self.assertNotIn(student.sid, text)
 
 
 def _judgment(rate):
@@ -129,7 +168,7 @@ class CalibrationWindowTests(unittest.TestCase):
             window._on_calibration_project(project)
         report = show.call_args.args[0]
         self.assertEqual(report["rows"][0]["predicted"]["A"], 80.0)  # 두 검토안 평균
-        self.assertEqual(report["rows"][0]["border"]["A"], 100.0)
+        self.assertEqual(report["rows"][0]["border"]["A"], 75.0)
         self.assertEqual(report["not_designed"], ["선택형 2번", "서답형 1번"])
 
     def test_empty_calculator_and_missing_analysis_explain_next_step(self):

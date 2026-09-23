@@ -58,7 +58,7 @@ def sanitize_csv_text(text: str) -> str:
 
     Cells read back from CSV are all text, so numbers such as -5 are kept as is.
     """
-    bom = "﻿" if text.startswith("﻿") else ""
+    bom = "\ufeff" if text.startswith("\ufeff") else ""
     body = text[len(bom):]
     newline = "\r\n" if "\r\n" in body else "\n"
     out = io.StringIO()
@@ -76,9 +76,12 @@ def student_hash(key: bytes, sid, class_no="", name="") -> str:
     """Link one student across subject snapshots without storing 학번 or 이름.
 
     Keyed so the small 학번 space cannot be brute-forced from a snapshot alone.
+    Uses the same identity as the old portfolio key (학번 with 반/번호·이름), so a
+    reused or sequential 학번 does not merge different students.
     """
     sid = str(sid or "").strip()
-    source = f"sid:{sid}" if sid else f"class:{str(class_no or '').strip()}|name:{str(name or '').strip()}"
+    rest = f"class:{str(class_no or '').strip()}|name:{str(name or '').strip()}"
+    source = f"sid:{sid}|{rest}" if sid else rest
     return hmac.new(key, source.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
 
 
