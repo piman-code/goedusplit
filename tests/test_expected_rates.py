@@ -83,7 +83,7 @@ class ExpectedRateContractTests(unittest.TestCase):
         items = [design(1, 1, (100, 82.5, 63.25, 40, 12.5)), design(2, 3, (90, 80, 200 / 3, 45, 20)), design(1, 4, (80, 60, 40, 20, 0), "서답형")]
         module = Path(__file__).resolve().parents[1] / "app/spliter_ox_web/expected-rates.js"
         script = "const fs=require('fs'), api=require(process.argv[1]), items=JSON.parse(fs.readFileSync(0,'utf8')); console.log(JSON.stringify({rows:api.rowsFromDesigns(items),summary:api.summarizeDesigns(items)}));"
-        output = subprocess.check_output([shutil.which("node"), "-e", script, str(module)], input=json.dumps(items), text=True)
+        output = subprocess.check_output([shutil.which("node"), "-e", script, str(module)], input=json.dumps(items), text=True, encoding="utf-8")
         actual = json.loads(output)
         self.assertEqual(actual["rows"], build_neis_rows(items))
         expected = summarize_designs(items)
