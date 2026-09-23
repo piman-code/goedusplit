@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -62,7 +63,7 @@ def repair(app_path: Path = APP_PATH) -> bool:
             f"process={process.exists()} resources={resources.exists()}"
         )
 
-    shutil.rmtree(misplaced)
+    subprocess.run(["/usr/bin/trash", str(misplaced)], check=True)
     print("[qtwebengine] macOS QtWebEngine 리소스 위치 보정 완료")
     return True
 
