@@ -9,7 +9,8 @@ from unittest.mock import Mock, patch
 from app.analysis import analyze_items, analyze_overall, build_score_matrix
 from app.data_loader import ExamData, ItemInfo, StudentResponse
 from app.export_privacy import (
-    csv_safe_cell, pseudonym_ids, pseudonymize_evidence_payload, student_result_table,
+    csv_safe_cell, pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash,
+    student_result_table,
 )
 
 # 명부 순서(0,1,2번 학생)와 일부러 다르게 둔 가명
@@ -121,6 +122,26 @@ class ExportPrivacyHelperTests(unittest.TestCase):
         ])
         self.assertEqual(result["sourceFiles"], {"response": "정오표.xlsx", "cuts": "컷.xlsx"})
         self.assertEqual([s["name"] for s in payload["students"]], ["합성학생가", "합성학생나"])
+
+    def test_sanitize_csv_text_escapes_formulas_but_keeps_numbers_bom_and_newlines(self):
+        text = '\ufeff문항,메모,차이\r\n1,"=HYPERLINK(""x"")",-5\r\n2,"+SUM(A1)",3.5\r\n'
+        result = sanitize_csv_text(text)
+        self.assertTrue(result.startswith("\ufeff"))
+        rows = list(csv.reader(result[1:].splitlines()))
+        self.assertEqual(rows[1], ["1", "'=HYPERLINK(\"x\")", "-5"])
+        self.assertEqual(rows[2], ["2", "'+SUM(A1)", "3.5"])
+        self.assertIn("\r\n", result)
+        self.assertEqual(sanitize_csv_text("a,b\n1,2\n"), "a,b\n1,2\n")
+
+    def test_student_hash_is_keyed_and_hides_identifiers(self):
+        key, other = b"k" * 32, b"o" * 32
+        value = student_hash(key, "S900", "1/1", "합성학생가")
+        self.assertEqual(value, student_hash(key, " S900 ", "2/9", "다른이름"))  # 학번이 있으면 학번으로 연결
+        self.assertNotEqual(value, student_hash(other, "S900"))
+        self.assertNotIn("S900", value)
+        self.assertEqual(len(value), 24)
+        self.assertEqual(student_hash(key, "", "1/1", "가"), student_hash(key, None, "1/1", "가"))
+        self.assertNotEqual(student_hash(key, "", "1/1", "가"), student_hash(key, "", "1/2", "가"))
 
 
 @unittest.skipIf(MainWindow is None, f"app.main_window unavailable: {MAIN_WINDOW_IMPORT_ERROR}")
@@ -235,6 +256,61 @@ class ExportPrivacyWindowTests(unittest.TestCase):
                 self.assertTrue(any(cell.value == "합성학생가" for cell in cells))
             finally:
                 workbook.close()
+
+
+    def _portfolio_window(self, directory):
+        from PySide6.QtCore import QSettings
+        window = _window()
+        window.settings = QSettings(str(Path(directory) / "settings.ini"), QSettings.IniFormat)
+        store = Path(directory) / "snapshots"
+        store.mkdir()
+        window._portfolio_store_dir = lambda: store
+        return window, store
+
+    def test_portfolio_snapshot_stores_only_keyed_hash_and_links_legacy_files(self):
+        with TemporaryDirectory() as directory:
+            window, store = self._portfolio_window(directory)
+            snapshot = window._current_subject_snapshot()
+            text = json.dumps(snapshot, ensure_ascii=False)
+            for value in ("S900", "1/1", "합성학생가", "HYPERLINK"):
+                self.assertNotIn(value, text)
+            self.assertEqual(snapshot["version"], 2)
+            key_hex = window.settings.value("privacy/portfolio_hash_key")
+            self.assertEqual(len(bytes.fromhex(key_hex)), 32)
+            self.assertEqual(window._portfolio_hash_key().hex(), key_hex)  # 두 번째 호출은 같은 키
+
+            (store / "new.json").write_text(json.dumps(snapshot, ensure_ascii=False), encoding="utf-8")
+            legacy = {"version": 1, "subject": "예전과목", "students": [
+                {"class_no": "1/1", "sid": "S900", "name": "합성학생가", "level": "B", "final_score": 80}]}
+            (store / "old.json").write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
+
+            rows = window._load_portfolio_rows()
+            first = [row for row in rows if row["subject"] in ("합성과목", "예전과목") and row["class_no"] == "1/1"]
+            self.assertEqual({row["subject"] for row in first}, {"합성과목", "예전과목"})
+            self.assertEqual(len({window._portfolio_student_key(row) for row in first}), 1)
+            self.assertEqual({row["name"] for row in first}, {"합성학생가"})  # 불러온 분석 자료로 화면에서만 복원
+
+            window.exam = None  # 분석 자료가 없으면 이름을 알 수 없다
+            unresolved = [row for row in window._load_portfolio_rows() if row["subject"] == "합성과목"]
+            self.assertTrue(all(row["name"].startswith("학생#") and row["class_no"] == "" for row in unresolved))
+
+    def test_pseudonym_mapping_is_shown_on_screen_only(self):
+        window = _window()
+        with TemporaryDirectory() as directory, \
+             patch("app.main_window.QDialog"), patch("app.main_window.QVBoxLayout"), \
+             patch("app.main_window.QLabel"), patch("app.main_window.QPushButton"), \
+             patch("app.main_window.QTableWidget"), patch("app.main_window._set_item") as set_item, \
+             patch("app.main_window.QFileDialog") as files:
+            before = set(Path(directory).iterdir())
+            window.show_pseudonym_mapping()
+            self.assertEqual(set(Path(directory).iterdir()), before)
+        files.getSaveFileName.assert_not_called()
+        cells = {}
+        for call in set_item.call_args_list:
+            _, r, c, value = call.args
+            cells[(r, c)] = value
+        self.assertEqual([cells[(r, 0)] for r in range(3)], ["학생 001", "학생 002", "학생 003"])
+        self.assertEqual([cells[(r, 3)] for r in range(3)], ["합성학생나", FORMULA_NAME, "합성학생가"])
 
 
 if __name__ == "__main__":

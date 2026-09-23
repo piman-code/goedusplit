@@ -9,8 +9,13 @@ holding the roster.
 from __future__ import annotations
 
 import copy
+import csv
+import hashlib
+import hmac
+import io
 import random
 import re
+import secrets
 
 CSV_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -38,6 +43,43 @@ def csv_safe_cell(value):
     if isinstance(value, str) and value.startswith(CSV_FORMULA_PREFIXES):
         return "'" + value
     return value
+
+
+def _is_number(text: str) -> bool:
+    try:
+        float(text)
+    except ValueError:
+        return False
+    return True
+
+
+def sanitize_csv_text(text: str) -> str:
+    """Escape formula-like cells in CSV text written by the calculator.
+
+    Cells read back from CSV are all text, so numbers such as -5 are kept as is.
+    """
+    bom = "﻿" if text.startswith("﻿") else ""
+    body = text[len(bom):]
+    newline = "\r\n" if "\r\n" in body else "\n"
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator=newline)
+    for row in csv.reader(io.StringIO(body, newline="")):
+        writer.writerow([cell if _is_number(cell) else csv_safe_cell(cell) for cell in row])
+    return bom + out.getvalue()
+
+
+def new_student_hash_key() -> bytes:
+    return secrets.token_bytes(32)
+
+
+def student_hash(key: bytes, sid, class_no="", name="") -> str:
+    """Link one student across subject snapshots without storing 학번 or 이름.
+
+    Keyed so the small 학번 space cannot be brute-forced from a snapshot alone.
+    """
+    sid = str(sid or "").strip()
+    source = f"sid:{sid}" if sid else f"class:{str(class_no or '').strip()}|name:{str(name or '').strip()}"
+    return hmac.new(key, source.encode("utf-8"), hashlib.sha256).hexdigest()[:24]
 
 
 def student_result_table(students, levels, *, include_identity: bool,
