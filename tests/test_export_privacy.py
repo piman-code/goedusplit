@@ -80,6 +80,16 @@ class ExportPrivacyHelperTests(unittest.TestCase):
         self.assertEqual(ids, pseudonym_ids(50, random.Random(7)))
         self.assertEqual(pseudonym_ids(0), [])
 
+    def test_pseudonym_ids_use_system_random_by_default(self):
+        with patch("app.export_privacy.random.SystemRandom") as system_random:
+            pseudonym_ids(3)
+        system_random.assert_called_once_with()
+        system_random.return_value.shuffle.assert_called_once()
+
+    def test_pseudonym_text_order_matches_number_order_past_999(self):
+        ids = pseudonym_ids(1200, random.Random(1))
+        self.assertEqual(sorted(ids), [f"학생 {n:04d}" for n in range(1, 1201)])
+
     def test_student_table_is_pseudonymized_and_sorted_by_pseudonym(self):
         exam = _exam()
         levels = ["A", "C", "E"]
@@ -96,7 +106,7 @@ class ExportPrivacyHelperTests(unittest.TestCase):
         self.assertEqual(headers[:3], ["학번", "반/번호", "이름"])
         self.assertEqual(rows[0][:3], ["S900", "1/1", "합성학생가"])
 
-    def test_evidence_payload_pseudonymized_without_mutating_or_reordering(self):
+    def test_evidence_payload_pseudonymized_sorted_without_mutating_source(self):
         payload = {
             "students": [
                 {"id": "S900", "classNo": "1/1", "gradeClass": "1", "name": "합성학생가", "level": "A"},
@@ -106,11 +116,11 @@ class ExportPrivacyHelperTests(unittest.TestCase):
         }
         result = pseudonymize_evidence_payload(payload, ["학생 002", "학생 001"])
         self.assertEqual(result["students"], [
-            {"id": "학생 002", "classNo": "", "gradeClass": "1", "name": "학생 002", "level": "A"},
             {"id": "학생 001", "classNo": "", "gradeClass": "1", "name": "학생 001", "level": "C"},
+            {"id": "학생 002", "classNo": "", "gradeClass": "1", "name": "학생 002", "level": "A"},
         ])
         self.assertEqual(result["sourceFiles"], {"response": "정오표.xlsx", "cuts": "컷.xlsx"})
-        self.assertEqual(payload["students"][0]["name"], "합성학생가")
+        self.assertEqual([s["name"] for s in payload["students"]], ["합성학생가", "합성학생나"])
 
 
 @unittest.skipIf(MainWindow is None, f"app.main_window unavailable: {MAIN_WINDOW_IMPORT_ERROR}")
@@ -141,13 +151,17 @@ class ExportPrivacyWindowTests(unittest.TestCase):
 
     def test_pseudonyms_stay_fixed_per_analysis_and_renew_for_new_data(self):
         window = _window()
-        first = window._student_pseudonyms()
-        self.assertEqual(first, SHUFFLED)
-        self.assertIs(window._student_pseudonyms(), first)
-        window.exam = _exam()
-        renewed = window._student_pseudonyms()
-        self.assertEqual(sorted(renewed), ["학생 001", "학생 002", "학생 003"])
-        self.assertIs(window._student_pseudonyms(), renewed)
+        with patch("app.main_window.pseudonym_ids", return_value=["학생 002", "학생 003", "학생 001"]) as make:
+            first = window._student_pseudonyms()
+            self.assertEqual(first, SHUFFLED)
+            self.assertIs(window._student_pseudonyms(), first)
+            make.assert_not_called()
+            window.exam = _exam()
+            renewed = window._student_pseudonyms()
+            self.assertIs(window._student_pseudonyms(), renewed)
+        make.assert_called_once_with(3)
+        self.assertEqual(renewed, ["학생 002", "학생 003", "학생 001"])
+        self.assertIs(window._pseudonym_cache[0], window.exam)
 
     def test_real_name_csv_needs_warning_confirmation(self):
         with TemporaryDirectory() as directory:
@@ -169,9 +183,9 @@ class ExportPrivacyWindowTests(unittest.TestCase):
         text = json.dumps(payload, ensure_ascii=False)
         for value in ("S900", "합성학생가", "HYPERLINK", "/Users/", "C:\\\\Users"):
             self.assertNotIn(value, text)
-        # 계산기는 점수 동률을 입력 순서로 가르므로 학생 순서는 그대로, 가명만 CSV와 같은 것을 쓴다.
-        self.assertEqual([s["name"] for s in payload["students"]], SHUFFLED)
-        self.assertEqual([s["finalScore"] for s in payload["students"]], [100.0, 50.0, 0.0])
+        # CSV와 같은 가명, 가명 순서로 정렬, 가명과 점수 짝 유지
+        self.assertEqual([(s["name"], s["finalScore"]) for s in payload["students"]],
+                         [("학생 001", 50.0), ("학생 002", 0.0), ("학생 003", 100.0)])
         self.assertEqual(payload["sourceFiles"]["response"], "정오표.xlsx")
         self.assertEqual(window._build_spliter_evidence_payload(include_identity=True)["students"][0]["name"], "합성학생가")
 
@@ -196,8 +210,10 @@ class ExportPrivacyWindowTests(unittest.TestCase):
                 values = [str(cell.value) for cell in cells if cell.value is not None]
                 for value in ("S900", "합성학생가", "HYPERLINK"):
                     self.assertFalse(any(value in text for text in values), value)
-                student_ids = [row[0] for row in workbook["학생"].iter_rows(min_row=2, values_only=True)]
-                self.assertEqual(student_ids, ["학생 001", "학생 002", "학생 003"])
+                header = [cell.value for cell in workbook["학생"][1]]
+                self.assertEqual(header[5], "환산점수")
+                pairs = [(row[0], row[5]) for row in workbook["학생"].iter_rows(min_row=2, values_only=True)]
+                self.assertEqual(pairs, [("학생 001", 50.0), ("학생 002", 0.0), ("학생 003", 100.0)])
             finally:
                 workbook.close()
 

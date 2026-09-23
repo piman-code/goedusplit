@@ -23,10 +23,14 @@ REAL_IDENTITY_WARNING = (
 
 
 def pseudonym_ids(count: int, rng: random.Random | None = None) -> list[str]:
-    """One pseudonym per student, numbered in shuffled order."""
+    """One pseudonym per student, numbered in shuffled order.
+
+    Zero padding grows with the count so text order matches number order.
+    """
+    width = max(3, len(str(count)))
     numbers = list(range(1, count + 1))
     (rng or random.SystemRandom()).shuffle(numbers)
-    return [f"학생 {number:03d}" for number in numbers]
+    return [f"학생 {number:0{width}d}" for number in numbers]
 
 
 def csv_safe_cell(value):
@@ -61,13 +65,15 @@ def _file_name_only(path) -> str:
 def pseudonymize_evidence_payload(payload: dict, pseudonyms: list[str]) -> dict:
     """Copy of the spliter evidence payload without student identity or local folders.
 
-    Student order is kept: the calculator breaks score ties by input order.
+    Students are sorted by pseudonym so list order does not reveal roster order.
+    The calculator reseeds its sampling on every load, so order carries no meaning there.
     """
     result = copy.deepcopy(payload)
     for index, student in enumerate(result.get("students", [])):
         student["id"] = pseudonyms[index]
         student["name"] = pseudonyms[index]
         student["classNo"] = ""
+    result.get("students", []).sort(key=lambda student: student["id"])
     result["sourceFiles"] = {
         key: _file_name_only(value) for key, value in (result.get("sourceFiles") or {}).items()
     }
