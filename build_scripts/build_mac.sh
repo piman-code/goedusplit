@@ -15,22 +15,27 @@ if [ ! -d ".venv" ]; then
   python3 -m venv .venv
 fi
 
-# shellcheck source=/dev/null
-source .venv/bin/activate
+PY="$(pwd)/.venv/bin/python"
 
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
+"$PY" -m pip install -r requirements.txt
 
-python build_scripts/fetch_fonts.py || true
-python build_scripts/generate_app_icon.py
+"$PY" build_scripts/fetch_fonts.py
+"$PY" build_scripts/generate_app_icon.py
 
-rm -rf build dist
-pyinstaller --noconfirm --clean goedusplit.spec
+if [ -e dist/Goedu-Split.app ] || [ -e dist/Goedu-Split ]; then
+  echo "Existing build found in dist. Move it to a backup location before building."
+  exit 1
+fi
+"$PY" -m unittest discover -s tests -v
+node --test tests/test_expected_rate_web.cjs
+"$PY" -m PyInstaller --noconfirm --clean goedusplit.spec
 
 if [ -f build_scripts/repair_qtwebengine_macos.py ]; then
-  python build_scripts/repair_qtwebengine_macos.py
+  "$PY" build_scripts/repair_qtwebengine_macos.py
 fi
 
-python build_scripts/privacy_release_audit.py dist/Goedu-Split.app
+"$PY" build_scripts/privacy_release_audit.py dist/Goedu-Split.app
+codesign --force --deep --sign - dist/Goedu-Split.app
+codesign --verify --deep --strict dist/Goedu-Split.app
 
 echo "Done: $(pwd)/dist/Goedu-Split.app"

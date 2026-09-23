@@ -1,14 +1,16 @@
 # Goedu-Split
 
-성취평가 결과 분석과 예상정답률 설계를 돕는 Windows 데스크톱 앱입니다.
+성취평가 결과 분석과 예상정답률 설계를 돕는 Windows/macOS 데스크톱 앱입니다.
 
 제작자: 이준서  
-버전: 1.0.1  
+개발 버전: 1.0.3 (배포 전 검증 중)
 © 2026 이준서. All rights reserved.
 
 Goedu-Split은 NEIS 정오표와 문항정보표를 선생님 PC에서 분석하는 로컬 실행형 도구입니다. 학생 성적 자료를 자동으로 서버에 올리지 않습니다.
 
 ## 선생님용 다운로드
+
+아래 다운로드와 SHA256은 기존 1.0.1 배포본 기준입니다. 1.0.3의 변경사항이 포함된 공개 배포를 의미하지 않습니다.
 
 소스코드를 내려받을 필요 없이 완성된 Windows 배포 파일을 받으면 됩니다.
 
@@ -52,13 +54,17 @@ Get-FileHash -Algorithm SHA256 .\Goedu-Split-1.0.1.zip
 주요 기능:
 
 - 문항별 목표 성취수준 설정
-- A/B, B/C, C/D, D/E 전체 예상 분할점수 계산
+- A/B, B/C, C/D, D/E, E/미도달 전체 예상 분할점수 계산
 - NEIS 입력표 생성
-- 시험지 반영표 생성
+- 원점수·100점 환산·NEIS 반올림 결과 비교
 - 문항 구성안과 근거 엑셀 저장
 - 작업 저장/불러오기
 
-상단의 **전체 예상 분할점수**는 체크한 문항만 계산한 값이 아닙니다. 표에 있는 전체 문항의 배점과 A~E 예상정답률을 합산해 계산합니다.
+상단의 **예상 분할점수 · 100점 환산**은 체크한 문항만 계산한 값이 아닙니다. 표에 있는 전체 문항의 배점과 A~E 예상정답률을 합산해 계산합니다. **점수 비교**를 펼치면 원점수와 NEIS 반올림 후 결과를 확인할 수 있습니다.
+
+작은 창에서는 입력 패널이 자동으로 접힙니다. **문항표 / 선택 문항 / 검토안·근거** 보기로 작업하며, 수동으로 접거나 펼친 패널 상태는 창 크기를 바꿔도 유지됩니다. 자료 전달과 문항 구성안은 상단 **자료** 메뉴에 있습니다.
+
+직접 입력한 소수 정답률과 100%를 임의로 보정하지 않습니다. 여러 판단자가 있으면 문항별 예상정답률의 평균을 사용합니다. NEIS 준비표에서는 문항구분·난이도가 같은 문항을 배점 가중평균한 뒤 A~E 모두 가장 가까운 5%로 반올림합니다(중간값은 올림). 원래 계산값과 반올림 후 분할점수를 함께 확인하세요. 이 표는 NEIS 자동 전송이나 공식 확정값을 대신하지 않습니다.
 
 NEIS 입력표를 만들기 전에는 다음을 확인해 주세요.
 
@@ -68,26 +74,15 @@ NEIS 입력표를 만들기 전에는 다음을 확인해 주세요.
 - A~E 예상정답률이 지나치게 낙관적이거나 비관적이지 않은가?
 - 상단 전체 예상 분할점수가 학교에서 예상한 흐름과 크게 어긋나지 않는가?
 
-## Codex CLI 클라우드 AI
+## 이번 버전의 범위
 
-AI 문항 검토에서 **Codex CLI 클라우드 (OAuth)** 를 쓰려면 Windows 터미널 또는 PowerShell에서 한 번 로그인해야 합니다. API Key를 입력하지 않습니다.
-
-```powershell
-winget install OpenJS.NodeJS.LTS
-npm install -g @openai/codex
-where codex
-codex --version
-codex login
-codex login status
-```
-
-`codex login status`가 `Logged in using ChatGPT`로 나오면 Goedu-Split에서 **AI 문항 검토 > AI 설정 > Codex CLI 클라우드 (OAuth) > 연결 테스트**를 누릅니다.
+시험지 PDF/HWP 문항 검토, 오류 후보 탐지, 시험지 자동 반영 및 로컬/클라우드 AI 연결은 후속 버전으로 미룹니다. 현재 화면에서는 해당 진입점을 제공하지 않으며, 기본 분석과 예상정답률 설계에 AI 설치나 로그인이 필요하지 않습니다. 관련 소스는 후속 개발을 위해 남아 있습니다.
 
 ## 보안 원칙
 
 - 기본 분석은 선생님 PC 안에서 실행됩니다.
 - 배포 zip에는 `.git`, `.env`, `.venv`, 실제 학생자료, API Key, 토큰 파일을 포함하지 않도록 점검합니다.
-- AI 문항 검토에서 Codex CLI 클라우드 AI를 사용할 때만 선택한 검토 자료가 Codex CLI를 통해 처리됩니다.
+- 이번 버전의 작업 화면은 AI 제공자를 호출하지 않습니다. 로컬에 저장한 분석·작업·내보내기 파일은 사용자가 별도로 관리해야 합니다.
 - 공유용 자료를 만들 때는 학생 이름, 반/번호 등 개인정보가 필요 이상 포함되지 않았는지 확인해 주세요.
 
 보안 정책은 [SECURITY.md](SECURITY.md)를 참고하세요.
@@ -107,11 +102,12 @@ python run.py
 ```powershell
 python -m py_compile app\main_window.py app\ai_client.py app\data_loader.py
 python -m unittest discover -s tests -v
+node --test tests/test_expected_rate_web.cjs
 python build_scripts\windows_release_audit.py --source .
 python -m PyInstaller --noconfirm --clean goedusplit.spec
 python build_scripts\slim_windows_dist.py dist\Goedu-Split
 python build_scripts\privacy_release_audit.py dist\Goedu-Split
-Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.1.zip -Force
+Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.3.zip
 ```
 
 ## 라이선스와 사용 범위
