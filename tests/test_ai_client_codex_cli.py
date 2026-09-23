@@ -144,10 +144,16 @@ class CodexCliProviderTests(unittest.TestCase):
             )
             return SimpleNamespace(returncode=0, stdout="", stderr="")
 
-        with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "CODEX_API_KEY": "codex-test"}):
-            with patch("app.ai_client.shutil.which", return_value="/opt/homebrew/bin/codex"):
-                with patch("app.ai_client.subprocess.run", side_effect=fake_run):
-                    result = check_codex_cli_oauth(model="gpt-5.5", timeout=60)
+        with tempfile.TemporaryDirectory() as tmp:
+            codex = Path(tmp) / ("codex.exe" if os.name == "nt" else "codex")
+            codex.write_text("", encoding="utf-8")
+            codex.chmod(0o755)
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "CODEX_API_KEY": "codex-test"}):
+                with patch("app.ai_client._codex_cli_path_from_config", return_value=""):
+                    with patch("app.ai_client.CODEX_CLI_EXTRA_PATHS", ()):
+                        with patch("app.ai_client.shutil.which", return_value=str(codex)):
+                            with patch("app.ai_client.subprocess.run", side_effect=fake_run):
+                                result = check_codex_cli_oauth(model="gpt-5.5", timeout=60)
 
         self.assertEqual(result["version"], "codex-cli 0.136.0")
         self.assertEqual(result["status"], "Logged in using ChatGPT")
