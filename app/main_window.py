@@ -55,8 +55,8 @@ from .expected_rates import (
     write_estimation_workbook,
 )
 from .export_privacy import (
-    REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, pseudonym_ids,
-    pseudonymize_evidence_payload, student_result_table,
+    REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, new_student_hash_key,
+    pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash, student_result_table,
 )
 from .perform_loader import load_perform
 from . import fonts as font_pack
@@ -91,9 +91,10 @@ except Exception:
     QWebEngineView = None
 
 try:
-    from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineDownloadRequest
 except Exception:
     QWebEnginePage = None
+    QWebEngineDownloadRequest = None
 
 try:
     from PySide6.QtWebChannel import QWebChannel
@@ -1346,7 +1347,27 @@ class MainWindow(QMainWindow):
     def _portfolio_store_dir(self) -> Path:
         return self._ensure_writable_dir(self._ai_material_root_dir() / "subject_snapshots", "subject_snapshots")
 
+    def _portfolio_hash_key(self) -> bytes:
+        """포트폴리오 학생 해시용 비밀 키. 이 PC의 앱 설정에만 둔다."""
+        try:
+            key = bytes.fromhex(str(self.settings.value("privacy/portfolio_hash_key", "") or ""))
+        except ValueError:
+            key = b""
+        if len(key) != 32:
+            key = new_student_hash_key()
+            self.settings.setValue("privacy/portfolio_hash_key", key.hex())
+        return key
+
+    def _current_identity_by_hash(self) -> dict[str, tuple[str, str]]:
+        """지금 불러온 분석 자료로 해시만 저장된 스냅샷의 반/번호·이름을 화면에서만 되찾는다."""
+        if self.exam is None:
+            return {}
+        key = self._portfolio_hash_key()
+        return {student_hash(key, st.sid, st.class_no, st.name): (st.class_no, st.name) for st in self.exam.students}
+
     def _portfolio_student_key(self, row: dict) -> str:
+        if row.get("student_hash"):
+            return f"hash:{row['student_hash']}"
         sid = str(row.get("sid", "") or "").strip()
         class_no = str(row.get("class_no", "") or "").strip()
         name = str(row.get("name", "") or "").strip()
@@ -1374,13 +1395,12 @@ class MainWindow(QMainWindow):
         if self.exam is None or self.overall is None:
             return None
         grade9_labels, grade5_labels = self._current_relative_grades()
+        key = self._portfolio_hash_key()
         students = []
         for idx, st in enumerate(self.exam.students):
             level = self.overall.levels_arr[idx] if idx < len(self.overall.levels_arr) else grade_level(st.final_score, self.exam.cut_scores)
             students.append({
-                "class_no": st.class_no,
-                "sid": st.sid,
-                "name": st.name,
+                "student_hash": student_hash(key, st.sid, st.class_no, st.name),
                 "level": level,
                 "grade9": grade9_labels[idx] if idx < len(grade9_labels) else "",
                 "grade5": grade5_labels[idx] if idx < len(grade5_labels) else "",
@@ -1390,7 +1410,7 @@ class MainWindow(QMainWindow):
                 "perform_score": round(float(st.perform_score), 2),
             })
         return {
-            "version": 1,
+            "version": 2,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "subject": self.exam.subject or "(과목 미상)",
             "grade": self.exam.grade,
@@ -1420,6 +1440,8 @@ class MainWindow(QMainWindow):
 
     def _load_portfolio_rows(self) -> list[dict]:
         store = self._portfolio_store_dir()
+        key = self._portfolio_hash_key()
+        identities = self._current_identity_by_hash()
         rows = []
         for path in sorted(store.glob("*.json"), reverse=True):
             try:
@@ -1430,13 +1452,19 @@ class MainWindow(QMainWindow):
             subject = str(data.get("subject", ""))
             term = " ".join(part for part in [str(data.get("semester", "")), str(data.get("grade", ""))] if part)
             for student in data.get("students", []):
+                hashed = str(student.get("student_hash", "") or "")
+                if hashed:  # version 2: 학번·이름 없이 해시만 저장
+                    class_no, name = identities.get(hashed, ("", f"학생#{hashed[:6]}"))
+                else:  # version 1: 예전 실명 스냅샷도 같은 해시로 연결
+                    class_no, name = str(student.get("class_no", "")), str(student.get("name", ""))
+                    hashed = student_hash(key, student.get("sid", ""), class_no, name)
                 rows.append({
                     "saved_at": saved_at,
                     "subject": subject,
                     "term": term,
-                    "class_no": str(student.get("class_no", "")),
-                    "sid": str(student.get("sid", "")),
-                    "name": str(student.get("name", "")),
+                    "student_hash": hashed,
+                    "class_no": class_no,
+                    "name": name,
                     "level": str(student.get("level", "")),
                     "grade9": str(student.get("grade9", "")),
                     "grade5": str(student.get("grade5", "")),
@@ -2360,6 +2388,7 @@ class MainWindow(QMainWindow):
         data_menu.addAction("분석자료 보내기", self.send_spliter_evidence_to_web)
         data_menu.addAction("문항 구성안", self.suggest_expected_rate_blueprint)
         data_menu.addAction("근거 엑셀", self.export_spliter_evidence)
+        data_menu.addAction("가명 ↔ 실명 확인", self.show_pseudonym_mapping)
         data_menu.addSeparator()
         data_menu.addAction("계산기 새로고침", lambda: self._load_spliter_web(force_recreate=True))
         btn_data = QPushButton("자료")
@@ -2399,9 +2428,55 @@ class MainWindow(QMainWindow):
             self._spliter_load_signal_connected = False
         if QWebEnginePage is not None:
             self.spliter_view.setPage(QWebEnginePage(self.spliter_view))
+        self._connect_spliter_downloads()
         self._install_spliter_web_bridge()
         self.spliter_view.loadFinished.connect(self._on_spliter_loaded)
         self._spliter_load_signal_connected = True
+
+    def _connect_spliter_downloads(self):
+        """계산기의 작업 저장·CSV 내보내기는 브라우저식 다운로드라, 받아 주지 않으면 Qt가 조용히 취소한다."""
+        profile = self.spliter_view.page().profile()
+        if profile.property("goeduDownloadsConnected"):
+            return
+        profile.downloadRequested.connect(self._on_spliter_download_requested)
+        profile.setProperty("goeduDownloadsConnected", True)
+
+    def _on_spliter_download_requested(self, request):
+        if self.spliter_view is None or request.page() is not self.spliter_view.page():
+            request.cancel()
+            return
+        name = re.sub(r'[\\/:*?"<>|]+', "_", request.downloadFileName() or "").strip() or "goedu-split-download"
+        suffix = Path(name).suffix.lower()
+        file_filter = {".json": "작업 파일 (*.json)", ".csv": "CSV (*.csv)"}.get(suffix, "모든 파일 (*.*)")
+        path, _ = QFileDialog.getSaveFileName(self, "계산기 파일 저장", str(Path.home() / "Desktop" / name), file_filter)
+        if not path:
+            request.cancel()
+            return
+        target = Path(path)
+        if suffix and not target.suffix:
+            target = target.with_suffix(suffix)
+        request.setDownloadDirectory(str(target.parent))
+        request.setDownloadFileName(target.name)
+        request.isFinishedChanged.connect(lambda: self._on_spliter_download_finished(request))
+        request.accept()
+
+    def _on_spliter_download_finished(self, request):
+        if not request.isFinished():
+            return
+        target = Path(request.downloadDirectory()) / request.downloadFileName()
+        if request.state() != QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+            QMessageBox.warning(self, "계산기 파일 저장", f"저장하지 못했습니다.\n{target}\n{request.interruptReasonString()}")
+            return
+        if target.suffix.lower() == ".csv":
+            try:
+                with open(target, encoding="utf-8", newline="") as f:
+                    text = f.read()
+                with open(target, "w", encoding="utf-8", newline="") as f:
+                    f.write(sanitize_csv_text(text))
+            except (OSError, UnicodeError, csv.Error) as exc:
+                QMessageBox.warning(self, "계산기 파일 저장", f"저장한 CSV를 점검하지 못했습니다.\n{target}\n{exc}")
+                return
+        self.statusBar().showMessage(f"계산기 파일을 저장했습니다 · {target}", 8000)
 
     def _on_main_tab_changed(self, _index: int):
         if not hasattr(self, "tabs") or not hasattr(self, "tab_spliter"):
@@ -8476,7 +8551,9 @@ codex login status</pre>
         <h2>내보내기와 학생 정보</h2>
         <p>결과 CSV, 근거 엑셀, 계산기로 보내는 분석자료는 기본적으로 가명(학생 001…)을 씁니다.
         실명은 저장 창의 <b>실명 포함</b>을 켜고 경고를 확인한 경우에만 들어갑니다.
-        가명은 익명이 아니므로 가명 파일도 성적 자료로 관리하세요.</p>
+        가명은 익명이 아니므로 가명 파일도 성적 자료로 관리하세요.
+        가명과 실제 학생은 예상정답률 탭 <b>자료</b> 메뉴의 <b>가명 ↔ 실명 확인</b>에서 화면으로만 볼 수 있습니다.
+        학생 포트폴리오 스냅샷에는 실명 대신 이 PC의 비밀 키로 만든 학번 해시만 저장합니다.</p>
 
         <h2>단축키와 조작</h2>
         <ul>
@@ -10473,6 +10550,34 @@ codex login status</pre>
         btn_close.clicked.connect(dialog.reject)
         buttons.addWidget(btn_close)
         layout.addLayout(buttons)
+        dialog.exec()
+
+    def show_pseudonym_mapping(self):
+        """가명과 실제 학생을 화면에만 보여 준다. 파일로 저장하지 않는다."""
+        if self.exam is None or not self.exam.students:
+            QMessageBox.information(self, "가명 ↔ 실명 확인", "먼저 분석을 실행해 주세요.")
+            return
+        rows = sorted(zip(self._student_pseudonyms(), self.exam.students), key=lambda pair: pair[0])
+        dialog = QDialog(self)
+        dialog.setWindowTitle("가명 ↔ 실명 확인")
+        layout = QVBoxLayout(dialog)
+        note = QLabel("현재 분석의 가명과 실제 학생입니다. 화면에만 표시하며 파일로 저장하지 않습니다. "
+                      "다른 사람이 볼 수 없는 곳에서 확인하세요.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        table = QTableWidget(len(rows), 4)
+        table.setHorizontalHeaderLabels(["가명", "학급", "반/번호", "이름"])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        for r, (pseudonym, st) in enumerate(rows):
+            for c, value in enumerate((pseudonym, st.grade_class, st.class_no, st.name)):
+                _set_item(table, r, c, value, align_left=c == 3)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+        btn_close = QPushButton("닫기")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close, 0, Qt.AlignRight)
+        dialog.resize(520, 560)
         dialog.exec()
 
     def _confirm_real_identity_export(self, title: str) -> bool:
