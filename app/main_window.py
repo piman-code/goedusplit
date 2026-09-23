@@ -54,6 +54,10 @@ from .expected_rates import (
     build_neis_rows, normalize_rates, summarize_designs, validate_design_items,
     write_estimation_workbook,
 )
+from .export_privacy import (
+    REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell,
+    pseudonymize_evidence_payload, student_result_table,
+)
 from .perform_loader import load_perform
 from . import fonts as font_pack
 from .grade_cut_calculator import (
@@ -8469,6 +8473,11 @@ codex login status</pre>
         <p>시험지 PDF/HWP 문항 검토, 오류 후보 탐지와 AI 연결은 후속 버전으로 미룹니다.
         현재 버전은 시험지 자동 반영이나 AI 제공자 연결 화면을 제공하지 않습니다.</p>
 
+        <h2>내보내기와 학생 정보</h2>
+        <p>결과 CSV, 근거 엑셀, 계산기로 보내는 분석자료는 기본적으로 가명(학생 001…)을 씁니다.
+        실명은 저장 창의 <b>실명 포함</b>을 켜고 경고를 확인한 경우에만 들어갑니다.
+        가명은 익명이 아니므로 가명 파일도 성적 자료로 관리하세요.</p>
+
         <h2>단축키와 조작</h2>
         <ul>
           <li><code>Ctrl+R</code>: 분석 실행</li>
@@ -9190,7 +9199,7 @@ codex login status</pre>
         self.canvas_std.set_figure(charts.fig_standard_attainment(rows))
 
     # ---------------------------------------------------------- 내보내기
-    def _build_spliter_evidence_payload(self):
+    def _build_spliter_evidence_payload(self, include_identity: bool = False):
         select_items = sorted(self.exam.select_items, key=lambda it: it.number)
         serdap_items = sorted(self.exam.serdap_items, key=lambda it: it.number)
         serdap_max_total = sum(float(it.score) for it in serdap_items)
@@ -9318,7 +9327,7 @@ codex login status</pre>
             "items": evidence_items,
             "students": students,
         }
-        return payload
+        return payload if include_identity else pseudonymize_evidence_payload(payload)
 
     @staticmethod
     def _excel_cell_value(value):
@@ -9340,6 +9349,9 @@ codex login status</pre>
 
         def append(ws_, row):
             ws_.append([self._excel_cell_value(value) for value in row])
+            for cell in ws_[ws_.max_row]:
+                if cell.data_type == "f":  # 수식처럼 보이는 문자열도 글자로 저장
+                    cell.data_type = "s"
 
         append(ws, ["항목", "값"])
         append(ws, ["내보낸 시각", payload.get("exportedAt", "")])
@@ -10456,9 +10468,36 @@ codex login status</pre>
         layout.addLayout(buttons)
         dialog.exec()
 
+    def _confirm_real_identity_export(self, title: str) -> bool:
+        answer = QMessageBox.warning(
+            self, title, REAL_IDENTITY_WARNING,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def _ask_evidence_identity_mode(self) -> bool | None:
+        """True=실명 포함, False=가명, None=취소."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle("예상정답률 근거 엑셀")
+        msg.setText("학생은 기본적으로 가명(학생 001, 학생 002…)으로 저장합니다.")
+        msg.setStandardButtons(QMessageBox.Save | QMessageBox.Cancel)
+        msg.setDefaultButton(QMessageBox.Save)
+        chk_real = QCheckBox(REAL_IDENTITY_CHECKBOX_TEXT)
+        msg.setCheckBox(chk_real)
+        if msg.exec() != QMessageBox.Save:
+            return None
+        if not chk_real.isChecked():
+            return False
+        return True if self._confirm_real_identity_export("예상정답률 근거 엑셀") else None
+
     def export_spliter_evidence(self):
         if self.exam is None or self.overall is None:
             QMessageBox.warning(self, "예상정답률 계산기", "먼저 분석을 실행해 주세요.")
+            return
+
+        include_identity = self._ask_evidence_identity_mode()
+        if include_identity is None:
             return
 
         safe_subject = "".join(
@@ -10476,7 +10515,7 @@ codex login status</pre>
         if not path.lower().endswith(".xlsx"):
             path += ".xlsx"
 
-        payload = self._build_spliter_evidence_payload()
+        payload = self._build_spliter_evidence_payload(include_identity=include_identity)
         students = payload["students"]
         evidence_items = payload["items"]
         select_count = len(self.exam.select_items)
@@ -10515,20 +10554,21 @@ codex login status</pre>
         msg.button(QMessageBox.Yes).setText("CSV + 그래프 PNG")
         msg.button(QMessageBox.No).setText("CSV만")
         msg.button(QMessageBox.Cancel).setText("취소")
+        chk_real = QCheckBox(REAL_IDENTITY_CHECKBOX_TEXT)
+        msg.setCheckBox(chk_real)
         ans = msg.exec()
         if ans == QMessageBox.Cancel:
             return
         with_graphs = (ans == QMessageBox.Yes)
+        include_identity = chk_real.isChecked()
+        if include_identity and not self._confirm_real_identity_export("내보내기"):
+            return
 
         out = Path(directory)
         ov = self.overall
         try:
-            self._write_csv(out / "학생결과.csv",
-                ["학번","반/번호","이름","학급","선택형","서답형","기타","지필총점","수행환산","환산점수","성취도"],
-                [[s.sid, s.class_no, s.name, s.grade_class, s.multi_score, s.serdap_score,
-                  s.etc_score, round(s.total,2), round(s.perform_score,2),
-                  round(s.final_score,2), ov.levels_arr[i]]
-                 for i, s in enumerate(self.exam.students)])
+            self._write_csv(out / "학생결과.csv", *student_result_table(
+                self.exam.students, ov.levels_arr, include_identity=include_identity))
             self._write_csv(out / "문항분석.csv",
                 ["문항","예상난이도","정답률(%)","변별도",
                  "응답1(%)","응답2(%)","응답3(%)","응답4(%)","응답5(%)","무응답(%)",
@@ -10584,8 +10624,9 @@ codex login status</pre>
                 saved_pngs.append("07_성취기준별_정답률.png")
 
             extra = f"\n그래프 {len(saved_pngs)}장 → 그래프/ 폴더" if saved_pngs else ""
+            identity = "학생 실명 포함" if include_identity else "학생은 가명 ID로 저장"
             QMessageBox.information(self, "완료",
-                                    f"CSV 4개{extra}\n저장 위치: {out}")
+                                    f"CSV 4개{extra}\n{identity}\n저장 위치: {out}")
         except Exception as e:
             QMessageBox.critical(self, "오류", f"{e}")
 
@@ -10593,8 +10634,8 @@ codex login status</pre>
     def _write_csv(path: Path, headers, rows):
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(headers)
-            w.writerows(rows)
+            w.writerow([csv_safe_cell(value) for value in headers])
+            w.writerows([csv_safe_cell(value) for value in row] for row in rows)
 
 
 def run():
