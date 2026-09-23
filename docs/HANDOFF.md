@@ -3,7 +3,7 @@
 어느 플랫폼(Codex, Claude Code, Kilo 등)이든 이 파일과 git 기록만으로 이어서 작업할 수 있게 유지한다.
 완료 조건 하나를 끝낼 때마다 **테스트 → 이 파일 갱신 → 로컬 커밋** 순서로 남긴다. 끝에 몰아서 쓰지 않는다.
 
-- 마지막 갱신: 2026-09-24 KST (사용자 결정 반영, 계산기 저장 버튼 수정)
+- 마지막 갱신: 2026-09-24 KST (CI 통과)
 - 작업 브랜치: `work/1.0.3-hardening`
 - 마지막 체크포인트 커밋: 이 파일을 마지막으로 바꾼 커밋 (`git log -1 -- docs/HANDOFF.md`로 확인)
 
@@ -16,7 +16,7 @@ NEIS 정오표·문항정보표 기반 성취평가 분석과 **추정분할점�
 
 | 단계 | 내용 | 추천 모델 / 강도 | 상태 |
 |---|---|---|---|
-| 1 | 작업 보존, 내보내기 가명화, CSV 수식 차단, CI 테스트, 이 인계 파일 | Claude Code `claude-opus-5-5` 또는 Codex `gpt-6-sol` / high | 조건부 완료, Windows·CI 미검증 |
+| 1 | 작업 보존, 내보내기 가명화, CSV 수식 차단, CI 테스트, 이 인계 파일 | Claude Code `claude-opus-5-5` 또는 Codex `gpt-6-sol` / high | 완료, CI 통과, Windows 실기 미검증 |
 | 2 | 예측-실측 보정 리포트 (교사 예상정답률 vs 실제 수준별 정답률) | `gpt-6-sol` / medium | 대기 |
 | 3 | 시험지(HWP/HWPX/PDF)에서 문항 번호·배점·유형만 로컬 추출 (kordoc 동봉) | `gpt-6-sol` / high, 패키징 설계만 `gpt-6-astra` / high | 대기 |
 | 4 | 선택형 온라인 검토 모듈 (로컬 규칙 점검 → 복사-붙여넣기 브리지 → Jev 전송 게이트) | 설계·보안 `gpt-6-astra` / high → 구현 `gpt-6-sol` / high | 대기 |
@@ -89,8 +89,8 @@ NEIS 정오표·문항정보표 기반 성취평가 분석과 **추정분할점�
 
 ## 다음 첫 작업
 
-1. CI 첫 실행: GitHub Actions에서 `checkout_ref`에 `work/1.0.3-hardening`을 적고 수동 실행 → 결과를 이 파일에 기록.
-2. Windows 실기 체크리스트(아래) 진행.
+1. CI는 통과했다(아래 작업 기록). 다음은 CI 아티팩트 zip을 Windows PC에서 받아 실기 체크리스트(아래 1~8번) 진행.
+2. 실기 결과를 이 파일에 기록. 문제가 있으면 재현 후 최소 수정.
 3. 바탕화면 `goedusplit-확인필요-자료/` 파일은 **실제 학생 자료**로 확인됨(2026-09-24 사용자). 사용자가 직접 테스트할 때까지 그대로 둔다.
    에이전트는 이 폴더와 stash 안 xlsx를 열거나 옮기거나 지우지 않는다. stash는 push 대상이 아니다.
 4. 2단계(예측-실측 보정 리포트) 시작. 추천: `gpt-6-sol` / medium.
@@ -172,3 +172,5 @@ node --test tests/test_expected_rate_web.cjs
 - 2026-09-24: CI 1차(run 35884119567) 실패 — 소스 감사 통과, Python 테스트 83/85. 둘 다 테스트 쪽 문제:
   node 출력을 인코딩 지정 없이 읽어 Windows cp1252에서 한글 해석 실패, Codex 테스트가 실제 `/opt/homebrew/bin/codex` 존재에 의존.
   테스트를 고치고 재실행(결과는 아래 줄에 기록).
+- 2026-09-24: CI 2차(run 35884627716, 커밋 7cb912a) **전 단계 성공**. Windows에서 Python 85·Node 43 통과(건너뜀 0),
+  소스·빌드 결과 개인정보 감사 통과, `Goedu-Split-1.0.3-windows.zip`과 `-setup.exe` 생성(아티팩트 약 432MB, 14일 보관).
