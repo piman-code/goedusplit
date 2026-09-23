@@ -34,6 +34,28 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt
 
+      # 테스트가 __pycache__를 만들기 전에 소스를 검사한다.
+      - name: Privacy audit (source)
+        shell: cmd
+        run: python build_scripts\privacy_release_audit.py app tests build_scripts distribution docs README.md SECURITY.md
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # cmd 단계는 마지막 명령의 결과만 보므로 테스트는 단계를 나눈다.
+      - name: Python tests
+        shell: cmd
+        env:
+          QT_QPA_PLATFORM: offscreen
+          PYTHONIOENCODING: utf-8
+        run: python -m unittest discover -s tests -v
+
+      - name: Calculator web tests
+        shell: cmd
+        run: node --test tests/test_expected_rate_web.cjs
+
       - name: Prepare fonts and icons
         shell: cmd
         run: |
@@ -46,6 +68,10 @@ jobs:
           if exist build rmdir /s /q build
           if exist dist rmdir /s /q dist
           pyinstaller --noconfirm --clean goedusplit.spec
+
+      - name: Privacy audit (built app)
+        shell: cmd
+        run: python build_scripts\privacy_release_audit.py dist\Goedu-Split
 
       - name: Pack portable zip
         shell: cmd
