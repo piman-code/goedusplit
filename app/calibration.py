@@ -6,8 +6,11 @@ the students nearest the cut score, the same number from each side. A group take
 inside the level (e.g. its lowest third) sits above the cut and would make
 accurate estimates look too low. The level-wide mean is kept as a reference.
 
-Actual levels come from the cut scores applied in this analysis, so the
-comparison is a reference for the next estimate, not a check of this one.
+The overall level of the estimates cannot be checked this way: students at a
+cut score score about that cut on average, so summed over all items their
+rates reproduce the applied cut. The level-wide difference therefore shows
+"estimated cut vs applied cut". What the data does show is which items and
+difficulties were over- or under-estimated relative to the rest (``relative``).
 """
 
 from __future__ import annotations
@@ -118,15 +121,23 @@ def build_calibration(designs: list[dict], exam, levels: list[str]) -> dict:
     designed = {(d["type"], int(d["number"])) for d in designs}
     not_designed = [f"{it.item_type} {it.number}번" for it in exam.items if (it.item_type, int(it.number)) not in designed]
 
+    offset = {lv: _weighted_mean((row["points"], row["diff"][lv]) for row in rows) for lv in LEVELS}
+    for row in rows:
+        row["relative"] = {
+            lv: None if row["diff"][lv] is None or offset[lv] is None else row["diff"][lv] - offset[lv] for lv in LEVELS
+        }
+
     total = math.fsum(row["points"] for row in rows)
     cuts = []
     for level, boundary in zip(LEVELS, BOUNDARIES):
         predicted = math.fsum(row["points"] * row["predicted"][level] / 100 for row in rows)
         usable = all(row["border"][level] is not None for row in rows) and bool(rows)
         actual = math.fsum(row["points"] * row["border"][level] / 100 for row in rows) if usable else None
+        applied = exam.cut_scores.get(level)
         cuts.append({
             "boundary": boundary, "level": level,
             "predicted_scaled": predicted / total * 100 if total else None,
+            "applied": None if applied is None else float(applied),
             "actual_scaled": actual / total * 100 if (usable and total) else None,
         })
     counts = {lv: sum(1 for x in levels if x == lv) for lv in LEVELS}
@@ -138,12 +149,15 @@ def build_calibration(designs: list[dict], exam, levels: list[str]) -> dict:
         "border_counts": {lv: sum(len(side) for side in border.get(lv, [])) for lv in LEVELS},
         "border_one_sided": [lv for lv in LEVELS if len(border.get(lv, [])) == 1],
         "notes": notes,
-        "bias": {lv: _weighted_mean((row["points"], row["diff"][lv]) for row in rows) for lv in LEVELS},
-        "bias_by_difficulty": {
-            diff: {lv: _weighted_mean((row["points"], row["diff"][lv]) for row in rows if row["difficulty"] == diff) for lv in LEVELS}
+        "offset": offset,
+        "relative_by_difficulty": {
+            diff: {
+                "items": sum(1 for row in rows if row["difficulty"] == diff),
+                "levels": {lv: _weighted_mean((row["points"], row["relative"][lv]) for row in rows if row["difficulty"] == diff) for lv in LEVELS},
+            }
             for diff in ("쉬움", "보통", "어려움") if any(row["difficulty"] == diff for row in rows)
         },
-        "large_gaps": sum(1 for row in rows for lv in LEVELS if row["diff"][lv] is not None and abs(row["diff"][lv]) >= LARGE_GAP),
+        "large_gaps": sum(1 for row in rows for lv in LEVELS if row["relative"][lv] is not None and abs(row["relative"][lv]) >= LARGE_GAP),
         "cuts": cuts,
         "total_points": total,
     }
@@ -158,23 +172,69 @@ def _row(kind, number, difficulty, target, points, predicted, actual) -> dict:
     }
 
 
+def _direction(value: float) -> str:
+    return "높게" if value < 0 else "낮게"
+
+
 def summary_lines(report: dict) -> list[str]:
+    """What the teacher should read first: relative misses by difficulty, then cautions."""
     lines = []
-    for level in LEVELS:
-        bias = report["bias"][level]
-        n = report["border_counts"][level]
-        if bias is None:
-            lines.append(f"{level}: 분할점수 가까이에 학생이 없어 비교할 수 없습니다.")
+    for diff, data in report["relative_by_difficulty"].items():
+        values = [(lv, v) for lv, v in data["levels"].items() if v is not None]
+        if not values:
             continue
-        direction = "높게" if bias < 0 else "낮게"
-        caution = " (경계 학생이 적어 참고만)" if n < FEW_STUDENTS else ""
-        if level in report.get("border_one_sided", []):
-            caution += " (분할점수 한쪽에만 학생이 있어 참고만)"
-        if abs(bias) < 2.5:
-            lines.append(f"{level}: 예측과 실측이 평균 {abs(bias):.1f}%p 안쪽으로 가깝습니다{caution}.")
+        mean = math.fsum(v for _, v in values) / len(values)
+        detail = ", ".join(f"{lv} {v:+.0f}" for lv, v in values)
+        if abs(mean) < 2.5:
+            lines.append(f"{diff} 문항({data['items']}개): 다른 문항과 비슷하게 예측했습니다 (경계별 실측-예측 상대차 {detail}).")
         else:
-            lines.append(f"{level}: 경계 학생의 실제 정답률보다 평균 {abs(bias):.1f}%p {direction} 예측했습니다{caution}.")
+            lines.append(f"{diff} 문항({data['items']}개): 다른 문항보다 경계 학생 정답률을 평균 {abs(mean):.1f}%p {_direction(mean)} 예측했습니다 ({detail}).")
+    if report["large_gaps"]:
+        lines.append(f"다른 문항보다 {LARGE_GAP:.0f}%p 이상 빗나간 칸이 {report['large_gaps']}개 있습니다(표에서 색 표시).")
+    for level, boundary in zip(LEVELS, BOUNDARIES):
+        if report["offset"][level] is None:
+            lines.append(f"{boundary}: 분할점수 가까이에 학생이 없어 비교할 수 없습니다.")
+            continue
+        cautions = []
+        if report["border_counts"][level] < FEW_STUDENTS:
+            cautions.append("경계 학생이 적음")
+        if level in report.get("border_one_sided", []):
+            cautions.append("분할점수 한쪽에만 학생이 있음")
+        if cautions:
+            lines.append(f"{boundary}: {', '.join(cautions)} — 참고만 하세요.")
     return lines
+
+
+def cut_lines(report: dict) -> list[str]:
+    """The level-wide difference is the estimated cut against the applied cut, not estimate quality."""
+    lines = []
+    for cut in report["cuts"]:
+        if cut["predicted_scaled"] is None or cut["applied"] is None:
+            continue
+        gap = cut["predicted_scaled"] - cut["applied"]
+        if abs(gap) >= 0.5:
+            lines.append(f"{cut['boundary']}: 검토안으로 계산한 분할점수 {cut['predicted_scaled']:.1f}점, 이번에 적용한 분할점수 {cut['applied']:.1f}점.")
+    return lines
+
+
+def suggest_presets(report: dict, current: dict[str, dict], min_items: int = 2) -> dict[str, dict]:
+    """Next exam's default rates per target level, from this exam's borderline students.
+
+    For every target level with at least ``min_items`` selection items, the
+    suggestion is the mean borderline rate of those items at each boundary.
+    Cells without data keep the current value.
+    """
+    result = {}
+    for target in LEVELS:
+        rows = [row for row in report["rows"] if row["type"] == "선택형" and row["target"] == target]
+        suggested = None
+        if len(rows) >= min_items:
+            suggested = {}
+            for level in LEVELS:
+                values = [row["border"][level] for row in rows if row["border"][level] is not None]
+                suggested[level] = math.floor(math.fsum(values) / len(values) + 0.5) if values else current[target][level]
+        result[target] = {"items": len(rows), "current": dict(current[target]), "suggested": suggested}
+    return result
 
 
 def write_calibration_workbook(path: str | Path, report: dict) -> None:
@@ -184,20 +244,16 @@ def write_calibration_workbook(path: str | Path, report: dict) -> None:
     workbook = openpyxl.Workbook()
     summary = workbook.active
     summary.title = "요약"
-    summary.append(["예측-실측 보정 리포트. 실측 = 각 분할점수 위아래로 가장 가까운 학생(경계 학생)의 정답률. 차이는 배점 가중 평균."])
+    summary.append(["예측-실측 보정 리포트. 실측 = 각 분할점수 위아래로 가장 가까운 학생(경계 학생)의 정답률."])
+    summary.append(["상대차 = 문항의 실측-예측에서 그 경계의 배점 가중 평균 차이를 뺀 값. 문항끼리의 예측 정확도를 봅니다."])
     summary.append(["학생 이름·학번은 들어가지 않지만, 경계 학생이 적은 수준의 값은 소수 학생의 결과이므로 공유에 주의하세요."])
-    summary.append(["실제 성취수준은 이번 분석의 분할점수로 나눈 결과라, 다음 예측을 위한 참고 자료입니다."])
     summary.append([])
-    summary.append(["수준", "수준 학생 수", "경계 학생 수", "평균 차이(실측-예측, %p)"])
-    for level in LEVELS:
-        summary.append([level, report["counts"][level], report["border_counts"][level], report["bias"][level]])
+    summary.append(["경계", "수준 학생 수", "경계 학생 수", "검토안 분할점수", "적용 분할점수", "경계 학생 실측 분할점수"])
+    for level, cut in zip(LEVELS, report["cuts"]):
+        summary.append([cut["boundary"], report["counts"][level], report["border_counts"][level],
+                        cut["predicted_scaled"], cut["applied"], cut["actual_scaled"]])
     summary.append([])
-    summary.append(["경계", "예측 100점 환산", "실측 100점 환산", "차이"])
-    for cut in report["cuts"]:
-        diff = None if cut["actual_scaled"] is None else cut["actual_scaled"] - cut["predicted_scaled"]
-        summary.append([cut["boundary"], cut["predicted_scaled"], cut["actual_scaled"], diff])
-    summary.append([])
-    for line in summary_lines(report) + report["notes"]:
+    for line in summary_lines(report) + cut_lines(report) + report["notes"]:
         summary.append([line])
     if report["unmatched"]:
         summary.append(["분석 자료에서 찾지 못한 예측 문항: " + ", ".join(report["unmatched"])])
@@ -207,12 +263,12 @@ def write_calibration_workbook(path: str | Path, report: dict) -> None:
     items = workbook.create_sheet("문항별")
     headers = ["구분", "번호", "난이도", "목표수준", "배점"]
     for level in LEVELS:
-        headers += [f"{level} 예측", f"{level} 실측(경계)", f"{level} 차이", f"{level} 수준 평균"]
+        headers += [f"{level} 예측", f"{level} 실측(경계)", f"{level} 차이", f"{level} 상대차", f"{level} 수준 평균"]
     items.append(headers)
     for row in report["rows"]:
         values = [row["type"], row["number"], row["difficulty"], row["target"], row["points"]]
         for level in LEVELS:
-            values += [row["predicted"][level], row["border"][level], row["diff"][level], row["all"][level]]
+            values += [row["predicted"][level], row["border"][level], row["diff"][level], row["relative"][level], row["all"][level]]
         items.append(values)
     for sheet in workbook:
         for cells in sheet.iter_rows():

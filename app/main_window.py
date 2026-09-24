@@ -54,11 +54,14 @@ from .expected_rates import (
     build_neis_rows, normalize_rates, summarize_designs, validate_design_items,
     write_estimation_workbook,
 )
+from .exam_structure import ExamReadError, designs_from_structure, extract_exam_text, parse_exam_structure
 from .export_privacy import (
     REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, new_student_hash_key,
     pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash, student_result_table,
 )
-from .calibration import LARGE_GAP, build_calibration, summary_lines, write_calibration_workbook
+from .calibration import (
+    LARGE_GAP, build_calibration, cut_lines, suggest_presets, summary_lines, write_calibration_workbook,
+)
 from .perform_loader import load_perform
 from . import fonts as font_pack
 from .grade_cut_calculator import (
@@ -2388,6 +2391,7 @@ class MainWindow(QMainWindow):
 
         data_menu = QMenu(self.spliter_toolbar)
         data_menu.addAction("분석자료 보내기", self.send_spliter_evidence_to_web)
+        data_menu.addAction("시험지에서 문항 가져오기", self.import_exam_structure)
         data_menu.addAction("문항 구성안", self.suggest_expected_rate_blueprint)
         data_menu.addAction("근거 엑셀", self.export_spliter_evidence)
         data_menu.addAction("예측-실측 비교", self.show_calibration_report)
@@ -8552,13 +8556,18 @@ codex login status</pre>
         두 기능은 모두 “최소능력자가 어느 정도 수행할 수 있는가”를 숫자로 옮기는 같은 구조입니다.</p>
 
         <h2>이번 버전의 범위</h2>
-        <p>시험지 PDF/HWP 문항 검토, 오류 후보 탐지와 AI 연결은 후속 버전으로 미룹니다.
-        현재 버전은 시험지 자동 반영이나 AI 제공자 연결 화면을 제공하지 않습니다.</p>
+        <p>시험지 문항 오류 검토, 오류 후보 탐지와 AI 연결은 후속 버전으로 미룹니다.
+        현재 버전은 시험지에서 문항 번호·유형·배점만 읽으며, AI 제공자 연결 화면을 제공하지 않습니다.</p>
+
+        <h2>시험지에서 문항 가져오기</h2>
+        <p><b>자료</b> 메뉴의 <b>시험지에서 문항 가져오기</b>는 HWP·HWPX·PDF 시험지에서 문항 번호·유형·배점만 이 PC 안에서 읽어
+        계산기 문항 초안을 만듭니다. HWP는 kordoc이 설치된 PC에서 인터넷 연결을 막고 읽습니다. 보내기 전에 미리보기에서 배점을 확인하세요.</p>
 
         <h2>시험 후 예측-실측 비교</h2>
         <p>시험 후 분석을 실행하고 시험 전 작업을 계산기에 불러온 뒤 <b>자료</b> 메뉴의 <b>예측-실측 비교</b>를 누르면,
         문항별 A~E 예상정답률과 각 분할점수 위아래로 가장 가까운 경계 학생의 실제 정답률을 비교합니다.
-        실제 수준은 이번 분할점수로 나눈 결과이므로 다음 예측을 위한 참고 자료로 보세요.</p>
+        수준 전체의 높낮이는 적용한 분할점수에 묶이므로, 문항끼리의 상대차로 높게·낮게 예측한 문항을 봅니다.
+        <b>다음 시험 기준표 제안</b>으로 목표수준별 기본 예상정답률을 고칠 수 있습니다.</p>
 
         <h2>내보내기와 학생 정보</h2>
         <p>결과 CSV, 근거 엑셀, 계산기로 보내는 분석자료는 기본적으로 가명(학생 001…)을 씁니다.
@@ -10181,8 +10190,19 @@ codex login status</pre>
         if not self._spliter_loaded:
             QMessageBox.information(self, title, "예상정답률 계산기 탭을 먼저 연 뒤 다시 시도해 주세요.")
             return
-        script = "window.__GOEDUSPLIT_GET_PROJECT__ ? window.__GOEDUSPLIT_GET_PROJECT__() : null"
-        self.spliter_view.page().runJavaScript(script, callback)
+        # Qt hands JavaScript objects back as '' in some PySide6 builds, so send JSON text and parse it here.
+        script = "JSON.stringify(window.__GOEDUSPLIT_GET_PROJECT__ ? window.__GOEDUSPLIT_GET_PROJECT__() : null)"
+        self.spliter_view.page().runJavaScript(script, lambda raw: callback(self._parse_spliter_project(raw)))
+
+    @staticmethod
+    def _parse_spliter_project(raw):
+        if isinstance(raw, dict):
+            return raw
+        try:
+            project = json.loads(raw) if isinstance(raw, str) and raw else None
+        except ValueError:
+            return None
+        return project if isinstance(project, dict) else None
 
     def _rate_from_spliter_judgment(self, judgment) -> float | None:
         if not isinstance(judgment, dict):
@@ -10564,6 +10584,110 @@ codex login status</pre>
         layout.addLayout(buttons)
         dialog.exec()
 
+    def import_exam_structure(self):
+        """시험지(HWP/HWPX/PDF)에서 문항 번호·유형·배점만 이 PC 안에서 읽어 계산기 문항 초안을 만든다."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "시험지 불러오기", str(Path.home() / "Desktop"),
+            "시험지 (*.hwp *.hwpx *.pdf *.txt);;모든 파일 (*.*)",
+        )
+        if not path:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            text, how = extract_exam_text(path)
+        except ExamReadError as exc:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, "시험지 불러오기", str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+        self._show_exam_structure_dialog(parse_exam_structure(text), how, Path(path).name)
+
+    def _show_exam_structure_dialog(self, result: dict, how: str, file_name: str):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("시험지에서 문항 가져오기")
+        dialog.resize(self._px(900), self._px(600))
+        layout = QVBoxLayout(dialog)
+        items = result["items"]
+        counts = {kind: sum(1 for item in items if item["type"] == kind) for kind in ("선택형", "서답형")}
+        head = QLabel(
+            f"{file_name} · {how} · 선택형 {counts['선택형']}문항, 서답형 {counts['서답형']}문항 · 배점 합계 {result['total_points']:g}점<br>"
+            "시험지 내용은 이 PC 안에서만 읽고, 문항 번호·유형·배점만 씁니다. 표의 <b>배점</b>은 고칠 수 있고, 빼려는 문항은 체크를 끄세요. "
+            "계산기로 보내면 난이도 '보통', 목표수준 C와 현재 기준표의 기본 예상정답률로 채웁니다."
+        )
+        head.setWordWrap(True)
+        layout.addWidget(head)
+        if result["warnings"]:
+            warn = QLabel("\n".join("⚠ " + line for line in result["warnings"]))
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+        table = QTableWidget(len(items), 6)
+        table.setHorizontalHeaderLabels(["포함", "구분", "번호", "배점", "보기 수", "확인할 점 · 첫 줄"])
+        table.verticalHeader().setVisible(False)
+        for r, item in enumerate(items):
+            include = QTableWidgetItem()
+            include.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            include.setCheckState(Qt.Checked)
+            table.setItem(r, 0, include)
+            for c, value in ((1, item["type"]), (2, str(item["number"])), (4, str(item["choices"]))):
+                cell = _set_item(table, r, c, value)
+                cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
+            points = QTableWidgetItem("" if item["points"] is None else f"{item['points']:g}")
+            points.setTextAlignment(Qt.AlignCenter)
+            table.setItem(r, 3, points)
+            note = _set_item(table, r, 5, " / ".join(item["flags"] + [item["preview"]]), align_left=True)
+            note.setFlags(note.flags() & ~Qt.ItemIsEditable)
+            if item["flags"]:
+                note.setBackground(QBrush(QColor(255, 225, 200)))
+                note.setForeground(QBrush(QColor(20, 20, 20)))
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        def send():
+            rows = []
+            for r, item in enumerate(items):
+                if table.item(r, 0).checkState() != Qt.Checked:
+                    continue
+                raw = table.item(r, 3).text().strip()
+                try:
+                    points = float(raw) if raw else None
+                except ValueError:
+                    points = None
+                rows.append({"type": item["type"], "number": item["number"], "points": points})
+            if not rows:
+                QMessageBox.information(dialog, "시험지에서 문항 가져오기", "보낼 문항을 하나 이상 고르세요.")
+                return
+            try:
+                designs = designs_from_structure(rows, self._target_level_rates("C", "보통"))
+                project = self._project_from_neis_targets(designs)
+            except ValueError as exc:
+                QMessageBox.warning(dialog, "시험지에서 문항 가져오기", str(exc))
+                return
+            answer = QMessageBox.question(
+                dialog, "시험지에서 문항 가져오기",
+                f"계산기의 현재 작업을 이 시험지의 {len(designs)}문항으로 바꿉니다. 지금 작업이 필요하면 먼저 '작업 저장'을 하세요. 계속할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            self._spliter_pending_project_payload = project
+            if self.exam is not None and self.overall is not None:
+                self._spliter_pending_payload = self._build_spliter_evidence_payload()
+            self._activate_spliter_tab_for_pending_payloads()
+            self.statusBar().showMessage(f"시험지의 {len(designs)}문항을 예상정답률 계산기로 보냈습니다.", 8000)
+            dialog.accept()
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_send = QPushButton("계산기로 보내기")
+        btn_send.clicked.connect(send)
+        btn_cancel = QPushButton("취소")
+        btn_cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(btn_send)
+        buttons.addWidget(btn_cancel)
+        layout.addLayout(buttons)
+        dialog.exec()
+
     def show_calibration_report(self):
         """시험 후: 계산기에 입력한 예상정답률과 실제 수준별 정답률을 비교한다."""
         if self.exam is None or self.overall is None:
@@ -10591,17 +10715,20 @@ codex login status</pre>
 
         dialog = QDialog(self)
         dialog.setWindowTitle("예측-실측 비교")
-        dialog.resize(self._px(1100), self._px(680))
+        dialog.resize(self._px(1100), self._px(700))
         layout = QVBoxLayout(dialog)
-        counts = " · ".join(f"{lv} 수준 {report['counts'][lv]}명(경계 학생 {report['border_counts'][lv]}명)" for lv in LEVELS_AE)
+        counts = " · ".join(
+            f"{cut['boundary']} 경계 학생 {report['border_counts'][cut['level']]}명" for cut in report["cuts"]
+        )
         intro = QLabel(
-            "실측은 각 분할점수 위아래로 가장 가까운 학생(최소능력자에 가까운 경계 학생)의 정답률이며, 위쪽과 아래쪽을 같은 비중으로 평균합니다. "
-            "실제 성취수준은 이번 분할점수로 나눈 결과이므로 다음 예측을 위한 참고 자료로 보세요.\n" + counts
+            "실측은 각 분할점수 위아래로 가장 가까운 학생(최소능력자에 가까운 경계 학생)의 정답률입니다. "
+            "분할점수 근처 학생은 평균적으로 그 분할점수만큼 득점하므로, 수준 전체의 높낮이는 적용한 분할점수에 묶여 확인할 수 없습니다. "
+            "이 비교는 <b>문항끼리의 상대차</b>(그 경계의 평균 차이를 뺀 값)로 어떤 문항·난이도를 높게 또는 낮게 예측했는지 봅니다.<br>" + counts
         )
         intro.setWordWrap(True)
         intro.setProperty("role", "muted")
         layout.addWidget(intro)
-        notes = summary_lines(report) + report["notes"]
+        notes = summary_lines(report) + cut_lines(report) + report["notes"]
         if report["unmatched"]:
             notes.append("분석 자료에서 찾지 못한 예측 문항: " + ", ".join(report["unmatched"]))
         if report["not_designed"]:
@@ -10610,19 +10737,24 @@ codex login status</pre>
         summary.setWordWrap(True)
         layout.addWidget(summary)
 
-        cut_table = QTableWidget(1, len(report["cuts"]))
+        cut_table = QTableWidget(3, len(report["cuts"]))
         cut_table.setHorizontalHeaderLabels([c["boundary"] for c in report["cuts"]])
-        cut_table.setVerticalHeaderLabels(["예측 → 실측 (100점 환산)"])
+        cut_table.setVerticalHeaderLabels(["검토안 분할점수", "적용 분할점수", "경계 학생 실측"])
         for c, cut in enumerate(report["cuts"]):
-            text = pct(cut["predicted_scaled"]) + " → " + pct(cut["actual_scaled"])
-            _set_item(cut_table, 0, c, text)
+            for r, key in enumerate(("predicted_scaled", "applied", "actual_scaled")):
+                value = cut[key]
+                _set_item(cut_table, r, c, "-" if value is None else f"{value:.1f}")
         cut_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         cut_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
-        cut_table.setFixedHeight(cut_table.horizontalHeader().sizeHint().height() + cut_table.rowHeight(0) + 2 * cut_table.frameWidth())
+        cut_table.resizeRowsToContents()
+        cut_table.setFixedHeight(
+            cut_table.horizontalHeader().sizeHint().height()
+            + sum(cut_table.rowHeight(r) for r in range(3)) + 2 * cut_table.frameWidth()
+        )
         cut_table.setFocusPolicy(Qt.NoFocus)
         layout.addWidget(cut_table)
 
-        headers = ["구분", "번호", "난이도", "목표", "배점", *[f"{lv} 예측→실측(차이)" for lv in LEVELS_AE]]
+        headers = ["구분", "번호", "난이도", "목표", "배점", *[f"{lv} 예측→실측(상대차)" for lv in LEVELS_AE]]
         table = QTableWidget(len(report["rows"]), len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -10631,12 +10763,13 @@ codex login status</pre>
             for c, value in enumerate((row["type"], row["number"], row["difficulty"], row["target"], f"{row['points']:g}")):
                 _set_item(table, r, c, value)
             for c, lv in enumerate(LEVELS_AE, start=5):
-                diff = row["diff"][lv]
+                relative = row["relative"][lv]
                 text = f"{pct(row['predicted'][lv])}→{pct(row['border'][lv])}"
-                if diff is not None:
-                    text += f" ({diff:+.0f})"
-                item = _set_item(table, r, c, text, tooltip=f"수준 전체 평균 {pct(row['all'][lv])}%")
-                if diff is not None and abs(diff) >= LARGE_GAP:
+                if relative is not None:
+                    text += f" ({relative:+.0f})"
+                tip = f"실측-예측 {pct(row['diff'][lv])}%p · 수준 전체 평균 {pct(row['all'][lv])}%"
+                item = _set_item(table, r, c, text, tooltip=tip)
+                if relative is not None and abs(relative) >= LARGE_GAP:
                     item.setBackground(QBrush(QColor(255, 225, 200)))
                     item.setForeground(QBrush(QColor(20, 20, 20)))
         table.resizeColumnsToContents()
@@ -10646,14 +10779,99 @@ codex login status</pre>
 
         buttons = QHBoxLayout()
         buttons.addStretch(1)
+        btn_presets = QPushButton("다음 시험 기준표 제안")
+        btn_presets.setToolTip("목표수준별로 이번 경계 학생의 실제 정답률을 평균해 기본 예상정답률 기준표를 제안합니다.")
+        btn_presets.clicked.connect(lambda: self._show_preset_suggestion_dialog(report))
         btn_save = QPushButton("엑셀 저장")
         btn_save.clicked.connect(lambda: self._save_calibration_xlsx(report))
         btn_close = QPushButton("닫기")
         btn_close.clicked.connect(dialog.accept)
-        buttons.addWidget(btn_save)
-        buttons.addWidget(btn_close)
+        for button in (btn_presets, btn_save, btn_close):
+            buttons.addWidget(button)
         layout.addLayout(buttons)
         dialog.exec()
+
+    def _show_preset_suggestion_dialog(self, report: dict):
+        current = self._load_target_rate_presets()
+        suggestion = suggest_presets(report, current)
+        for target, entry in suggestion.items():
+            if entry["suggested"]:  # 저장할 때와 같은 규칙으로 정리한 값을 보여 준다
+                entry["raw"] = entry["suggested"]
+                entry["suggested"] = self._normalize_target_rate_presets({target: entry["suggested"]})[target]
+        if not any(entry["suggested"] for entry in suggestion.values()):
+            QMessageBox.information(
+                self, "다음 시험 기준표 제안",
+                "목표수준마다 선택형 문항이 2개 이상 있어야 제안할 수 있습니다. 계산기에서 문항별 목표수준을 확인해 주세요.",
+            )
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("다음 시험 기준표 제안")
+        dialog.resize(self._px(820), self._px(420))
+        layout = QVBoxLayout(dialog)
+        note = QLabel(
+            "같은 목표수준 문항들에서 이번 경계 학생이 실제로 맞힌 비율의 평균을, 기준표 규칙(A≥B≥C≥D≥E, 목표수준 학생 2/3 이상)으로 "
+            "정리한 값입니다. 규칙 때문에 바뀐 칸은 마우스를 올리면 원래 평균이 보입니다. 적용할 행만 고르세요. 이번 시험 작업 표는 바꾸지 않습니다. "
+            "한 번의 시험 결과이므로 교과협의를 거쳐 조정하세요."
+        )
+        note.setWordWrap(True)
+        note.setProperty("role", "muted")
+        layout.addWidget(note)
+        table = QTableWidget(len(LEVELS_AE), len(LEVELS_AE) + 3)
+        table.setHorizontalHeaderLabels(["적용", "목표수준", "문항 수", *[f"{lv} 현재→제안" for lv in LEVELS_AE]])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        checks = {}
+        for r, target in enumerate(LEVELS_AE):
+            entry = suggestion[target]
+            check = QTableWidgetItem()
+            if entry["suggested"]:
+                check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                check.setCheckState(Qt.Checked)
+            else:
+                check.setFlags(Qt.NoItemFlags)
+                check.setToolTip("문항이 2개 미만이라 제안하지 않습니다.")
+            table.setItem(r, 0, check)
+            checks[target] = check
+            _set_item(table, r, 1, target)
+            _set_item(table, r, 2, str(entry["items"]))
+            for c, lv in enumerate(LEVELS_AE, start=3):
+                now = entry["current"][lv]
+                text = f"{now}" if not entry["suggested"] else f"{now}→{entry['suggested'][lv]}"
+                raw = entry.get("raw", {}).get(lv)
+                adjusted = entry["suggested"] and raw is not None and raw != entry["suggested"][lv]
+                item = _set_item(table, r, c, text + (" *" if adjusted else ""),
+                                 tooltip=f"실제 평균 {raw}% → 규칙으로 정리" if adjusted else None)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        def apply():
+            chosen = [t for t in LEVELS_AE if suggestion[t]["suggested"] and checks[t].checkState() == Qt.Checked]
+            if not chosen:
+                QMessageBox.information(dialog, "다음 시험 기준표 제안", "적용할 행을 하나 이상 골라 주세요.")
+                return
+            self._apply_preset_suggestion(suggestion, chosen)
+            dialog.accept()
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_apply = QPushButton("고른 행을 기준표에 적용")
+        btn_apply.clicked.connect(apply)
+        btn_cancel = QPushButton("취소")
+        btn_cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(btn_apply)
+        buttons.addWidget(btn_cancel)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _apply_preset_suggestion(self, suggestion: dict, chosen: list[str]):
+        """Replace only the chosen target rows; the current exam's table is left as is."""
+        merged = {target: dict(suggestion[target]["current"]) for target in LEVELS_AE}
+        for target in chosen:
+            if suggestion[target]["suggested"]:
+                merged[target] = dict(suggestion[target]["suggested"])
+        self._save_target_rate_presets(merged)
+        self._send_spliter_teacher_presets(apply_current=False)
+        self.statusBar().showMessage(f"{TARGET_RATE_PRESET_TITLE}에 {', '.join(chosen)} 목표수준 제안을 적용했습니다.", 8000)
 
     def _save_calibration_xlsx(self, report: dict):
         path, _ = QFileDialog.getSaveFileName(
