@@ -30,13 +30,15 @@ _SERDAP_HEADER = re.compile(  # "[서답형 1]", "서술형 2.", "[서답형 1-2
     rf"^\s*[\[\(<【〈《]?\s*(?:{_SERDAP_WORDS})\s*[-–]?\s*(\d{{1,2}})(?:\s*번)?(?:\s*[-–]\s*(\d{{1,2}}))?(?!\d)(?!\s*[~∼]\s*\d)"
 )
 _SELECT_HEADER = re.compile(r"^\s*(?:문항?\s*)?(?:\[\s*(\d{1,2})\s*\]|(\d{1,2})\s*번?\s*([.)．]))")
-_POINTS = re.compile(
-    r"[\[\(〔［<〈【]\s*(?:배점\s*[:：]?\s*)?(\d{1,2}(?:\.\d{1,2})?)\s*점\s*[\]\)〕］>〉】]"
-    r"|배점\s*[:：]?\s*(\d{1,2}(?:\.\d{1,2})?)"
-    r"|(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)\s*점\s*$"
+_POINTS = re.compile(  # "[3점]", "(3.5점)", "<4점>", "【3점】", "[배점 3점]", "배점: 4"
+    r"[\[\(〔［<〈【]\s*(?:배점\s*[:：]?\s*)?(\d{1,2}(?:\.\d{1,2})?)(?![\d.])\s*점\s*[\]\)〕］>〉】]"
+    r"|배점\s*[:：]?\s*(\d{1,2}(?:\.\d{1,2})?)(?![\d.])"
 )
+_BARE_POINTS = re.compile(r"(?<![\d.])(\d{1,2}(?:\.\d{1,2})?)\s*점\s*$")  # "… 4점" at a line end: weaker
 _PAREN_CHOICES = [f"({k})" for k in range(1, 6)]
-_DECLARED = re.compile(r"(선택형|서답형|서술형|논술형)\s*(?:\d{1,2}\s*[~∼\-–]\s*)?(\d{1,2})\s*(?:번|문항)")
+_DECLARED = re.compile(  # "선택형 1~20번", "서답형 2문항" on the cover
+    r"(선택형|서답형|서술형|논술형)\s*(?:\d{1,2}\s*[~∼\-–]\s*(\d{1,2})\s*번|(\d{1,2})\s*문항)"
+)
 _MAX_SKIP = 2  # a header may skip at most this many numbers (e.g. a lost line in a PDF)
 
 
@@ -111,24 +113,51 @@ def _read_pdf(path: Path) -> str:
         raise ExamReadError("PDF를 열지 못했습니다. 손상되었거나 암호가 걸린 파일인지 확인하세요.") from exc
 
 
+KORDOC_TIMEOUT = 90
+
+
+def _kill_process_tree(process: subprocess.Popen) -> None:
+    """kordoc.cmd starts node under cmd.exe; killing only cmd.exe leaves node holding the pipes."""
+    if sys.platform.startswith("win"):
+        subprocess.run(["taskkill", "/T", "/F", "/PID", str(process.pid)], capture_output=True, check=False)
+    else:
+        try:
+            os.killpg(process.pid, 9)
+        except OSError:
+            process.kill()
+
+
 def _read_with_kordoc(path: Path, kordoc: str) -> str:
     # On Windows kordoc.cmd runs through cmd.exe, which would interpret & | % and similar
     # characters in a file name. Hand it a copy under a fixed, safe name instead.
-    with tempfile.TemporaryDirectory(prefix="goedu-exam-") as folder:
+    with tempfile.TemporaryDirectory(prefix="goedu-exam-", ignore_cleanup_errors=True) as folder:
         safe = Path(folder) / ("input" + path.suffix.lower())
         if sys.platform.startswith("win") and _WINDOWS_SHELL_CHARS & set(str(safe)):
             raise ExamReadError("임시 폴더 경로에 특수문자가 있어 kordoc을 안전하게 실행할 수 없습니다. HWPX나 PDF로 저장해 불러오세요.")
         try:
             shutil.copyfile(path, safe)
-            completed = subprocess.run(
-                [kordoc, str(safe), "--silent"], capture_output=True, text=True, encoding="utf-8",
-                errors="replace", timeout=90, check=False,
+        except OSError as exc:
+            raise ExamReadError("시험지를 임시 폴더로 복사하지 못했습니다.") from exc
+        group = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if sys.platform.startswith("win") else {"start_new_session": True}
+        try:
+            process = subprocess.Popen(
+                [kordoc, str(safe), "--silent"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                text=True, encoding="utf-8", errors="replace", **group,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ExamReadError("kordoc을 실행하지 못했거나 시간이 너무 오래 걸렸습니다.") from exc
-    if completed.returncode != 0 or not completed.stdout.strip():
+        except OSError as exc:
+            raise ExamReadError("kordoc을 실행하지 못했습니다.") from exc
+        try:
+            stdout, _ = process.communicate(timeout=KORDOC_TIMEOUT)
+        except subprocess.TimeoutExpired as exc:
+            _kill_process_tree(process)
+            try:
+                process.communicate(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
+            raise ExamReadError("kordoc이 너무 오래 걸려 중단했습니다. HWPX나 PDF로 저장해 불러오세요.") from exc
+    if process.returncode != 0 or not (stdout or "").strip():
         raise ExamReadError("kordoc이 이 파일을 읽지 못했습니다.")
-    return markdown_to_lines(completed.stdout)
+    return markdown_to_lines(stdout)
 
 
 def markdown_to_lines(markdown: str) -> str:
@@ -180,10 +209,15 @@ def extract_exam_text(path: str | Path) -> tuple[str, str]:
 # --------------------------------------------------------------------------- 구조
 
 def _points_in(text: str) -> list[float]:
+    """배점 written in brackets or after the word 배점."""
     values = []
     for line in text.split("\n"):
-        values += [float(a or b or c) for a, b, c in _POINTS.findall(line)]
+        values += [float(a or b) for a, b in _POINTS.findall(line)]
     return values
+
+
+def _bare_points_in(text: str) -> list[float]:
+    return [float(match.group(1)) for line in text.split("\n") if (match := _BARE_POINTS.search(line))]
 
 
 def _count_choices(block: str) -> int:
@@ -226,7 +260,7 @@ def parse_exam_structure(text: str) -> dict:
     for position, (index, kind, number, sub, labelled) in enumerate(candidates):
         nxt = candidates[position + 1][0] if position + 1 < len(candidates) else len(lines)
         block = "\n".join(lines[index:nxt])
-        if not labelled and not (_points_in(block) or _count_choices(block)):
+        if kind == "선택형" and not labelled and not (_points_in(block) or _count_choices(block)):
             continue  # numbered notes on the cover page have neither 배점 nor choices
         note = ""
         if kind == "서답형":
@@ -248,6 +282,7 @@ def parse_exam_structure(text: str) -> dict:
         block = "\n".join(lines[start:end])
         header_points = _points_in(lines[start])
         block_points = _points_in(block)
+        bare_points = _bare_points_in(block)
         flags = [note] if note else []
         if has_parts and len(block_points) > 1:
             points = sum(block_points)
@@ -259,6 +294,9 @@ def parse_exam_structure(text: str) -> dict:
         elif block_points:
             points = sum(block_points)
             flags.append(f"배점이 여러 곳에 있어 합했습니다({' + '.join(f'{p:g}' for p in block_points)}).")
+        elif len(bare_points) == 1:
+            points = bare_points[0]
+            flags.append(f"괄호 없는 '{points:g}점'을 배점으로 읽었습니다. 확인하세요.")
         else:
             points = None
             flags.append("배점을 찾지 못했습니다.")
@@ -272,9 +310,13 @@ def parse_exam_structure(text: str) -> dict:
 
     warnings = []
     declared = {}
-    for word, last in _DECLARED.findall(text):
+    cover = "\n".join(lines[:headers[0][0]]) if headers else text  # only the part before the first item
+    for word, last_of_range, count in _DECLARED.findall(cover):
         kind = "선택형" if word == "선택형" else "서답형"
-        declared[kind] = max(declared.get(kind, 0), int(last))
+        value = int(last_of_range or count)
+        if kind == "서답형" and serdap_offset and value > serdap_offset:
+            value -= serdap_offset
+        declared[kind] = max(declared.get(kind, 0), value)
     for kind in ("선택형", "서답형"):
         numbers = [item["number"] for item in items if item["type"] == kind]
         top = max(numbers + [declared.get(kind, 0)]) if (numbers or kind in declared) else 0

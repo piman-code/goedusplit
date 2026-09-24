@@ -41,7 +41,11 @@ def saved_work_file(folder: Path) -> Path:
 
 
 def run() -> int:
-    scratch = Path(tempfile.mkdtemp(prefix="goedusplit-calculator-flows-"))
+    with tempfile.TemporaryDirectory(prefix="goedusplit-calculator-flows-", ignore_cleanup_errors=True) as folder:
+        return _run(Path(folder))
+
+
+def _run(scratch: Path) -> int:
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu --disable-gpu-compositing"
     os.environ["MPLCONFIGDIR"] = str(scratch / "matplotlib")
@@ -90,7 +94,9 @@ def run() -> int:
          patch("app.main_window.QWebEnginePage", side_effect=lambda parent: Page(profile, parent)), \
          patch.object(QDialog, "exec", fake_exec), \
          patch.object(QMessageBox, "information", side_effect=lambda *a, **k: problems.append("info: " + a[2])), \
-         patch.object(QMessageBox, "question", side_effect=lambda *a, **k: problems.append("question: " + a[2]) or QMessageBox.No):
+         patch.object(QMessageBox, "question", side_effect=lambda *a, **k: problems.append("question: " + a[2]) or QMessageBox.No), \
+         patch.object(QMessageBox, "warning", side_effect=lambda *a, **k: problems.append("warning: " + a[2])), \
+         patch.object(QMessageBox, "critical", side_effect=lambda *a, **k: problems.append("critical: " + a[2])):
         probe = MainWindow()
         probe.show()
         probe.tabs.setCurrentWidget(probe.tab_spliter)

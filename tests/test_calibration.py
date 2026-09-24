@@ -247,13 +247,16 @@ class CalibrationWindowTests(unittest.TestCase):
 
     def _sample_project(self):
         target = lambda n: "E" if n <= 3 else "D" if n <= 6 else "C" if n <= 11 else "B" if n <= 15 else "A"
-        return {"items": [{"number": n, "type": "선택형", "title": f"{n}번", "targetLevel": target(n), "standard": "",
-                           "note": "", "evidence": [], "points": 4} for n in range(1, 19)]}
+        difficulty = lambda n: {"A": "어려움", "B": "어려움", "C": "보통"}.get(target(n), "쉬움")
+        points = (4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 8, 8)
+        return {"items": [{"number": n, "type": "선택형", "title": f"{n}번", "targetLevel": target(n), "difficulty": difficulty(n),
+                           "standard": "", "note": "", "evidence": [], "points": points[n - 1]} for n in range(1, 19)]}
 
     def test_calculator_example_items_are_recognised(self):
         sample = self._sample_project()
         self.assertTrue(MainWindow._is_sample_calculator_project(sample))
-        for change in ({"title": "1번 다항식"}, {"standard": "[10수학01-01]"}, {"note": "메모"}, {"targetLevel": "C"}):
+        for change in ({"title": "1번 다항식"}, {"standard": "[10수학01-01]"}, {"note": "메모"}, {"targetLevel": "C"},
+                       {"points": 3.5}, {"difficulty": "보통"}):
             edited = self._sample_project()
             edited["items"][0].update(change)
             self.assertFalse(MainWindow._is_sample_calculator_project(edited), change)
