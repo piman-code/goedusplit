@@ -2658,12 +2658,31 @@ class MainWindow(QMainWindow):
     return prefix + pills + note;
   }}
 
+  // React keeps references to its text nodes. Replacing textContent swaps those nodes out, and React
+  // then fails with "removeChild ... not a child" when it later updates or unmounts the element
+  // (e.g. loading a saved work file while analysis evidence is shown). Change nodeValue instead.
+  function setTextKeepingNodes(el, text) {{
+    if (el.children.length) return;
+    const nodes = [...el.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE);
+    if (!nodes.length) return;
+    if (nodes.map((node) => node.nodeValue).join('') === text) return;
+    nodes[0].nodeValue = text;
+    nodes.slice(1).forEach((node) => {{ node.nodeValue = ''; }});
+  }}
+
+  function replaceInTextNodes(el, from, to) {{
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {{
+      if (node.nodeValue.includes(from)) node.nodeValue = node.nodeValue.replace(from, to);
+    }}
+  }}
+
   function polishText(root) {{
     (root || document).querySelectorAll('.panel-title').forEach((el) => {{
       const text = (el.textContent || '').trim();
-      if (text === '교사 입력') el.textContent = '검토안';
-      if (text.includes('예상정답 판단')) el.textContent = text.replace('예상정답 판단', 'A~E 수준별 조정');
-      if (text === '교사별 A/B') el.textContent = '검토안별 A/B';
+      if (text === '교사 입력') setTextKeepingNodes(el, '검토안');
+      if (text.includes('예상정답 판단')) replaceInTextNodes(el, '예상정답 판단', 'A~E 수준별 조정');
+      if (text === '교사별 A/B') setTextKeepingNodes(el, '검토안별 A/B');
     }});
     (root || document).querySelectorAll('label.field-label').forEach((el) => {{
       if ((el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE) && el.firstChild.nodeValue.includes('선택 교사명')) {{
@@ -2671,14 +2690,14 @@ class MainWindow(QMainWindow):
       }}
     }});
     (root || document).querySelectorAll('button').forEach((el) => {{
-      if (el.textContent === '교사 추가') el.textContent = '검토안 추가';
+      if (el.textContent === '교사 추가') setTextKeepingNodes(el, '검토안 추가');
     }});
     (root || document).querySelectorAll('p').forEach((el) => {{
       if ((el.textContent || '').includes('입력값을 편집 중입니다.')) {{
-        el.textContent = el.textContent.replace('입력값을 편집 중입니다.', '검토안을 편집 중입니다.');
+        replaceInTextNodes(el, '입력값을 편집 중입니다.', '검토안을 편집 중입니다.');
       }}
       if ((el.textContent || '').includes('교사들이 입력한 예상정답률')) {{
-        el.textContent = '검토안별 예상정답률의 평균과 표준편차입니다. 표준편차가 클수록 재논의가 필요합니다.';
+        setTextKeepingNodes(el, '검토안별 예상정답률의 평균과 표준편차입니다. 표준편차가 클수록 재논의가 필요합니다.');
       }}
     }});
   }}
@@ -2829,7 +2848,7 @@ class MainWindow(QMainWindow):
     if (previewNote) {{
       const count = document.querySelectorAll('.item-table tbody tr.selected').length;
       const scope = itemText + ' 미리보기 · 선택 ' + count + '문항 반영';
-      if (previewNote.textContent !== scope) previewNote.textContent = scope;
+      setTextKeepingNodes(previewNote, scope);
     }}
     document.querySelectorAll('.level-editor').forEach((editor, index) => {{
       const level = ['A', 'B', 'C', 'D', 'E'][index];
@@ -8561,7 +8580,7 @@ codex login status</pre>
 
         <h2>시험지에서 문항 가져오기</h2>
         <p><b>자료</b> 메뉴의 <b>시험지에서 문항 가져오기</b>는 HWP·HWPX·PDF 시험지에서 문항 번호·유형·배점만 이 PC 안에서 읽어
-        계산기 문항 초안을 만듭니다. HWP는 kordoc이 설치된 PC에서 인터넷 연결을 막고 읽습니다. 보내기 전에 미리보기에서 배점을 확인하세요.</p>
+        계산기 문항 초안을 만듭니다. HWP는 kordoc이 설치된 PC에서 인터넷을 쓰는 옵션 없이 읽습니다. 보내기 전에 미리보기에서 배점을 확인하세요.</p>
 
         <h2>시험 후 예측-실측 비교</h2>
         <p>시험 후 분석을 실행하고 시험 전 작업을 계산기에 불러온 뒤 <b>자료</b> 메뉴의 <b>예측-실측 비교</b>를 누르면,
@@ -10195,6 +10214,20 @@ codex login status</pre>
         self.spliter_view.page().runJavaScript(script, lambda raw: callback(self._parse_spliter_project(raw)))
 
     @staticmethod
+    def _is_sample_calculator_project(project) -> bool:
+        """The calculator starts with 18 example items: titles "N번", nothing else filled in."""
+        items = project.get("items") if isinstance(project, dict) else None
+        if not isinstance(items, list) or len(items) != 18:
+            return False
+        for number, item in enumerate(items, start=1):
+            target = "E" if number <= 3 else "D" if number <= 6 else "C" if number <= 11 else "B" if number <= 15 else "A"
+            if not isinstance(item, dict) or (
+                item.get("number"), item.get("type"), item.get("title"), item.get("targetLevel")
+            ) != (number, "선택형", f"{number}번", target) or item.get("standard") or item.get("note") or item.get("evidence"):
+                return False
+        return True
+
+    @staticmethod
     def _parse_spliter_project(raw):
         if isinstance(raw, dict):
             return raw
@@ -10523,10 +10556,12 @@ codex login status</pre>
                 update_row(item.row())
                 update_summary()
 
-        def load_current_calculator_project():
+        def load_current_calculator_project(automatic=False):
             def done(project):
                 if not dialog.isVisible():
                     return
+                if automatic and self._is_sample_calculator_project(project):
+                    return  # keep the analysis-based table instead of the calculator's example items
                 try:
                     designs = self._neis_design_items_from_spliter_project(project)
                 except ValueError as exc:
@@ -10544,7 +10579,7 @@ codex login status</pre>
         btn_add.clicked.connect(add_blank_row)
         btn_delete.clicked.connect(delete_selected_rows)
         btn_reload_analysis.clicked.connect(lambda: populate_table(self._default_neis_design_items()))
-        btn_load_calc.clicked.connect(load_current_calculator_project)
+        btn_load_calc.clicked.connect(lambda: load_current_calculator_project(False))
         btn_defaults.clicked.connect(
             lambda: self._open_target_rate_presets_dialog(
                 lambda apply_current=False: update_all_rows() if apply_current else None
@@ -10554,7 +10589,7 @@ codex login status</pre>
         if table.rowCount() == 0:
             add_blank_row()
         if self.spliter_view is not None and getattr(self, "_spliter_loaded", False):
-            QTimer.singleShot(0, load_current_calculator_project)
+            QTimer.singleShot(0, lambda: load_current_calculator_project(True))
         sample_combo.currentTextChanged.connect(lambda _text: update_all_rows())
         mode_combo.currentIndexChanged.connect(lambda _idx: update_all_rows())
         table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
@@ -10595,11 +10630,12 @@ codex login status</pre>
         QApplication.setOverrideCursor(Qt.WaitCursor)
         try:
             text, how = extract_exam_text(path)
-        except ExamReadError as exc:
-            QApplication.restoreOverrideCursor()
-            QMessageBox.warning(self, "시험지 불러오기", str(exc))
+        except (ExamReadError, OSError) as exc:
+            message = str(exc) if isinstance(exc, ExamReadError) else "파일을 열 수 없습니다. 권한이나 위치를 확인하세요."
+            QMessageBox.warning(self, "시험지 불러오기", message)
             return
-        QApplication.restoreOverrideCursor()
+        finally:
+            QApplication.restoreOverrideCursor()
         self._show_exam_structure_dialog(parse_exam_structure(text), how, Path(path).name)
 
     def _show_exam_structure_dialog(self, result: dict, how: str, file_name: str):
@@ -10671,6 +10707,8 @@ codex login status</pre>
             if answer != QMessageBox.Yes:
                 return
             self._spliter_pending_project_payload = project
+            # Keep the current analysis as evidence, like the NEIS flow: a calculator that is
+            # showing evidence crashes (React removeChild) when a project arrives without it.
             if self.exam is not None and self.overall is not None:
                 self._spliter_pending_payload = self._build_spliter_evidence_payload()
             self._activate_spliter_tab_for_pending_payloads()
@@ -10696,6 +10734,15 @@ codex login status</pre>
         self._fetch_spliter_project(self._on_calibration_project, title="예측-실측 비교")
 
     def _on_calibration_project(self, project):
+        if self._is_sample_calculator_project(project):
+            answer = QMessageBox.question(
+                self, "예측-실측 비교",
+                "계산기에 불러온 작업이 없고 기본 예시 문항(1~18번)으로 보입니다. "
+                "시험 전에 저장한 작업을 '작업 불러오기'로 연 뒤 비교하는 것이 맞습니다. 그래도 지금 값으로 비교할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
         try:
             designs = self._neis_design_items_from_spliter_project(project)
         except ValueError as exc:
@@ -10795,9 +10842,9 @@ codex login status</pre>
         current = self._load_target_rate_presets()
         suggestion = suggest_presets(report, current)
         for target, entry in suggestion.items():
-            if entry["suggested"]:  # 저장할 때와 같은 규칙으로 정리한 값을 보여 준다
+            if entry["suggested"]:  # 저장될 값과 같게: 규칙 정리를 더 바뀌지 않을 때까지 적용
                 entry["raw"] = entry["suggested"]
-                entry["suggested"] = self._normalize_target_rate_presets({target: entry["suggested"]})[target]
+                entry["suggested"] = self._settled_preset_row(target, entry["suggested"])
         if not any(entry["suggested"] for entry in suggestion.values()):
             QMessageBox.information(
                 self, "다음 시험 기준표 제안",
@@ -10810,12 +10857,19 @@ codex login status</pre>
         layout = QVBoxLayout(dialog)
         note = QLabel(
             "같은 목표수준 문항들에서 이번 경계 학생이 실제로 맞힌 비율의 평균을, 기준표 규칙(A≥B≥C≥D≥E, 목표수준 학생 2/3 이상)으로 "
-            "정리한 값입니다. 규칙 때문에 바뀐 칸은 마우스를 올리면 원래 평균이 보입니다. 적용할 행만 고르세요. 이번 시험 작업 표는 바꾸지 않습니다. "
+            "정리한 값입니다. 기준표는 '보통' 문항 기준이라 문항 난이도 보정(쉬움 +10, 어려움 −10)을 뺀 뒤 평균했습니다. "
+            "규칙 때문에 바뀐 칸은 마우스를 올리면 원래 평균이 보입니다. 적용할 행만 고르세요. 이번 시험 작업 표는 바꾸지 않습니다. "
             "한 번의 시험 결과이므로 교과협의를 거쳐 조정하세요."
         )
         note.setWordWrap(True)
         note.setProperty("role", "muted")
         layout.addWidget(note)
+        weak = [cut["boundary"] for cut in report["cuts"]
+                if report["border_counts"][cut["level"]] < 5 or cut["level"] in report.get("border_one_sided", [])]
+        if weak:
+            caution = QLabel("⚠ " + ", ".join(weak) + " 경계는 경계 학생이 적거나 한쪽에만 있어 그 열의 제안은 참고만 하세요.")
+            caution.setWordWrap(True)
+            layout.addWidget(caution)
         table = QTableWidget(len(LEVELS_AE), len(LEVELS_AE) + 3)
         table.setHorizontalHeaderLabels(["적용", "목표수준", "문항 수", *[f"{lv} 현재→제안" for lv in LEVELS_AE]])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -10863,12 +10917,20 @@ codex login status</pre>
         layout.addLayout(buttons)
         dialog.exec()
 
+    def _settled_preset_row(self, target: str, row: dict) -> dict:
+        for _ in range(10):
+            settled = self._normalize_target_rate_presets({target: row})[target]
+            if settled == row:
+                break
+            row = settled
+        return row
+
     def _apply_preset_suggestion(self, suggestion: dict, chosen: list[str]):
         """Replace only the chosen target rows; the current exam's table is left as is."""
         merged = {target: dict(suggestion[target]["current"]) for target in LEVELS_AE}
         for target in chosen:
             if suggestion[target]["suggested"]:
-                merged[target] = dict(suggestion[target]["suggested"])
+                merged[target] = self._settled_preset_row(target, dict(suggestion[target]["suggested"]))
         self._save_target_rate_presets(merged)
         self._send_spliter_teacher_presets(apply_current=False)
         self.statusBar().showMessage(f"{TARGET_RATE_PRESET_TITLE}에 {', '.join(chosen)} 목표수준 제안을 적용했습니다.", 8000)

@@ -76,6 +76,47 @@ class ExamStructureParseTests(unittest.TestCase):
     def test_nothing_found_explains_expected_format(self):
         self.assertIn("문항 번호를 찾지 못했습니다", parse_exam_structure("안내문만 있음")["warnings"][0])
 
+    def test_common_school_notations(self):
+        cases = [
+            ("[1] 첫 문항 [3점]\n① 가 ② 나", [("선택형", 1, 3.0)]),
+            ("문 1. 첫 문항 (3점)\n① 가", [("선택형", 1, 3.0)]),
+            ("1번. 첫 문항 <4점>\n① 가", [("선택형", 1, 4.0)]),
+            ("1. 첫 문항 【3.5점】\n① 가", [("선택형", 1, 3.5)]),
+            ("1. 첫 문항의 값을 구하면? 4점\n① 가", [("선택형", 1, 4.0)]),
+            ("1. 첫 문항 [배점 3점]\n(1) 가 (2) 나 (3) 다 (4) 라 (5) 마", [("선택형", 1, 3.0)]),
+        ]
+        for text, expected in cases:
+            with self.subTest(text=text.split("\n")[0]):
+                result = parse_exam_structure(text)
+                self.assertEqual([(i["type"], i["number"], i["points"]) for i in result["items"]], expected)
+        self.assertEqual(parse_exam_structure(cases[-1][0])["items"][0]["choices"], 5)
+
+    def test_cover_page_notes_are_not_items(self):
+        text = ("유의사항\n1. 답안지에 이름을 쓰시오.\n2. 시간은 50분입니다.\n3. 휴대전화를 끄시오.\n"
+                "1. 첫 문항 [3점]\n① 가 ② 나\n2. 둘째 문항 [4점]\n① 가 ② 나")
+        result = parse_exam_structure(text)
+        self.assertEqual([(i["number"], i["points"]) for i in result["items"]], [(1, 3.0), (2, 4.0)])
+
+    def test_serdap_section_heading_parts_and_continued_numbers(self):
+        heading = "1. 첫 문항 [3점]\n① 가\n[서답형]\n1. 과정을 쓰시오. [5점]\n2. 설명하시오. [6점]"
+        self.assertEqual([(i["type"], i["number"], i["points"]) for i in parse_exam_structure(heading)["items"]],
+                         [("선택형", 1, 3.0), ("서답형", 1, 5.0), ("서답형", 2, 6.0)])
+        parts = "[서답형 1-1] 앞 [2점]\n[서답형 1-2] 뒤 [3점]\n[서답형 2] 다음 [5점]"
+        result = parse_exam_structure(parts)
+        self.assertEqual([(i["number"], i["points"]) for i in result["items"]], [(1, 5.0), (2, 5.0)])
+        self.assertIn("소문항 배점을 합했습니다(2 + 3).", result["items"][0]["flags"])
+        continued = "1. 첫 [3점]\n① 가\n2. 둘째 [3점]\n① 가\n[서답형 3] 과정 [5점]\n[서답형 4] 설명 [6점]"
+        result = parse_exam_structure(continued)
+        self.assertEqual([(i["type"], i["number"]) for i in result["items"]],
+                         [("선택형", 1), ("선택형", 2), ("서답형", 1), ("서답형", 2)])
+        self.assertIn("시험지 번호 3번을 서답형 1번부터 다시 매겼습니다.", result["items"][2]["flags"])
+
+    def test_declared_count_reveals_missing_last_items(self):
+        text = "※ 선택형 1~5번, 서답형 1~2번\n1. 첫 [5점]\n① 가\n2. 둘째 [5점]\n① 가\n3. 셋째 [5점]\n① 가\n[서답형 1] 과정 [5점]"
+        warnings = parse_exam_structure(text)["warnings"]
+        self.assertIn("선택형 4, 5번을 찾지 못했습니다.", warnings)
+        self.assertIn("서답형 2번을 찾지 못했습니다.", warnings)
+
     def test_markdown_tables_and_escapes_become_lines(self):
         text = markdown_to_lines("※ 1\\~4번\n| 1\\. 문제 [3점] | ① 가 ② 나 |\n| --- | --- |\n| 2. 다음 (4점) | ① 가 |")
         self.assertEqual(text.split("\n"), ["※ 1~4번", "1. 문제 [3점]", "① 가 ② 나", "2. 다음 (4점)", "① 가"])
@@ -92,6 +133,22 @@ class ExamReadTests(unittest.TestCase):
             txt = Path(directory) / "paper.txt"
             txt.write_text(PAPER, encoding="utf-8")
             self.assertEqual(_summary(parse_exam_structure(extract_exam_text(txt)[0])), EXPECTED)
+
+    def test_hwpx_table_paragraphs_are_read_once_and_separately(self):
+        ns = 'xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section"'
+        inner = "".join(f"<hp:tc><hp:subList><hp:p><hp:run><hp:t>{text}</hp:t></hp:run></hp:p></hp:subList></hp:tc>"
+                        for text in ("1. 첫 문항", "① 가 ② 나", "2. 둘째 문항 [4점]", "① 가"))
+        section = (f'<?xml version="1.0" encoding="UTF-8"?><hs:sec {ns}><hp:p><hp:run><hp:t>표 앞 글</hp:t>'
+                   f"<hp:tbl><hp:tr>{inner}</hp:tr></hp:tbl></hp:run></hp:p>"
+                   "<hp:p><hp:run><hp:t>줄<hp:lineBreak/>바꿈</hp:t></hp:run></hp:p></hs:sec>")
+        with TemporaryDirectory() as directory:
+            hwpx = Path(directory) / "table.hwpx"
+            with zipfile.ZipFile(hwpx, "w") as archive:
+                archive.writestr("Contents/section0.xml", section)
+            text, _ = extract_exam_text(hwpx)
+        self.assertEqual(text.split("\n"), ["표 앞 글", "1. 첫 문항", "① 가 ② 나", "2. 둘째 문항 [4점]", "① 가", "줄", "바꿈"])
+        items = parse_exam_structure(text)["items"]
+        self.assertEqual([(i["number"], i["points"]) for i in items], [(1, None), (2, 4.0)])  # 2번 배점이 1번으로 가지 않는다
 
     def test_pdf_with_korean_text(self):
         import matplotlib
@@ -119,27 +176,49 @@ class ExamReadTests(unittest.TestCase):
         with self.assertRaises(ExamReadError):
             extract_exam_text(Path("paper.docx"))
 
-    def test_kordoc_runs_offline_without_shell(self):
+    def test_kordoc_gets_a_safely_named_copy_without_shell(self):
         calls = []
 
         def fake_run(command, **kwargs):
-            calls.append((command, kwargs))
+            copied = Path(command[1])
+            calls.append((command, kwargs, copied.name, copied.read_bytes()))
             from types import SimpleNamespace
             return SimpleNamespace(returncode=0, stdout="1\\. 문제 [5점]\n\n① 가", stderr="")
 
         with TemporaryDirectory() as directory:
-            hwp = Path(directory) / "시험 지; rm -rf.hwp"
-            hwp.write_bytes(b"x")
+            hwp = Path(directory) / "시험 지&calc&%PATH%.hwp"
+            hwp.write_bytes(b"hwp bytes")
             with patch("app.exam_structure.find_kordoc", return_value="/fake/kordoc"), \
                  patch("app.exam_structure.subprocess.run", side_effect=fake_run):
                 text, how = extract_exam_text(hwp)
-        command, kwargs = calls[0]
-        self.assertEqual(command, ["/fake/kordoc", str(hwp), "--silent"])  # 파일명은 인자 하나로만 전달
-        self.assertEqual(kwargs["env"]["KORDOC_OFFLINE"], "1")
+        command, kwargs, name, data = calls[0]
+        self.assertEqual((command[0], command[2]), ("/fake/kordoc", "--silent"))
+        self.assertEqual((name, data), ("input.hwp", b"hwp bytes"))  # 원래 파일명은 넘기지 않는다
+        self.assertNotIn("&", command[1])
         self.assertNotIn("shell", kwargs)
-        self.assertEqual(kwargs["encoding"], "utf-8")
-        self.assertEqual(how, "kordoc(오프라인)")
+        self.assertEqual((kwargs["encoding"], kwargs["timeout"]), ("utf-8", 90))
+        self.assertEqual(how, "kordoc(이 PC)")
         self.assertEqual(_summary(parse_exam_structure(text)), [("선택형", 1, 5.0, 1)])
+
+    def test_kordoc_refuses_windows_temp_path_with_shell_characters(self):
+        with TemporaryDirectory() as directory:
+            risky = Path(directory) / "a&b"
+            risky.mkdir()
+            hwp = Path(directory) / "paper.hwp"
+            hwp.write_bytes(b"x")
+
+            class FixedTemp:
+                def __init__(self, *a, **k): pass
+                def __enter__(self): return str(risky)
+                def __exit__(self, *a): return False
+
+            with patch("app.exam_structure.find_kordoc", return_value="C:/npm/kordoc.cmd"), \
+                 patch("app.exam_structure.sys.platform", "win32"), \
+                 patch("app.exam_structure.tempfile.TemporaryDirectory", FixedTemp), \
+                 patch("app.exam_structure.subprocess.run") as run:
+                with self.assertRaises(ExamReadError):
+                    extract_exam_text(hwp)
+            run.assert_not_called()
 
     def test_find_kordoc_checks_usual_folders_when_path_is_minimal(self):
         with TemporaryDirectory() as directory:
@@ -188,6 +267,22 @@ class ExamStructureToCalculatorTests(unittest.TestCase):
         self.assertEqual([(i["type"], i["number"], i["points"]) for i in project["items"]],
                          [(t, n, p) for t, n, p, _ in EXPECTED])
         self.assertEqual({i["targetLevel"] for i in project["items"]}, {"C"})
+
+
+@unittest.skipIf(MainWindow is None, "main window unavailable")
+class ExamImportWindowTests(unittest.TestCase):
+    def test_unreadable_file_warns_and_restores_cursor(self):
+        window = MainWindow.__new__(MainWindow)
+        with patch("app.main_window.QFileDialog.getOpenFileName", return_value=("/x/paper.hwpx", "")), \
+             patch("app.main_window.extract_exam_text", side_effect=PermissionError("denied")), \
+             patch("app.main_window.QApplication") as application, \
+             patch("app.main_window.QMessageBox") as messages, \
+             patch.object(MainWindow, "_show_exam_structure_dialog") as show:
+            window.import_exam_structure()
+        application.setOverrideCursor.assert_called_once()
+        application.restoreOverrideCursor.assert_called_once()
+        self.assertIn("권한", messages.warning.call_args.args[2])
+        show.assert_not_called()
 
 
 @unittest.skipIf(MainWindow is None, "main window unavailable")
