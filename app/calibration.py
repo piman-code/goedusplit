@@ -270,6 +270,29 @@ def summary_lines(report: dict) -> list[str]:
     return lines
 
 
+def headline_lines(report: dict, count: int = 3) -> list[str]:
+    """What to look at first, in plain words: the cells missed most relative to other items."""
+    cells = [
+        (abs(row["relative"][lv]), row, lv, boundary)
+        for row in report["rows"] for lv, boundary in zip(LEVELS, BOUNDARIES)
+        if row["relative"][lv] is not None and abs(row["relative"][lv]) >= LARGE_GAP
+    ]
+    if not cells:
+        return ["크게 빗나간 칸이 없습니다. 이번 예측은 문항끼리 고르게 맞았습니다."]
+    cells.sort(key=lambda cell: -cell[0])
+    lines = []
+    for _, row, lv, boundary in cells[:count]:
+        kind = row["type"] if row["type"] != "서답형 묶음" else "서답형 묶음"
+        lines.append(
+            f"{kind} {row['number']}번 · {boundary} 경계: 예측 {row['predicted'][lv]:.0f}% → 실제 {row['border'][lv]:.0f}% "
+            f"(다른 문항보다 {abs(row['relative'][lv]):.0f}%p {_direction(row['relative'][lv])} 예측)"
+        )
+    more = len(cells) - count
+    tail = f" 그 밖에 {more}칸이 더 있습니다(표에서 색 칸)." if more > 0 else ""
+    lines.append("→ 이 문항들의 목표수준과 예상정답률을 다시 보세요. 다음 시험 기본값은 '다음 시험 기준표 제안'으로 고칠 수 있습니다." + tail)
+    return lines
+
+
 def cut_lines(report: dict) -> list[str]:
     """The level-wide difference is the estimated cut against the applied cut, not estimate quality."""
     if report["not_designed"] or report["unmatched"]:

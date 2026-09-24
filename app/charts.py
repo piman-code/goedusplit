@@ -387,7 +387,7 @@ def fig_score_normal_monitoring(
         for mul, style in ((0, "-"), (1, "--"), (-1, "--"), (2, ":"), (-2, ":")):
             x0 = mean + mul * std
             if 0 <= x0 <= 100:
-                label = "평균" if mul == 0 else f"{mul:+d}σ"
+                label = "평균" if mul == 0 else f"{mul:+d}SD"
                 ax.axvline(x0, color="#f59e0b" if mul else "#ef4444",
                            linestyle=style, linewidth=1.2)
                 ax.text(x0, ymax * 1.05, label, ha="center", va="bottom",
@@ -468,9 +468,9 @@ def fig_monitoring_benchmarks(
                     color=text_color, linewidth=1.2, alpha=0.75)
             ax.text(ref, y + 0.36, "전국평균", ha="center", va="bottom",
                     fontsize=7.8, color=text_color)
-            ax.text(hi1, y - 0.36, "+1σ", ha="center", va="top",
+            ax.text(hi1, y - 0.36, "+1SD", ha="center", va="top",
                     fontsize=7.8, color=text_color, alpha=0.72)
-            ax.text(hi2, y - 0.36, "+2σ", ha="center", va="top",
+            ax.text(hi2, y - 0.36, "+2SD", ha="center", va="top",
                     fontsize=7.8, color=text_color, alpha=0.72)
         ax.scatter([value], [y], s=88, marker="D", color=color,
                    edgecolor="white", linewidth=0.8, zorder=5)
@@ -678,7 +678,7 @@ def fig_item_difficulty(items_stats, title: str = "문항별 정답률(난이도
     return fig
 
 
-def fig_item_discrimination(items_stats, title: str = "문항별 변별도(point-biserial)") -> Figure:
+def fig_item_discrimination(items_stats, title: str = "문항별 변별도 (0.3 이상 양호)") -> Figure:
     n = max(1, len(items_stats))
     fig = Figure(figsize=(max(8.2, 0.42 * n + 1.5), 3.9), dpi=110)
     ax = fig.add_subplot(111)
