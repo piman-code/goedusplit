@@ -85,8 +85,57 @@ def _weighted_mean(pairs) -> float | None:
     return math.fsum(w * v for w, v in pairs) / total if total else None
 
 
-def build_calibration(designs: list[dict], exam, levels: list[str]) -> dict:
-    """designs: calculator items with type, number, difficulty, target, points, rates and source_item."""
+def observed_target(row: dict, rates_for, min_levels: int = 3) -> str | None:
+    """The target level whose default rates are closest to how this item's borderline students did.
+
+    ``rates_for(target, difficulty)`` is the app's preset row for that difficulty, the same
+    rates a new item with that target starts from, so the chosen level reproduces the real
+    A~E pattern best (least squares over the boundaries with students). A difficulty label
+    alone does not: in real results 쉬움 items ranged from target A to E. None when fewer
+    than ``min_levels`` boundaries have borderline students. A 서답형 group row carries
+    ``members`` [(points, difficulty)] and is compared with their 배점-weighted default rates,
+    since each item later starts from the row for its own difficulty.
+    """
+    have = [lv for lv in LEVELS if row["border"][lv] is not None]
+    if len(have) < min_levels:
+        return None
+    members = row.get("members") or [(1.0, row["difficulty"])]
+    weight = math.fsum(points for points, _ in members)
+    rows = {}  # rates_for reads the app's saved table: once per target and difficulty
+
+    def default_rate(target, level):
+        total = 0.0
+        for points, difficulty in members:
+            key = (target, difficulty if difficulty in DIFFICULTY_DELTA else "보통")
+            if key not in rows:
+                rows[key] = rates_for(*key)
+            total += points * float(rows[key][level])
+        return total / weight
+
+    def error(target):
+        return math.fsum((row["border"][lv] - default_rate(target, lv)) ** 2 for lv in have)
+
+    return min(LEVELS, key=error)
+
+
+def observed_targets(report: dict) -> dict[tuple[str, int], str]:
+    """{(type, number): observed target}. 서답형 items share their group's (only totals are known)."""
+    result = {}
+    for row in report["rows"]:
+        target = row.get("observed_target")
+        if target is None:
+            continue
+        kind = "서답형" if row["type"] == "서답형 묶음" else row["type"]
+        for number in str(row["number"]).split(","):
+            result[(kind, int(number))] = target
+    return result
+
+
+def build_calibration(designs: list[dict], exam, levels: list[str], rates_for=None) -> dict:
+    """designs: calculator items with type, number, difficulty, target, points, rates and source_item.
+
+    With ``rates_for`` every row also gets ``observed_target`` (see observed_target).
+    """
     students = exam.students
     scores = [float(st.final_score) for st in students]
     border = borderline_indices(scores, exam.cut_scores)
@@ -115,12 +164,16 @@ def build_calibration(designs: list[dict], exam, levels: list[str]) -> dict:
         per_student = [min(1.0, max(0.0, float(st.serdap_score) / serdap_max)) for st in students]
         numbers = ", ".join(str(int(d["number"])) for d in sorted(serdap, key=lambda d: int(d["number"])))
         rows.append(_row("서답형 묶음", numbers, "", "", points, predicted, _level_rates(per_student, levels, border)))
+        rows[-1]["members"] = [(float(d["points"]), d["difficulty"]) for d in serdap]
 
     if getattr(exam, "use_perform", False) and float(getattr(exam, "weight_perform", 0) or 0) > 0:
         notes.append("성취수준은 수행평가를 합산한 환산점수로 나뉘었고, 정답률은 지필 결과입니다. 수행평가 비중만큼 차이가 생길 수 있습니다.")
 
     designed = {(d["type"], int(d["number"])) for d in designs}
     not_designed = [f"{it.item_type} {it.number}번" for it in exam.items if (it.item_type, int(it.number)) not in designed]
+
+    for row in rows:
+        row["observed_target"] = observed_target(row, rates_for) if rates_for else None
 
     offset = {lv: _weighted_mean((row["points"], row["diff"][lv]) for row in rows) for lv in LEVELS}
     for row in rows:
@@ -195,6 +248,12 @@ def summary_lines(report: dict) -> list[str]:
             lines.append(f"{diff} 문항({data['items']}개): 다른 문항과 비슷하게 예측했습니다 (경계별 실측-예측 상대차 {detail}).")
         else:
             lines.append(f"{diff} 문항({data['items']}개): 다른 문항보다 경계 학생 정답률을 평균 {abs(mean):.1f}%p {_direction(mean)} 예측했습니다 ({detail}).")
+    differ = [row for row in report["rows"] if row["type"] == "선택형" and row.get("observed_target")
+              and row["target"] in LEVELS and row["observed_target"] != row["target"]]
+    if differ:
+        shown = ", ".join(f"{row['number']}번 {row['target']}→{row['observed_target']}" for row in differ[:6])
+        more = f" 외 {len(differ) - 6}문항" if len(differ) > 6 else ""
+        lines.append(f"목표수준이 실측과 다른 선택형 {len(differ)}문항: {shown}{more} (실측 목표 = 경계 학생 결과에 가장 가까운 기준표 줄).")
     if report["large_gaps"]:
         lines.append(f"다른 문항보다 {LARGE_GAP:.0f}%p 이상 빗나간 칸이 {report['large_gaps']}개 있습니다(표에서 색 표시).")
     for level, boundary in zip(LEVELS, BOUNDARIES):
@@ -275,12 +334,12 @@ def write_calibration_workbook(path: str | Path, report: dict) -> None:
         summary.append(["예측값이 없는 시험 문항: " + ", ".join(report["not_designed"])])
 
     items = workbook.create_sheet("문항별")
-    headers = ["구분", "번호", "난이도", "목표수준", "배점"]
+    headers = ["구분", "번호", "난이도", "목표수준", "실측 목표수준", "배점"]
     for level in LEVELS:
         headers += [f"{level} 예측", f"{level} 실측(경계)", f"{level} 차이", f"{level} 상대차", f"{level} 수준 평균"]
     items.append(headers)
     for row in report["rows"]:
-        values = [row["type"], row["number"], row["difficulty"], row["target"], row["points"]]
+        values = [row["type"], row["number"], row["difficulty"], row["target"], row.get("observed_target") or "", row["points"]]
         for level in LEVELS:
             values += [row["predicted"][level], row["border"][level], row["diff"][level], row["relative"][level], row["all"][level]]
         items.append(values)
@@ -294,5 +353,5 @@ def write_calibration_workbook(path: str | Path, report: dict) -> None:
     for cell in items[1]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="DDEDEA")
-    items.freeze_panes = "F2"
+    items.freeze_panes = "G2"
     workbook.save(path)

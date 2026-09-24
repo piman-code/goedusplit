@@ -91,6 +91,19 @@ class ExpectedRateContractTests(unittest.TestCase):
             for level in LEVELS:
                 self.assertAlmostEqual(actual["summary"][key][level], expected[key][level], places=10)
 
+    @unittest.skipUnless(shutil.which("node"), "Node is needed for the calculator's live preview")
+    def test_live_preview_keeps_cut_scores_while_rates_are_inverted(self):
+        items = [design(1, 1, (60, 80, 50, 40, 10)), design(2, 3, (90, 80, 70, 45, 20))]
+        module = Path(__file__).resolve().parents[1] / "app/spliter_ox_web/expected-rates.js"
+        script = ("const fs=require('fs'), api=require(process.argv[1]), items=JSON.parse(fs.readFileSync(0,'utf8')); let strict;"
+                  "try { api.summarizeDesigns(items); strict = 'no error'; } catch (error) { strict = error.message; }"
+                  "console.log(JSON.stringify({strict, live: api.summarizeDesigns(items, {allowInversions: true})}));")
+        output = subprocess.check_output([shutil.which("node"), "-e", script, str(module)], input=json.dumps(items), text=True, encoding="utf-8")
+        actual = json.loads(output)
+        self.assertIn("역전", actual["strict"])  # NEIS 표와 저장 검사는 그대로 막는다
+        self.assertAlmostEqual(actual["live"]["raw_cuts"]["A"], (1 * 60 + 3 * 90) / 100)
+        self.assertEqual(actual["live"]["inversions"], [{"type": "선택형", "number": 1, "pairs": [["A", "B"]]}])
+
 
 if __name__ == "__main__":
     unittest.main()

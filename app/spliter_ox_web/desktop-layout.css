@@ -100,6 +100,7 @@ body.goedu-desktop { background: var(--bg); }
 .goedu-score-strip.goedu-details-open > .goedu-score-note { display: block; flex-basis: 100%; font-size: 12px; overflow-wrap: anywhere; }
 .goedu-score-strip > .goedu-score-source { order: 1; }
 .goedu-score-note { order: 2; color: var(--muted); line-height: 1.6; }
+.goedu-score-warning { flex-basis: 100%; font-size: 12px; font-weight: 700; color: var(--red, #b42318); overflow-wrap: anywhere; }
 [data-score-details] { margin-left: auto; border: 0; border-radius: 4px; background: transparent; color: var(--accent-strong); font-size: 12px; padding: 5px; cursor: pointer; white-space: nowrap; }
 .goedu-desktop .item-table-wrap { flex: 1 1 auto; min-height: 0; overflow: auto; overscroll-behavior: contain; }
 .goedu-desktop .item-table { width: 100%; min-width: 940px; table-layout: fixed; font-size: 13px; }
