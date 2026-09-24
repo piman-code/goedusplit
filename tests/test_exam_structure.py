@@ -91,6 +91,25 @@ class ExamStructureParseTests(unittest.TestCase):
                 self.assertEqual([(i["type"], i["number"], i["points"]) for i in result["items"]], expected)
         self.assertEqual(parse_exam_structure(cases[-1][0])["items"][0]["choices"], 5)
 
+    def test_bare_points_do_not_override_bracketed_points(self):
+        text = "1. 어느 반 학생 5명의 평균 점수가 72점\n일 때 옳은 것은? [4점]\n① 가 ② 나"
+        item = parse_exam_structure(text)["items"][0]
+        self.assertEqual((item["points"], item["flags"]), (4.0, []))
+        bare = parse_exam_structure("1. 다음 값은? 4점\n① 가")["items"][0]
+        self.assertEqual(bare["points"], 4.0)
+        self.assertIn("괄호 없는 '4점'을 배점으로 읽었습니다. 확인하세요.", bare["flags"])
+        self.assertIsNone(parse_exam_structure("1. 배점: 100\n① 가")["items"][0]["points"])  # 10점으로 읽지 않는다
+
+    def test_serdap_heading_keeps_items_without_points(self):
+        text = "1. 첫 [3점]\n① 가\n[서답형]\n1. 과정을 쓰시오.\n2. 설명하시오. [6점]"
+        result = parse_exam_structure(text)
+        self.assertEqual([(i["type"], i["number"], i["points"]) for i in result["items"]],
+                         [("선택형", 1, 3.0), ("서답형", 1, None), ("서답형", 2, 6.0)])
+
+    def test_declared_counts_come_from_the_cover_only(self):
+        continued = "1. 첫 [3점]\n① 가\n2. 둘째 [3점]\n① 가\n[서답형 3번] 과정 [5점]\n[서답형 4번] 설명. 서술형 3문항 중 [6점]"
+        self.assertEqual(parse_exam_structure(continued)["warnings"], ["배점 합계가 17점입니다. 시험 총점과 같은지 확인하세요."])
+
     def test_cover_page_notes_are_not_items(self):
         text = ("유의사항\n1. 답안지에 이름을 쓰시오.\n2. 시간은 50분입니다.\n3. 휴대전화를 끄시오.\n"
                 "1. 첫 문항 [3점]\n① 가 ② 나\n2. 둘째 문항 [4점]\n① 가 ② 나")
@@ -176,29 +195,59 @@ class ExamReadTests(unittest.TestCase):
         with self.assertRaises(ExamReadError):
             extract_exam_text(Path("paper.docx"))
 
+    def _fake_popen(self, calls, stdout="1\\. 문제 [5점]\n\n① 가", timeout=False):
+        import subprocess
+
+        class FakePopen:
+            pid = 4321
+            returncode = 0
+
+            def __init__(self, command, **kwargs):
+                copied = Path(command[1])
+                calls.append((command, kwargs, copied.name, copied.read_bytes()))
+                self.waits = 0
+
+            def communicate(self, timeout=None):
+                self.waits += 1
+                if timeout_mode and self.waits == 1:
+                    raise subprocess.TimeoutExpired("kordoc", timeout)
+                return stdout, ""
+
+        timeout_mode = timeout
+        return FakePopen
+
     def test_kordoc_gets_a_safely_named_copy_without_shell(self):
         calls = []
-
-        def fake_run(command, **kwargs):
-            copied = Path(command[1])
-            calls.append((command, kwargs, copied.name, copied.read_bytes()))
-            from types import SimpleNamespace
-            return SimpleNamespace(returncode=0, stdout="1\\. 문제 [5점]\n\n① 가", stderr="")
-
         with TemporaryDirectory() as directory:
             hwp = Path(directory) / "시험 지&calc&%PATH%.hwp"
             hwp.write_bytes(b"hwp bytes")
             with patch("app.exam_structure.find_kordoc", return_value="/fake/kordoc"), \
-                 patch("app.exam_structure.subprocess.run", side_effect=fake_run):
+                 patch("app.exam_structure.subprocess.Popen", self._fake_popen(calls)):
                 text, how = extract_exam_text(hwp)
         command, kwargs, name, data = calls[0]
         self.assertEqual((command[0], command[2]), ("/fake/kordoc", "--silent"))
         self.assertEqual((name, data), ("input.hwp", b"hwp bytes"))  # 원래 파일명은 넘기지 않는다
         self.assertNotIn("&", command[1])
         self.assertNotIn("shell", kwargs)
-        self.assertEqual((kwargs["encoding"], kwargs["timeout"]), ("utf-8", 90))
+        self.assertEqual(kwargs["encoding"], "utf-8")
         self.assertEqual(how, "kordoc(이 PC)")
         self.assertEqual(_summary(parse_exam_structure(text)), [("선택형", 1, 5.0, 1)])
+
+    def test_kordoc_timeout_stops_the_whole_process_tree(self):
+        calls = []
+        with TemporaryDirectory() as directory:
+            hwp = Path(directory) / "paper.hwp"
+            hwp.write_bytes(b"x")
+            with patch("app.exam_structure.find_kordoc", return_value="C:/npm/kordoc.cmd"), \
+                 patch("app.exam_structure.sys.platform", "win32"), \
+                 patch("app.exam_structure.subprocess.CREATE_NEW_PROCESS_GROUP", 512, create=True), \
+                 patch("app.exam_structure.subprocess.Popen", self._fake_popen(calls, timeout=True)), \
+                 patch("app.exam_structure.subprocess.run") as run:
+                with self.assertRaises(ExamReadError) as caught:
+                    extract_exam_text(hwp)
+        self.assertIn("너무 오래", str(caught.exception))
+        self.assertEqual(run.call_args.args[0], ["taskkill", "/T", "/F", "/PID", "4321"])  # node 손자 프로세스까지
+        self.assertEqual(calls[0][1]["creationflags"], 512)
 
     def test_kordoc_refuses_windows_temp_path_with_shell_characters(self):
         with TemporaryDirectory() as directory:
@@ -215,10 +264,10 @@ class ExamReadTests(unittest.TestCase):
             with patch("app.exam_structure.find_kordoc", return_value="C:/npm/kordoc.cmd"), \
                  patch("app.exam_structure.sys.platform", "win32"), \
                  patch("app.exam_structure.tempfile.TemporaryDirectory", FixedTemp), \
-                 patch("app.exam_structure.subprocess.run") as run:
+                 patch("app.exam_structure.subprocess.Popen") as popen:
                 with self.assertRaises(ExamReadError):
                     extract_exam_text(hwp)
-            run.assert_not_called()
+            popen.assert_not_called()
 
     def test_find_kordoc_checks_usual_folders_when_path_is_minimal(self):
         with TemporaryDirectory() as directory:

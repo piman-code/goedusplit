@@ -10213,17 +10213,30 @@ codex login status</pre>
         script = "JSON.stringify(window.__GOEDUSPLIT_GET_PROJECT__ ? window.__GOEDUSPLIT_GET_PROJECT__() : null)"
         self.spliter_view.page().runJavaScript(script, lambda raw: callback(self._parse_spliter_project(raw)))
 
-    @staticmethod
-    def _is_sample_calculator_project(project) -> bool:
-        """The calculator starts with 18 example items: titles "N번", nothing else filled in."""
+    # The calculator bundle's example: points per item and difficulty from the target level.
+    _SAMPLE_POINTS = (4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 8, 8)
+
+    @classmethod
+    def _is_sample_calculator_project(cls, project) -> bool:
+        """The calculator starts with 18 example items: titles "N번", default points, nothing else filled in.
+
+        Only the rates can differ unnoticed, so callers must not act on this silently.
+        """
         items = project.get("items") if isinstance(project, dict) else None
         if not isinstance(items, list) or len(items) != 18:
             return False
         for number, item in enumerate(items, start=1):
             target = "E" if number <= 3 else "D" if number <= 6 else "C" if number <= 11 else "B" if number <= 15 else "A"
-            if not isinstance(item, dict) or (
-                item.get("number"), item.get("type"), item.get("title"), item.get("targetLevel")
-            ) != (number, "선택형", f"{number}번", target) or item.get("standard") or item.get("note") or item.get("evidence"):
+            difficulty = "어려움" if target in ("A", "B") else "보통" if target == "C" else "쉬움"
+            if not isinstance(item, dict):
+                return False
+            try:
+                points = float(item.get("points"))
+            except (TypeError, ValueError):
+                return False
+            if (item.get("number"), item.get("type"), item.get("title"), item.get("targetLevel"), item.get("difficulty")) != (
+                number, "선택형", f"{number}번", target, difficulty,
+            ) or points != cls._SAMPLE_POINTS[number - 1] or item.get("standard") or item.get("note") or item.get("evidence"):
                 return False
         return True
 
@@ -10561,7 +10574,12 @@ codex login status</pre>
                 if not dialog.isVisible():
                     return
                 if automatic and self._is_sample_calculator_project(project):
-                    return  # keep the analysis-based table instead of the calculator's example items
+                    # Keep the analysis-based table, but say so: rates alone may have been edited.
+                    note.setText(
+                        note.text() + " 계산기에는 기본 예시 문항만 있는 것으로 보여 계산기 값을 자동으로 불러오지 않았습니다."
+                        " 계산기 값을 쓰려면 '계산기 현재값 불러오기'를 누르세요."
+                    )
+                    return
                 try:
                     designs = self._neis_design_items_from_spliter_project(project)
                 except ValueError as exc:
