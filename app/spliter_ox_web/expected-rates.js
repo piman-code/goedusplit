@@ -31,7 +31,13 @@
         difficulty: item.difficulty, target: item.targetLevel, rates, standard: item.standard || ""};
     });
   }
-  function validate(designs) {
+  function inversions(designs) {
+    return designs.map(item => ({type: item.type, number: item.number,
+      pairs: LEVELS.slice(1).map((level, i) => [LEVELS[i], level]).filter(([upper, lower]) => Number(item.rates?.[lower]) > Number(item.rates?.[upper]))}))
+      .filter(item => item.pairs.length);
+  }
+  // allowInversions: a live preview while a teacher is still editing; the NEIS table stays strict.
+  function validate(designs, options) {
     if (!Array.isArray(designs) || designs.length > 1000) throw new Error("문항 목록은 1,000개 이내여야 합니다.");
     const seen = new Set();
     designs.forEach((item, index) => {
@@ -46,7 +52,7 @@
       LEVELS.forEach((level, i) => {
         const rate = number(item.rates?.[level], `${level} 예상정답률`);
         if (rate < 0 || rate > 100) throw new Error("예상정답률은 0~100%로 입력해 주세요.");
-        if (i && rate > item.rates[LEVELS[i - 1]]) throw new Error(`${item.type} ${n}번: A~E 예상정답률의 역전을 확인해 주세요.`);
+        if (i && !options?.allowInversions && rate > item.rates[LEVELS[i - 1]]) throw new Error(`${item.type} ${n}번: A~E 예상정답률의 역전을 확인해 주세요.`);
       });
     });
   }
@@ -55,8 +61,8 @@
     if (n < 0 || n > 100) throw new Error("NEIS 예상정답률은 0~100%여야 합니다.");
     return Math.min(100, 5 * Math.floor(n / 5 + 0.5 + 1e-12));
   }
-  function rowsFromDesigns(designs) {
-    validate(designs);
+  function rowsFromDesigns(designs, options) {
+    validate(designs, options);
     const groups = new Map();
     designs.forEach(item => {
       const key = `${item.type}:${item.difficulty}`;
@@ -72,8 +78,8 @@
       return row;
     });
   }
-  function summarizeDesigns(designs) {
-    const rows = rowsFromDesigns(designs), total = designs.reduce((sum, item) => sum + Number(item.points), 0);
+  function summarizeDesigns(designs, options) {
+    const rows = rowsFromDesigns(designs, options), total = designs.reduce((sum, item) => sum + Number(item.points), 0);
     const result = {item_count: designs.length, total_points: total, raw_cuts: {}, scaled_cuts: {}, neis_raw_cuts: {}, neis_scaled_cuts: {}};
     LEVELS.forEach(level => {
       result.raw_cuts[level] = designs.reduce((sum, item) => sum + Number(item.points) * item.rates[level] / 100, 0);
@@ -81,10 +87,11 @@
       result.scaled_cuts[level] = total ? result.raw_cuts[level] / total * 100 : 0;
       result.neis_scaled_cuts[level] = total ? result.neis_raw_cuts[level] / total * 100 : 0;
     });
+    if (options?.allowInversions) result.inversions = inversions(designs);
     return result;
   }
-  const api = {LEVELS, cellRate, designsFromProject, validate, roundRate, rowsFromDesigns, summarizeDesigns,
-    summarize: project => summarizeDesigns(designsFromProject(project))};
+  const api = {LEVELS, cellRate, designsFromProject, validate, inversions, roundRate, rowsFromDesigns, summarizeDesigns,
+    summarize: (project, options) => summarizeDesigns(designsFromProject(project), options)};
   root.GoeduExpectedRates = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(globalThis);

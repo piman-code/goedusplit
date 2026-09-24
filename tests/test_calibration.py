@@ -3,7 +3,8 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 
 from app.calibration import (
-    borderline_indices, build_calibration, cut_lines, suggest_presets, summary_lines, write_calibration_workbook,
+    borderline_indices, build_calibration, cut_lines, observed_target, observed_targets, suggest_presets,
+    summary_lines, write_calibration_workbook,
 )
 from app.data_loader import ExamData, ItemInfo, StudentResponse
 
@@ -52,6 +53,71 @@ def _standard_designs(exam):
         _design("선택형", 2, "어려움", 40.0, (80, 60, 40, 20, 10), item2),
         _design("서답형", 1, "보통", 20.0, (70, 60, 50, 40, 30), serdap),
     ]
+
+
+PRESETS = {  # the app's default table (보통 items)
+    "A": (70, 45, 25, 10, 0), "B": (85, 70, 45, 25, 10), "C": (90, 80, 70, 45, 25),
+    "D": (95, 90, 80, 70, 45), "E": (95, 95, 90, 80, 70),
+}
+
+
+def _rates_for(target, difficulty):
+    delta = {"쉬움": 10, "어려움": -10}.get(difficulty, 0)
+    return {lv: max(0, min(100, rate + delta)) for lv, rate in zip("ABCDE", PRESETS[target])}
+
+
+def _border_row(difficulty, rates):
+    return {"difficulty": difficulty, "border": dict(zip("ABCDE", rates))}
+
+
+class ObservedTargetTests(unittest.TestCase):
+    def test_target_is_the_closest_preset_row_for_the_difficulty(self):
+        self.assertEqual(observed_target(_border_row("보통", (88, 78, 72, 50, 30)), _rates_for), "C")
+        # 쉬움 items start 10 higher: the same pattern with +10 is still target C, not an easier level
+        self.assertEqual(observed_target(_border_row("쉬움", (98, 88, 82, 60, 40)), _rates_for), "C")
+        # a 쉬움 label with few correct at the lower cuts is a target A item
+        self.assertEqual(observed_target(_border_row("쉬움", (75, 50, 30, 20, 15)), _rates_for), "A")
+
+    def test_needs_three_boundaries_with_students(self):
+        self.assertIsNone(observed_target(_border_row("보통", (90, 80, None, None, None)), _rates_for))
+        self.assertEqual(observed_target(_border_row("보통", (95, 90, 80, None, None)), _rates_for), "D")
+
+    def test_constructed_group_is_matched_with_its_items_difficulties(self):
+        hard_b = _rates_for("B", "어려움")
+        group = {"difficulty": "", "border": dict(hard_b), "members": [(10.0, "어려움"), (10.0, "어려움")]}
+        self.assertEqual(observed_target(group, _rates_for), "B")
+        # compared as a 보통 item, the same results would look like a target A group
+        self.assertEqual(observed_target(dict(group, members=None), _rates_for), "A")
+        exam, levels = _exam()
+        report = build_calibration(_standard_designs(exam), exam, levels, rates_for=_rates_for)
+        self.assertEqual(report["rows"][-1]["members"], [(20.0, "보통")])
+
+    @unittest.skipIf(MainWindow is None, "main window unavailable")
+    def test_with_the_apps_own_rules_each_default_row_is_its_own_target(self):
+        window = MainWindow.__new__(MainWindow)  # default table, with the 2/3 and A≥…≥E rules applied
+        for difficulty in ("쉬움", "보통", "어려움"):
+            for target in "ABCDE":
+                row = {"difficulty": difficulty, "border": dict(window._target_level_rates(target, difficulty))}
+                self.assertEqual(observed_target(row, window._target_level_rates), target, (difficulty, target))
+
+    def test_constructed_items_share_their_group_target(self):
+        report = {"rows": [
+            {"type": "선택형", "number": "2", "observed_target": "B"},
+            {"type": "선택형", "number": "3", "observed_target": None},
+            {"type": "서답형 묶음", "number": "1, 2", "observed_target": "A"},
+        ]}
+        self.assertEqual(observed_targets(report), {("선택형", 2): "B", ("서답형", 1): "A", ("서답형", 2): "A"})
+
+    def test_report_names_items_whose_target_differs_from_the_data(self):
+        exam, levels = _exam()
+        report = build_calibration(_standard_designs(exam), exam, levels, rates_for=_rates_for)
+        rows = {(r["type"], r["number"]): r for r in report["rows"]}
+        # 쉬움 1번: A 75, B 0, C 0 / 어려움 2번: A 50, B 50, C 0 → both only A students pass: target A
+        self.assertEqual([rows[key]["observed_target"] for key in (("선택형", "1"), ("선택형", "2"))], ["A", "A"])
+        differ = [r for r in report["rows"] if r["type"] == "선택형" and r["observed_target"] != r["target"]]
+        line = next(line for line in summary_lines(report) if line.startswith("목표수준이 실측과 다른"))
+        self.assertIn(f"선택형 {len(differ)}문항", line)
+        self.assertIsNone(build_calibration(_standard_designs(exam), exam, levels)["rows"][0]["observed_target"])
 
 
 class CalibrationTests(unittest.TestCase):
@@ -222,6 +288,101 @@ class CalibrationWindowTests(unittest.TestCase):
         self.assertEqual(report["rows"][0]["predicted"]["A"], 80.0)  # 두 검토안 평균
         self.assertEqual(report["rows"][0]["border"]["A"], 75.0)
         self.assertEqual(report["not_designed"], ["선택형 2번", "서답형 1번"])
+
+    def _import_window(self):
+        from types import SimpleNamespace
+        window = MainWindow.__new__(MainWindow)
+        window.exam, levels = _exam()
+        window.overall = SimpleNamespace(levels_arr=levels)
+        return window
+
+    @staticmethod
+    def _paper_rows(points=(40.0, 40.0, 20.0)):
+        return [{"type": kind, "number": number, "points": score, "difficulty": difficulty, "flags": [], "choices": 5, "preview": ""}
+                for (kind, number, difficulty), score in zip((("선택형", 1, "쉬움"), ("선택형", 2, "어려움"), ("서답형", 1, "보통")), points)]
+
+    def test_import_takes_targets_from_the_analysis_of_the_same_paper(self):
+        window = self._import_window()
+        targets, analysis = window._observed_import_targets(self._paper_rows())
+        self.assertEqual(targets, {("선택형", 1): "A", ("선택형", 2): "A", ("서답형", 1): "A"})
+        self.assertEqual(analysis, "합성 · 6명")
+        # 배점 the paper did not show were filled from this very analysis: they cannot count as agreement
+        rows = self._paper_rows()
+        paper = {(r["type"], r["number"]): (40.0 if r["number"] == 1 and r["type"] == "선택형" else None) for r in rows}
+        self.assertEqual(set(window._observed_import_targets(rows, paper)[0]), {("선택형", 1), ("선택형", 2), ("서답형", 1)})
+        self.assertEqual(window._observed_import_targets(rows, {key: None for key in paper}), ({}, ""))
+        # another paper (배점 differ) or another item count: no targets from this analysis
+        self.assertEqual(window._observed_import_targets(self._paper_rows((30.0, 50.0, 20.0))), ({}, ""))
+        self.assertEqual(window._observed_import_targets(self._paper_rows()[:2]), ({}, ""))
+
+    def test_paper_must_name_subject_year_and_semester_of_the_analysis(self):
+        window = self._import_window()
+        window.exam.subject, window.exam.semester = "공통수학1(4)", "2026학년도 1학기"
+        self.assertTrue(window._paper_names_loaded_exam("2026학년도 1학기 1차 지필평가 공통수학1 1학년"))
+        self.assertTrue(window._paper_names_loaded_exam("2026 학년도 1 학기 … 공통 수학1"))
+        for text in ("2026학년도 1학기 공통수학1Ⅱ", "2026학년도 2학기 공통수학1", "2025학년도 1학기 공통수학1",
+                     "2026학년도 11학기 공통수학1", "2026학년도 1학기 수학"):
+            self.assertFalse(window._paper_names_loaded_exam(text), text)
+        window.exam.subject = "수학(4)"
+        self.assertFalse(window._paper_names_loaded_exam("2026학년도 1학기 공통수학1"))  # a longer name is another subject
+        window.exam.semester = ""
+        self.assertFalse(window._paper_names_loaded_exam("2026학년도 1학기 수학"))
+
+    def test_import_uses_analysis_targets_by_default_only_when_the_paper_names_the_exam(self):
+        import os
+        from unittest.mock import patch
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication
+        self.app = QApplication.instance() or QApplication([])  # the import shows a wait cursor
+        window = self._import_window()
+        window.exam.subject, window.exam.semester = "합성(4)", "2026학년도 1학기"  # NEIS adds the credits
+        parsed = {"items": self._paper_rows(), "total_points": 100.0, "warnings": []}
+        for text, expected in (("2026학년도 1학기 합성 시험", True), ("2026학년도 1학기 다른 과목 시험", False)):
+            with self.subTest(text=text), \
+                 patch("app.main_window.QFileDialog.getOpenFileName", return_value=("paper.hwp", "")), \
+                 patch("app.main_window.extract_exam_text", return_value=(text, "합성")), \
+                 patch("app.main_window.parse_exam_structure", return_value=dict(parsed, items=[dict(r) for r in parsed["items"]])), \
+                 patch.object(MainWindow, "_show_exam_structure_dialog") as show:
+                window.import_exam_structure()
+            kwargs = show.call_args.kwargs
+            self.assertEqual(kwargs["use_observed"], expected)
+            self.assertEqual(kwargs["analysis"], "합성(4) · 2026학년도 1학기 · 6명")
+            rows = show.call_args.args[0]["items"]
+            chosen = [row["observed_target"] if expected else row["rule_target"] for row in rows]
+            self.assertEqual([row["target"] for row in rows], chosen)
+
+    def test_preview_checkbox_switches_targets_but_keeps_the_teachers_own_choice(self):
+        import os
+        from unittest.mock import patch
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        from PySide6.QtWidgets import QApplication, QCheckBox, QComboBox, QDialog, QWidget
+        self.app = QApplication.instance() or QApplication([])
+        owner = QWidget()
+        owner._px = lambda value: int(value)
+        owner._import_target_level = MainWindow._import_target_level
+        rows = [dict(row, observed_target=target, standard="") for row, target in zip(self._paper_rows(), "ADA")]
+        seen = {}
+
+        def inspect(dialog):
+            check = dialog.findChildren(QCheckBox)[0]
+            targets = [box for box in dialog.findChildren(QComboBox) if box.count() == 5]
+            difficulties = [box for box in dialog.findChildren(QComboBox) if box.count() == 3]
+            seen["on"] = [box.currentText() for box in targets]
+            check.setChecked(False)
+            seen["off"] = [box.currentText() for box in targets]
+            targets[1].setCurrentIndex(4)
+            targets[1].activated.emit(4)            # the teacher picks E for 선택형 2번
+            difficulties[1].setCurrentText("쉬움")  # and changes its difficulty
+            check.setChecked(True)
+            seen["mixed"] = [box.currentText() for box in targets]
+            return 0
+
+        with patch.object(QDialog, "exec", inspect):
+            MainWindow._show_exam_structure_dialog(owner, {"items": rows, "total_points": 100.0, "warnings": []},
+                                                   "합성", "paper.hwp", analysis="합성 · 6명", use_observed=True)
+        self.assertEqual(seen["on"], ["A", "D", "A"])
+        self.assertEqual(seen["off"], ["E", "B", "C"])       # difficulty rule
+        self.assertEqual(seen["mixed"], ["A", "E", "A"])     # 2번 keeps the teacher's E
 
     def test_applying_suggestion_changes_only_chosen_rows_and_keeps_rules(self):
         import json

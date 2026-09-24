@@ -8,6 +8,8 @@ Checks, on the real embedded calculator:
 2. With an analysis done before the calculator tab opens (the usual order), loading a
    saved work file without evidence by a real mouse click keeps the calculator alive
    (no React "removeChild" crash) and the prediction-vs-actual comparison opens.
+3. Changing a correct count, in the table or in the selected-item panel, updates the cut scores at
+   the top, and they stay visible (with a warning) while a level is briefly below the one under it.
 It never attaches to a running app and uses an off-the-record browser profile.
 """
 
@@ -136,6 +138,22 @@ def _run(scratch: Path) -> int:
         window.show_calibration_report()
         QTest.qWait(1500)
         results["comparison opens with loaded items"] = ("예측-실측 비교", 3) in dialogs
+        strip = "document.getElementById('goedu-score-strip')?.innerText.replace(/\\s+/g, ' ') || ''"
+        first = js(window, strip)
+        js(window, "document.querySelector('.item-table tbody tr .rate-cell').click()")  # A: 2/3 -> 3/3
+        QTest.qWait(800)
+        js(window, "document.querySelector('.item-table tbody tr .rate-cell').click()")  # A: 3/3 -> 0/3, below B
+        QTest.qWait(800)
+        inverted = js(window, strip)
+        results["cut scores follow a table count change and stay visible"] = (
+            inverted != first and "A/B" in inverted and any(ch.isdigit() for ch in inverted.split("A/B")[1][:8])
+            and "선택형 1번(A<B)" in inverted
+        )
+        js(window, "document.querySelector('.item-table tbody tr').click()")
+        QTest.qWait(500)
+        js(window, "document.querySelectorAll('.level-editor .ox')[3].click()")  # B, first student
+        QTest.qWait(800)
+        results["an O/X change in the selected-item panel updates the cut scores"] = js(window, strip) != inverted
         results["no calculator errors or alerts"] = not problems
         window.close()
         QTest.qWait(1300)

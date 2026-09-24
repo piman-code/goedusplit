@@ -138,6 +138,52 @@ class LaptopLayoutTests(unittest.TestCase):
         self.resize_window(1440)
         self.assert_sidebar_open()
 
+    def test_calculator_keeps_tab_names_and_gives_the_input_panel_back(self):
+        def labels():
+            return [self.window.tabs.tabText(i) for i in range(self.window.tabs.count())]
+
+        # 1435: the tab bar is wide enough for the long names only once the panel is hidden.
+        for width in (1280, 1435):
+            with self.subTest(width=width):
+                self.set_tab(self.window.tab_data)
+                self.resize_window(1600)
+                self.resize_window(width)
+                self.assert_sidebar_open()
+                before = labels()
+                self.set_tab(self.window.tab_spliter)
+                self.assert_sidebar_closed()
+                self.assertEqual(labels(), before)
+                self.set_tab(self.window.tab_data)
+                self.assert_sidebar_open()
+                self.assertEqual(labels(), before)
+
+    def test_narrow_window_or_manual_toggle_ends_the_calculator_collapse(self):
+        def labels():
+            return [self.window.tabs.tabText(i) for i in range(self.window.tabs.count())]
+
+        def calculator_hides_panel_at_1300():
+            self.set_tab(self.window.tab_data)
+            self.resize_window(1600)
+            self.resize_window(1300)
+            self.assert_sidebar_open()
+            self.set_tab(self.window.tab_spliter)
+            self.assert_sidebar_closed()
+            self.assertTrue(self.window._sidebar_hidden_for_calculator)
+
+        self.resize_window(1100)
+        narrow = labels()
+        calculator_hides_panel_at_1300()
+        self.resize_window(1100)
+        self.set_tab(self.window.tab_data)
+        self.assertEqual(labels(), narrow)     # hidden for the window size now, not for the calculator
+        self.assert_sidebar_closed()
+        calculator_hides_panel_at_1300()
+        self.toggle_sidebar()                  # opened by hand on the calculator
+        self.toggle_sidebar()                  # and closed again by hand
+        self.assertFalse(self.window._sidebar_hidden_for_calculator)
+        self.set_tab(self.window.tab_data)
+        self.assert_sidebar_closed()           # the teacher's choice stays
+
     def test_manual_reopen_on_narrow_main_tab_survives_layout_events(self):
         self.resize_window(1080)
         self.assert_sidebar_closed()
