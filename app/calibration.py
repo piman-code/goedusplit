@@ -25,6 +25,7 @@ BORDER_MIN = 3
 BORDER_MAX_DISTANCE = 10.0  # points on the 100-point final score
 LARGE_GAP = 15.0            # %p
 FEW_STUDENTS = 5
+DIFFICULTY_DELTA = {"쉬움": 10, "보통": 0, "어려움": -10}  # what the app adds to a preset row per difficulty
 
 
 def borderline_indices(scores: list[float], cuts: dict) -> dict[str, list[list[int]]]:
@@ -179,7 +180,12 @@ def _direction(value: float) -> str:
 def summary_lines(report: dict) -> list[str]:
     """What the teacher should read first: relative misses by difficulty, then cautions."""
     lines = []
-    for diff, data in report["relative_by_difficulty"].items():
+    groups = report["relative_by_difficulty"]
+    if len(groups) < 2:
+        # Relative misses average to zero, so a single difficulty group always looks "on target".
+        lines.append("문항 난이도가 한 가지뿐이라 난이도별 경향은 알 수 없습니다. 표에서 상대차가 큰 문항을 확인하세요.")
+        groups = {}
+    for diff, data in groups.items():
         values = [(lv, v) for lv, v in data["levels"].items() if v is not None]
         if not values:
             continue
@@ -207,6 +213,10 @@ def summary_lines(report: dict) -> list[str]:
 
 def cut_lines(report: dict) -> list[str]:
     """The level-wide difference is the estimated cut against the applied cut, not estimate quality."""
+    if report["not_designed"] or report["unmatched"]:
+        return ["일부 문항만 예측값이 있어 검토안 분할점수를 이번 적용 분할점수와 직접 비교하지 않았습니다."]
+    if any("수행평가" in note for note in report["notes"]):
+        return ["수행평가를 합산한 분할점수라 지필 검토안 분할점수와 직접 비교하지 않았습니다."]
     lines = []
     for cut in report["cuts"]:
         if cut["predicted_scaled"] is None or cut["applied"] is None:
@@ -222,6 +232,8 @@ def suggest_presets(report: dict, current: dict[str, dict], min_items: int = 2) 
 
     For every target level with at least ``min_items`` selection items, the
     suggestion is the mean borderline rate of those items at each boundary.
+    Preset rows are for 보통 items and the app adds DIFFICULTY_DELTA when it uses
+    them, so each item's difficulty adjustment is taken off before averaging.
     Cells without data keep the current value.
     """
     result = {}
@@ -231,8 +243,10 @@ def suggest_presets(report: dict, current: dict[str, dict], min_items: int = 2) 
         if len(rows) >= min_items:
             suggested = {}
             for level in LEVELS:
-                values = [row["border"][level] for row in rows if row["border"][level] is not None]
-                suggested[level] = math.floor(math.fsum(values) / len(values) + 0.5) if values else current[target][level]
+                values = [row["border"][level] - DIFFICULTY_DELTA.get(row["difficulty"], 0)
+                          for row in rows if row["border"][level] is not None]
+                value = math.floor(math.fsum(values) / len(values) + 0.5) if values else current[target][level]
+                suggested[level] = max(0, min(100, value))
         result[target] = {"items": len(rows), "current": dict(current[target]), "suggested": suggested}
     return result
 

@@ -142,13 +142,37 @@ class CalibrationTests(unittest.TestCase):
         lines = cut_lines(build_calibration(_standard_designs(exam), exam, levels))
         self.assertEqual(lines[0], "A/B: 검토안으로 계산한 분할점수 82.0점, 이번에 적용한 분할점수 80.0점.")
         self.assertEqual(len(lines), 5)
+        partial = cut_lines(build_calibration(_standard_designs(exam)[:1], exam, levels))
+        self.assertEqual(len(partial), 1)
+        self.assertIn("일부 문항만", partial[0])
+        exam.use_perform, exam.weight_perform = True, 30.0
+        self.assertIn("수행평가", cut_lines(build_calibration(_standard_designs(exam), exam, levels))[0])
+
+    def test_single_difficulty_group_gives_no_always_true_sentence(self):
+        exam, levels = _exam()
+        designs = _standard_designs(exam)
+        for design in designs:
+            design["difficulty"] = "보통"
+        lines = summary_lines(build_calibration(designs, exam, levels))
+        self.assertIn("난이도가 한 가지뿐", lines[0])
+        self.assertFalse(any("비슷하게 예측" in line for line in lines))
+
+    def test_preset_suggestion_removes_difficulty_adjustment(self):
+        exam, levels = _exam()
+        current = {t: {lv: 50 for lv in "ABCDE"} for t in "ABCDE"}
+        designs = _standard_designs(exam)[:2]
+        for design in designs:
+            design["difficulty"] = "어려움"   # 두 문항 모두 어려움: 쓸 때 -10 되므로 제안은 +10
+        suggestion = suggest_presets(build_calibration(designs, exam, levels), current)
+        self.assertEqual(suggestion["C"]["suggested"]["A"], 73)  # (75+50)/2 + 10 = 72.5 → 73
 
     def test_preset_suggestion_uses_target_groups_and_keeps_missing_cells(self):
         exam, levels = _exam()
         report = build_calibration(_standard_designs(exam), exam, levels)
         current = {t: {lv: 10 * (i + 1) for i, lv in enumerate("ABCDE")} for t in "ABCDE"}
         suggestion = suggest_presets(report, current)
-        # 선택형 1·2번 모두 목표 C: A (75+50)/2=62.5→63, B 25, C 0, D·E는 경계 학생이 없어 현재값 유지
+        # 목표 C: 1번(쉬움, 기준표에 +10 붙음) 실측 75/0/0 → 65/-10/-10, 2번(어려움, -10) 50/50/0 → 60/60/10
+        # A (65+60)/2=62.5→63, B (-10+60)/2=25, C (-10+10)/2=0, D·E는 경계 학생이 없어 현재값 유지
         self.assertEqual(suggestion["C"]["suggested"], {"A": 63, "B": 25, "C": 0, "D": 40, "E": 50})
         self.assertEqual(suggestion["C"]["items"], 2)
         self.assertIsNone(suggestion["B"]["suggested"])
@@ -220,6 +244,47 @@ class CalibrationWindowTests(unittest.TestCase):
         rates = [stored["C"][lv] for lv in "ABCDE"]
         self.assertEqual(rates, sorted(rates, reverse=True))         # A ≥ B ≥ … ≥ E
         window._send_spliter_teacher_presets.assert_called_once_with(apply_current=False)
+
+    def _sample_project(self):
+        target = lambda n: "E" if n <= 3 else "D" if n <= 6 else "C" if n <= 11 else "B" if n <= 15 else "A"
+        return {"items": [{"number": n, "type": "선택형", "title": f"{n}번", "targetLevel": target(n), "standard": "",
+                           "note": "", "evidence": [], "points": 4} for n in range(1, 19)]}
+
+    def test_calculator_example_items_are_recognised(self):
+        sample = self._sample_project()
+        self.assertTrue(MainWindow._is_sample_calculator_project(sample))
+        for change in ({"title": "1번 다항식"}, {"standard": "[10수학01-01]"}, {"note": "메모"}, {"targetLevel": "C"}):
+            edited = self._sample_project()
+            edited["items"][0].update(change)
+            self.assertFalse(MainWindow._is_sample_calculator_project(edited), change)
+        shorter = self._sample_project()
+        shorter["items"].pop()
+        self.assertFalse(MainWindow._is_sample_calculator_project(shorter))
+        self.assertFalse(MainWindow._is_sample_calculator_project(None))
+
+    def test_example_items_need_confirmation_before_comparing(self):
+        from unittest.mock import patch
+        window = MainWindow.__new__(MainWindow)
+        window.exam, _ = _exam()
+        with patch("app.main_window.QMessageBox") as messages, \
+             patch.object(MainWindow, "_show_calibration_dialog") as show:
+            messages.question.return_value = messages.No
+            window._on_calibration_project(self._sample_project())
+        messages.question.assert_called_once()
+        show.assert_not_called()
+
+    def test_shown_preset_row_is_what_gets_saved(self):
+        import json, random
+        from unittest.mock import Mock
+        window = MainWindow.__new__(MainWindow)
+        saved = {}
+        window.settings = Mock(setValue=lambda key, value: saved.__setitem__(key, value))
+        rng = random.Random(3)
+        for _ in range(3000):
+            target = rng.choice("ABCDE")
+            row = window._settled_preset_row(target, {lv: rng.randint(0, 100) for lv in "ABCDE"})
+            window._save_target_rate_presets({target: row})
+            self.assertEqual(json.loads(saved["spliter/target_rate_presets"])[target], row)
 
     def test_empty_calculator_and_missing_analysis_explain_next_step(self):
         from unittest.mock import patch
