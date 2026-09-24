@@ -211,7 +211,10 @@ def install_frozen_columns(table, frozen_count: int):
         if c < frozen_count:
             frozen.setColumnWidth(c, frozen_widths[c])
 
-    # 헤더 sorting 표시 동기화
+    # 헤더 sorting 표시 동기화. The two views share one model and enabling sorting sorts it by the
+    # header's indicator (Qt's default is descending), which reversed an already sorted table (문18 first).
+    main_header = table.horizontalHeader()
+    frozen.horizontalHeader().setSortIndicator(main_header.sortIndicatorSection(), main_header.sortIndicatorOrder())
     frozen.setSortingEnabled(table.isSortingEnabled())
     frozen.horizontalHeader().setSortIndicatorShown(True)
 

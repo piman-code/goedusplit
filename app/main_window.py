@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer, QObject, Slot
+from PySide6.QtCore import Qt, QEvent, QSettings, QUrl, QSize, QTimer, QObject, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -62,7 +62,7 @@ from .export_privacy import (
     pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash, student_result_table,
 )
 from .calibration import (
-    LARGE_GAP, build_calibration, cut_lines, observed_targets, suggest_presets, summary_lines,
+    LARGE_GAP, build_calibration, cut_lines, headline_lines, observed_targets, suggest_presets, summary_lines,
     write_calibration_workbook,
 )
 from .perform_loader import load_perform
@@ -203,19 +203,17 @@ def build_data_empty_state_html() -> str:
         ("예상정답률 조정", "예상정답률 입력 탭에서 O/X 판단과 근거 추천을 보며 분할점수 산정 근거를 정리합니다."),
         ("모니터링·상담·내보내기", "모니터링 탭과 상담 모드, 포트폴리오, CSV/근거 엑셀 내보내기로 협의와 상담 자료를 마무리합니다."),
     ]
+    # <ol> numbers the steps itself; a number in the title printed "1. 1." and the title ran into the text.
     items = "".join(
-        "<li>"
-        f"<b>{idx}. {html.escape(title)}</b>"
-        f"<span>{html.escape(description)}</span>"
-        "</li>"
-        for idx, (title, description) in enumerate(steps, start=1)
+        f"<li><b>{html.escape(title)}</b> — {html.escape(description)}</li>"
+        for title, description in steps
     )
     return (
         "<h3>처음 시작하기</h3>"
         "<p>아직 분석 자료가 없습니다. 아래 순서대로 진행하면 됩니다.</p>"
         f"<ol>{items}</ol>"
-        "<p class='muted'>시험지 문항 검토와 AI 연결은 후속 버전에서 제공합니다. "
-        "현재 버전은 기본 분석과 예상정답률 계산, 상담 모드, 내보내기에 집중합니다.</p>"
+        "<p class='muted'>시험지(HWP·HWPX·PDF)의 문항 번호·배점은 예상정답률 탭의 '자료 → 시험지에서 문항 가져오기'로 가져올 수 있습니다. "
+        "시험지 오류 검토와 AI 연결은 후속 버전에서 제공합니다.</p>"
     )
 
 LUCIDE_PATHS = {
@@ -282,6 +280,41 @@ class FileSelector(QWidget):
         return self.path_edit.text().strip()
 
 
+class _MarginKeepingCanvas(FigureCanvas):
+    """Fits a chart's margins to its labels when the widget is smaller than the chart's design.
+
+    Charts set margins as fractions of their designed size (e.g. bottom=0.18 of 3.9 in). In a
+    shorter pane the same fraction left too little room and axis titles were cut off. Below the
+    designed size the margins are measured from the actual labels (tight_layout); at or above it
+    the designed margins are used as before.
+    """
+
+    def __init__(self, fig):
+        super().__init__(fig)
+        pars = fig.subplotpars
+        # Decided once: tight_layout leaves a placeholder layout engine behind, which would read as
+        # "the chart manages its own layout" on every later resize and freeze the first margins.
+        self._own_layout = fig.get_layout_engine() is not None
+        self._design_size = tuple(fig.get_size_inches())
+        self._design_pars = {"left": pars.left, "right": pars.right, "bottom": pars.bottom, "top": pars.top}
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        fig = self.figure
+        if self._own_layout:
+            return
+        w0, h0 = self._design_size
+        w, h = fig.get_size_inches()
+        fig.set_layout_engine(None)
+        fig.subplots_adjust(**self._design_pars)
+        if w < w0 - 0.05 or h < h0 - 0.05:
+            try:
+                fig.tight_layout(pad=0.5)
+            except Exception:
+                fig.subplots_adjust(**self._design_pars)
+            fig.set_layout_engine(None)
+
+
 class CanvasHolder(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -291,7 +324,7 @@ class CanvasHolder(QWidget):
     def set_figure(self, fig):
         if self._canvas is not None:
             self._layout.removeWidget(self._canvas); self._canvas.setParent(None); self._canvas.deleteLater()
-        self._canvas = FigureCanvas(fig)
+        self._canvas = _MarginKeepingCanvas(fig)
         self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         # 마우스 휠로 줌, 더블클릭으로 원상 복귀
         attach_wheel_zoom(self._canvas)
@@ -522,7 +555,11 @@ class MainWindow(QMainWindow):
         return "#2a7770"
 
     def _apply_tool_icon(self, button: QToolButton, name: str):
-        button.setText("")
+        # A button with an "iconLabel" shows its word next to the icon: an icon alone (shield, circular
+        # arrow) did not say what it does to a first-time user.
+        label = str(button.property("iconLabel") or "")
+        button.setText(label)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if label else Qt.ToolButtonIconOnly)
         button.setIcon(_lucide_icon(name, self._icon_color()))
         button.setIconSize(QSize(18, 18))
 
@@ -549,12 +586,14 @@ class MainWindow(QMainWindow):
 
     def _build_header_bar(self) -> QWidget:
         bar = QFrame(); bar.setProperty("role", "headerbar")
+        self.header_bar = bar
         h = QHBoxLayout(bar); h.setContentsMargins(8, 4, 8, 4); h.setSpacing(8)
 
         # 사이드바 토글 (좁은 창에서 입력 패널 보이기/숨기기)
         self.btn_sidebar = QToolButton()
         self.btn_sidebar.setProperty("role", "iconbtn")
         self.btn_sidebar.setToolTip("입력 패널 보이기/숨기기")
+        self.btn_sidebar.setProperty("iconLabel", "입력 패널")
         self.btn_sidebar.clicked.connect(self._toggle_sidebar)
         self._apply_tool_icon(self.btn_sidebar, "menu")
         h.addWidget(self.btn_sidebar)
@@ -573,11 +612,15 @@ class MainWindow(QMainWindow):
         self.btn_counsel_mode.setToolTip(
             "상담 모드 (Ctrl+Shift+H): 검색한 학생 외 이름과 반/번호를 화면에서 가립니다."
         )
+        self.btn_counsel_mode.setProperty("iconLabel", "상담 모드")
         self.btn_counsel_mode.toggled.connect(self._on_counseling_mode_changed)
         self._apply_tool_icon(self.btn_counsel_mode, "shield")
         h.addWidget(self.btn_counsel_mode)
 
         # 줌 컨트롤
+        self.lbl_zoom_title = QLabel("화면 크기")
+        self.lbl_zoom_title.setProperty("role", "muted")
+        h.addWidget(self.lbl_zoom_title)
         self.btn_zoom_out = QToolButton()
         self.btn_zoom_out.setToolTip("화면 축소 (Ctrl+−, 최소 50%)")
         self.btn_zoom_out.setProperty("role", "iconbtn")
@@ -594,6 +637,7 @@ class MainWindow(QMainWindow):
         self._apply_tool_icon(self.btn_zoom_in, "plus")
         self.btn_zoom_reset = QToolButton()
         self.btn_zoom_reset.setToolTip("기본 크기로 (Ctrl+0)")
+        self.btn_zoom_reset.setProperty("iconLabel", "기본")
         self.btn_zoom_reset.setProperty("role", "iconbtn")
         self.btn_zoom_reset.clicked.connect(lambda: self._set_zoom(100))
         self._apply_tool_icon(self.btn_zoom_reset, "rotate")
@@ -606,6 +650,7 @@ class MainWindow(QMainWindow):
         self.btn_theme = QToolButton()
         self.btn_theme.setProperty("role", "iconbtn")
         self.btn_theme.setToolTip("라이트/다크 전환  (Ctrl+1: 라이트 / Ctrl+2: 다크 / Ctrl+3: 자동)")
+        self.btn_theme.setProperty("iconLabel", "밝기")
         self.btn_theme.clicked.connect(self._toggle_theme_button)
         h.addWidget(self.btn_theme)
         self._update_theme_button_icon()
@@ -751,6 +796,7 @@ class MainWindow(QMainWindow):
             # ThemeManager가 없을 때도 차트는 다시 그려야 폰트 반영
             self._refresh_all_charts()
         self._apply_zoom_to_surfaces()
+        self._apply_header_compactness()
         # % 라벨 갱신 (기본 13pt = 100%)
         pct = self._zoom_percent()
         if hasattr(self, "lbl_zoom"):
@@ -807,9 +853,27 @@ class MainWindow(QMainWindow):
             self.splitter.setSizes([side_w, max(600, total - side_w)])
         self.statusBar().showMessage("입력 패널을 열었습니다. 정오표와 문항정보표를 지정한 뒤 분석 실행을 누르세요.", 4000)
 
+    def _apply_header_compactness(self):
+        """Words on the less used header buttons only while they fit (large zoom on a laptop)."""
+        if not hasattr(self, "btn_theme") or not hasattr(self, "header_bar"):
+            return
+
+        def show_words(on: bool):
+            self.lbl_zoom_title.setVisible(on)
+            for button, word in ((self.btn_zoom_reset, "기본"), (self.btn_theme, "밝기")):
+                button.setProperty("iconLabel", word if on else "")
+                button.setText(word if on else "")
+                button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if on else Qt.ToolButtonIconOnly)
+
+        show_words(True)
+        available = self.width() - 24  # the central layout's side margins
+        if self.header_bar.minimumSizeHint().width() > available:
+            show_words(False)
+
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         try:
+            self._apply_header_compactness()
             self._update_responsive_sidebar()
             self._apply_responsive_tab_labels()
             w = self.width()
@@ -989,14 +1053,7 @@ class MainWindow(QMainWindow):
         self.cuts_box = self._make_collapsible_panel("분할점수 (고정 분할 방식)", cuts_body)
         v.addWidget(self.cuts_box)
 
-        # 액션 버튼
-        # 액션 버튼들
-        run_btn = QPushButton("분석 실행")
-        run_btn.setProperty("role", "primary")
-        run_btn.setMinimumHeight(40)
-        run_btn.clicked.connect(self.run_analysis)
-        v.addWidget(run_btn)
-
+        # 액션 버튼들 ('분석 실행'은 스크롤 밖 패널 맨 아래에 고정)
         action_row = QHBoxLayout(); action_row.setSpacing(6)
         self.btn_revert = QPushButton(SIDEBAR_REVERT_BUTTON_TEXT)
         self.btn_revert.setToolTip("마지막으로 분석 실행했을 때의 입력값으로 되돌립니다.\n실수로 분할점수나 파일 경로를 건드렸을 때 사용하세요.")
@@ -1025,7 +1082,25 @@ class MainWindow(QMainWindow):
         credit.setAlignment(Qt.AlignRight)
         v.addWidget(credit)
         self._update_cut_box_title()
-        return outer
+
+        # The run button used to sit below every optional panel and needed scrolling to find at the
+        # default window height; keep it pinned under the scroll area instead.
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+        panel_layout.addWidget(outer, 1)
+        run_bar = QFrame()
+        run_layout = QVBoxLayout(run_bar)
+        run_layout.setContentsMargins(12, 8, 12, 10)
+        self.btn_run_analysis = QPushButton("분석 실행")
+        self.btn_run_analysis.setProperty("role", "primary")
+        self.btn_run_analysis.setMinimumHeight(40)
+        self.btn_run_analysis.setToolTip("정오표와 문항정보표로 분석합니다 (Ctrl+R).")
+        self.btn_run_analysis.clicked.connect(self.run_analysis)
+        run_layout.addWidget(self.btn_run_analysis)
+        panel_layout.addWidget(run_bar)
+        return panel
 
     def _current_cut_scores_from_inputs(self) -> dict[str, float]:
         if not hasattr(self, "spin_cuts"):
@@ -1568,10 +1643,12 @@ class MainWindow(QMainWindow):
         self.table_portfolio.setSortingEnabled(True)
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
+            # The full folder path was long and technical here; the '저장 위치' button shows and opens it.
             self.lbl_portfolio_note.setText(
-                f"저장 위치: {self._portfolio_store_dir()} · 저장 과목 {len(set(row['subject'] for row in rows))}개 · 현재 저장 행 {len(rows)}개. "
-                "Data 탭의 '포트폴리오 저장'을 과목마다 누르면 다과목 포트폴리오가 누적됩니다."
+                f"저장 과목 {len(set(row['subject'] for row in rows))}개 · 현재 저장 행 {len(rows)}개. "
+                "Data 탭의 '포트폴리오 저장'을 과목마다 누르면 다과목 포트폴리오가 누적됩니다. 저장 폴더는 '저장 위치' 버튼으로 확인합니다."
             )
+            self.lbl_portfolio_note.setToolTip(f"저장 위치: {self._portfolio_store_dir()}")
 
     def _filter_portfolio_table(self, text: str = ""):
         if not hasattr(self, "table_portfolio"):
@@ -2371,8 +2448,16 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(widget, full)
             self.tabs.setTabToolTip(self.tabs.indexOf(widget), full)
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
+        # The window's own resize arrives before the tab bar is laid out, so names picked there used
+        # the tiny set at first launch ("학생·성취·답지") until a tab was clicked; follow the tab bar.
+        self.tabs.installEventFilter(self)
         self._apply_responsive_tab_labels()
         return self.tabs
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "tabs", None) and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._apply_responsive_tab_labels)
+        return super().eventFilter(watched, event)
 
     def _apply_responsive_tab_labels(self):
         if not hasattr(self, "tabs") or not hasattr(self, "_tab_label_sets"):
@@ -2760,7 +2845,8 @@ class MainWindow(QMainWindow):
     const group = document.createElement('span');
     group.dataset.goeduMainActions = '1';
     group.className = 'goedu-main-actions';
-    for (const [title, label] of [['불러오기', '작업 불러오기'], ['CSV 내보내기', 'CSV 내보내기'], ['작업 저장', '작업 저장']]) {{
+    // A short word next to each icon: the icons alone (arrows, a disk) did not say load / export / save.
+    for (const [title, label, word] of [['불러오기', '작업 불러오기', '불러오기'], ['CSV 내보내기', 'CSV 내보내기', 'CSV'], ['작업 저장', '작업 저장', '저장']]) {{
       const original = document.querySelector('.top-actions button[title="' + title + '"]');
       if (!original) continue;
       const button = document.createElement('button');
@@ -2770,7 +2856,9 @@ class MainWindow(QMainWindow):
       button.setAttribute('aria-label', label);
       const icon = original.querySelector('svg');
       if (icon) button.appendChild(icon.cloneNode(true));
-      else button.textContent = label;
+      const text = document.createElement('span');
+      text.textContent = word;
+      button.appendChild(text);
       button.onclick = () => document.querySelector('.top-actions button[title="' + title + '"]')?.click();
       group.appendChild(button);
     }}
@@ -2881,6 +2969,16 @@ class MainWindow(QMainWindow):
         button.setAttribute('aria-label', level + ' 수준 가상학생 ' + (student + 1) + ' 정답');
         button.setAttribute('aria-pressed', String(button.classList.contains('on')));
       }});
+    }});
+    // Cells whose rate comes from a direct % (analysis evidence) showed e.g. "3/3 · 99.0%", which read
+    // as an error; mark them so the percentage reads "직접 99.0%". Clicking a cell switches it to O/X.
+    document.querySelectorAll('.item-table .rate-cell').forEach(cell => {{
+      const parts = (cell.querySelector('b')?.textContent || '').split('/').map(part => Number(part.trim()));
+      const rate = parseFloat(cell.querySelector('span')?.textContent || '');
+      const direct = parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && Number.isFinite(rate)
+        && (parts[1] > 0 ? Math.abs(parts[0] / parts[1] * 100 - rate) > 0.05 : rate > 0);
+      if (direct) cell.dataset.goeduDirect = '1';
+      else delete cell.dataset.goeduDirect;
     }});
     document.querySelectorAll('.item-table tbody tr').forEach(row => {{
       const number = row.querySelector('.number-input')?.value || '';
@@ -3391,6 +3489,17 @@ class MainWindow(QMainWindow):
         empty_layout.addLayout(empty_buttons)
         layout.addWidget(self.data_empty_state)
 
+        # Search, chart and table stay hidden until an analysis exists: empty chart boxes and disabled
+        # filters under the start guide looked like something was broken.
+        self.data_results = QWidget()
+        results_layout = QVBoxLayout(self.data_results)
+        results_layout.setContentsMargins(0, 0, 0, 0)
+        results_layout.setSpacing(layout.spacing())
+        self.data_results.setVisible(False)
+        layout.addWidget(self.data_results, 1)
+        layout.addStretch(0)
+        layout = results_layout
+
         # 학생 검색창 (이름·반/번호로 즉시 필터)
         search_box = QVBoxLayout()
         search_box.setSpacing(6)
@@ -3501,6 +3610,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(data_split, 1)
 
         self.lbl_data_note = QLabel(
+            "▸ 문항 칸(문1, 문2 …): . = 정답, 숫자 = 고른 오답 번호, 빈칸 = 무응답 (NEIS 정오표 표기)\n"
             "▸ 표 머리글을 클릭하면 정렬됩니다 ▸ 학생 검색과 성취도/9등급/5등급 필터를 함께 사용할 수 있습니다 ▸ 그래프 위 마우스 휠로 확대/축소\n"
             "성취수준은 환산점수를 반올림한 원점수 기준, 9등급/5등급은 현재 분석 집단 안의 상대 석차 기준입니다. "
             "상담 모드(Ctrl+Shift+H)를 켜면 검색 학생 외 이름과 반/번호를 가립니다."
@@ -3623,7 +3733,9 @@ class MainWindow(QMainWindow):
         intro = QLabel(
             "현재 과목의 A 비율, 과목 평균, A/B 분할점수를 "
             "동일 학교유형·교과군의 전국 평균±표준편차 및 전년도 값과 비교합니다. "
-            "전국 기준값은 외부 모니터링 자료가 있을 때 입력하세요."
+            "위쪽 카드(현재 값)는 분석 결과에서 자동으로 들어옵니다. 아래 칸은 직접 넣는 값입니다: "
+            "전국 기준은 교육청 등에서 받은 성취평가 모니터링 자료에 있을 때만, 전년도 값은 작년 같은 과목 결과로 넣으세요. "
+            "모르는 칸은 '미입력'으로 두면 되고, 그 항목은 판정 대신 '기준 입력 필요'로 표시됩니다."
         )
         intro.setProperty("role", "muted")
         intro.setWordWrap(True)
@@ -3652,8 +3764,8 @@ class MainWindow(QMainWindow):
         input_row = QSplitter(Qt.Horizontal)
         national_body = QWidget()
         national_form = QFormLayout(national_body); national_form.setLabelAlignment(Qt.AlignRight)
-        self._add_monitor_spin(national_form, "ref_a_mean", "A 비율 평균", 0.0, suffix=" %")
-        self._add_monitor_spin(national_form, "ref_a_sd", "A 비율 표준편차", 0.0, suffix=" %p")
+        self._add_monitor_spin(national_form, "ref_a_mean", "A 비율 평균", 0.0, suffix=" %", tip="같은 학교유형·교과군 학교들의 A 비율 평균(모니터링 자료)")
+        self._add_monitor_spin(national_form, "ref_a_sd", "A 비율 표준편차", 0.0, suffix=" %p", tip="같은 자료의 A 비율 표준편차. 평균과 함께 있어야 Ⅰ/Ⅱ/Ⅲ 수준을 판정합니다")
         self._add_monitor_spin(national_form, "ref_mean_mean", "과목 평균", 0.0, suffix=" 점")
         self._add_monitor_spin(national_form, "ref_mean_sd", "과목 평균 표준편차", 0.0, suffix=" 점")
         self._add_monitor_spin(national_form, "ref_cut_mean", "A/B 분할점수 평균", 0.0, suffix=" 점")
@@ -3663,19 +3775,27 @@ class MainWindow(QMainWindow):
 
         history_body = QWidget()
         history_form = QFormLayout(history_body); history_form.setLabelAlignment(Qt.AlignRight)
-        self._add_monitor_spin(history_form, "prev_a_pct", "전년도 A 비율", 0.0, suffix=" %")
-        self._add_monitor_spin(history_form, "prev_mean", "전년도 과목 평균", 0.0, suffix=" 점")
-        self._add_monitor_spin(history_form, "prev_cut_a", "전년도 A/B 분할점수", 0.0, suffix=" 점")
+        self._add_monitor_spin(history_form, "prev_a_pct", "전년도 A 비율", 0.0, suffix=" %", tip="작년 같은 과목·같은 학기의 A 비율")
+        self._add_monitor_spin(history_form, "prev_mean", "전년도 과목 평균", 0.0, suffix=" 점", tip="작년 같은 과목·같은 학기의 과목 평균")
+        self._add_monitor_spin(history_form, "prev_cut_a", "전년도 A/B 분할점수", 0.0, suffix=" 점", tip="작년 같은 과목·같은 학기의 A/B 분할점수")
         self._add_monitor_spin(history_form, "th_a_delta", "A 비율 증가 기준", 10.0, suffix=" %p")
         self._add_monitor_spin(history_form, "th_mean_stable", "평균 큰 변동 아님", 5.0, suffix=" 점")
         self._add_monitor_spin(history_form, "th_cut_delta", "분할점수 감소 기준", 10.0, suffix=" 점")
         history_box = self._make_collapsible_panel("전년도·판정 기준", history_body)
         input_row.addWidget(history_box)
         input_row.setStretchFactor(0, 1); input_row.setStretchFactor(1, 1)
-        top_layout.addWidget(input_row, 1)
+        # Twelve input rows are taller than their share of the tab and squeezed the chart below to
+        # a line; let them scroll instead.
+        input_scroll = QScrollArea()
+        input_scroll.setWidgetResizable(True)
+        input_scroll.setFrameShape(QFrame.NoFrame)
+        input_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        input_scroll.setWidget(input_row)
+        top_layout.addWidget(input_scroll, 1)
 
         body = QSplitter(Qt.Vertical)
         self.canvas_monitor = CanvasHolder()
+        self.canvas_monitor.setMinimumHeight(self._px(170))
         body.addWidget(self.canvas_monitor)
 
         flow_note = QLabel(
@@ -3710,9 +3830,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("모니터링 탭을 새로고침했습니다.", 2500)
 
     def _add_monitor_spin(self, form: QFormLayout, key: str, label: str, value: float,
-                          *, suffix: str = ""):
+                          *, suffix: str = "", tip: str = ""):
         spin = StepperSpinBox(value=value, minimum=-100.0, maximum=200.0,
                               step=1.0, decimals=1, suffix=suffix)
+        if key.startswith(("ref_", "prev_")):
+            # 0 already means "not entered" in the checks below; show it as such instead of "0.0 %".
+            spin.spin.setMinimum(0.0)
+            spin.spin.setSpecialValueText("미입력")
+        if tip:
+            spin.setToolTip(tip)
         spin.valueChanged.connect(lambda *_: self._render_monitor_tab())
         self.monitor_spins[key] = spin
         form.addRow(label, spin)
@@ -3723,14 +3849,14 @@ class MainWindow(QMainWindow):
         return float(spin.value()) if spin is not None else 0.0
 
     def _monitor_z_status(self, value: float, ref: float, sd: float, *, low_is_risk: bool = False):
-        if sd <= 0:
+        if sd <= 0 or ref <= 0:  # 0 is shown as '미입력': a missing mean must not be compared as 0
             return "기준 입력 필요", "전국 평균과 표준편차를 입력하면 Ⅰ/Ⅱ/Ⅲ 수준을 자동 판정합니다.", 0
         z = (ref - value) / sd if low_is_risk else (value - ref) / sd
         if z >= 2:
-            return "Ⅲ 점검", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} {z:.2f}σ 벗어났습니다.", 3
+            return "Ⅲ 점검", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} 표준편차의 {z:.2f}배 벗어났습니다.", 3
         if z >= 1:
-            return "Ⅱ 주의", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} {z:.2f}σ 벗어났습니다.", 2
-        return "참고 범위", f"전국 평균±1σ 안쪽 또는 위험 방향이 아닙니다. z={z:.2f}", 1
+            return "Ⅱ 주의", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} 표준편차의 {z:.2f}배 벗어났습니다.", 2
+        return "참고 범위", f"전국 평균±1SD(표준편차) 안쪽 또는 위험 방향이 아닙니다. z={z:.2f}", 1
 
     def _monitor_rows_and_benchmarks(self):
         if self.exam is None or self.overall is None:
@@ -3753,7 +3879,7 @@ class MainWindow(QMainWindow):
         rows.append((
             "필수 1 · 성취수준 A 비율이 높음",
             f"{a_pct:.1f}%",
-            "전국 평균+1σ 이상: Ⅱ · +2σ 이상: Ⅲ",
+            "전국 평균+1SD 이상: Ⅱ · +2SD 이상: Ⅲ",
             status,
             f"{detail} A 비율만으로 단정하지 않고 평균·분할점수와 함께 봅니다.",
             sev,
@@ -3780,7 +3906,7 @@ class MainWindow(QMainWindow):
         rows.append((
             "특성 3 · 과목 평균이 높음",
             f"{mean:.1f}점",
-            "전국 평균+1σ 이상: 주의 · +2σ 이상: 점검",
+            "전국 평균+1SD 이상: 주의 · +2SD 이상: 점검",
             status,
             f"{detail} 평가도구가 쉬웠는지, 학생 특성이 높은지 함께 봅니다.",
             sev,
@@ -3793,7 +3919,7 @@ class MainWindow(QMainWindow):
         rows.append((
             "특성 4 · A/B 분할점수가 낮음",
             f"{cut_a:.1f}점",
-            "전국 평균-1σ 이하: 주의 · -2σ 이하: 점검",
+            "전국 평균-1SD 이하: 주의 · -2SD 이하: 점검",
             status,
             f"{detail} A 비율이 높은 원인이 낮은 분할점수인지 확인합니다.",
             sev,
@@ -3847,22 +3973,22 @@ class MainWindow(QMainWindow):
             {
                 "label": "A 비율",
                 "value": a_pct,
-                "ref": self._monitor_value("ref_a_mean") if self._monitor_value("ref_a_sd") > 0 else None,
-                "sd": self._monitor_value("ref_a_sd") if self._monitor_value("ref_a_sd") > 0 else None,
+                "ref": self._monitor_value("ref_a_mean") if self._monitor_value("ref_a_mean") > 0 and self._monitor_value("ref_a_sd") > 0 else None,
+                "sd": self._monitor_value("ref_a_sd") if self._monitor_value("ref_a_mean") > 0 and self._monitor_value("ref_a_sd") > 0 else None,
                 "color": "#ef4444",
             },
             {
                 "label": "과목 평균",
                 "value": mean,
-                "ref": self._monitor_value("ref_mean_mean") if self._monitor_value("ref_mean_sd") > 0 else None,
-                "sd": self._monitor_value("ref_mean_sd") if self._monitor_value("ref_mean_sd") > 0 else None,
+                "ref": self._monitor_value("ref_mean_mean") if self._monitor_value("ref_mean_mean") > 0 and self._monitor_value("ref_mean_sd") > 0 else None,
+                "sd": self._monitor_value("ref_mean_sd") if self._monitor_value("ref_mean_mean") > 0 and self._monitor_value("ref_mean_sd") > 0 else None,
                 "color": "#f59e0b",
             },
             {
                 "label": "A/B 분할점수",
                 "value": cut_a,
-                "ref": self._monitor_value("ref_cut_mean") if self._monitor_value("ref_cut_sd") > 0 else None,
-                "sd": self._monitor_value("ref_cut_sd") if self._monitor_value("ref_cut_sd") > 0 else None,
+                "ref": self._monitor_value("ref_cut_mean") if self._monitor_value("ref_cut_mean") > 0 and self._monitor_value("ref_cut_sd") > 0 else None,
+                "sd": self._monitor_value("ref_cut_sd") if self._monitor_value("ref_cut_mean") > 0 and self._monitor_value("ref_cut_sd") > 0 else None,
                 "color": "#2a7770",
             },
         ]
@@ -4282,9 +4408,18 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(self.tab_items)
         self.lbl_alpha = QLabel("지필평가 신뢰도 (Cronbach's alpha): -")
         f = self.lbl_alpha.font(); f.setPointSize(f.pointSize()+3); f.setBold(True); self.lbl_alpha.setFont(f)
+        self.lbl_alpha.setToolTip(
+            "신뢰도: 문항들이 같은 능력을 얼마나 일관되게 재는지(0~1).\n"
+            "0.9 이상 매우 우수 · 0.8 우수 · 0.7 양호 · 0.6 보통 · 그 아래 재검토 필요"
+        )
         layout.addWidget(self.lbl_alpha)
 
-        sub = QLabel("선다형 문항 분석 결과 (음영: 성취수준별 정답률 2/3 미만)")
+        sub = QLabel(
+            "선다형 문항 분석 결과 (음영: 그 성취수준 학생의 정답률이 2/3 미만) · "
+            "정답률 = 맞힌 학생 비율(높을수록 쉬움) · 변별도 = 점수가 높은 학생일수록 더 많이 맞혔는지(0.3 이상 양호, 0.2 미만 재검토) · "
+            "머리글에 마우스를 올리면 설명이 보입니다."
+        )
+        sub.setWordWrap(True)
         sub.setStyleSheet("color:#888;")
         layout.addWidget(sub)
 
@@ -4294,6 +4429,17 @@ class MainWindow(QMainWindow):
                    "A", "B", "C", "D", "E", "미도달"]
         self.table_items = QTableWidget(0, len(headers))
         self.table_items.setHorizontalHeaderLabels(headers)
+        header_tips = {
+            1: "문항정보표에 적힌 예상 난이도(쉬움·보통·어려움)",
+            2: "전체 학생 중 맞힌 비율. 80% 이상 매우 쉬움 · 60~80 쉬움 · 40~60 보통 · 20~40 어려움 · 20% 미만 매우 어려움",
+            3: "변별도(점이연 상관, point-biserial): 점수가 높은 학생일수록 이 문항을 더 많이 맞혔는지.\n"
+               "0.4 이상 매우 양호 · 0.3 양호 · 0.2 보통 · 0.1 낮음 · 그 아래나 음수는 문항 재검토",
+            **{4 + i: f"{i + 1}번 답지를 고른 학생 비율(노란 칸 = 정답)" for i in range(5)},
+            9: "답하지 않은 학생 비율",
+            **{10 + i: f"{lv} 수준 학생의 정답률(2/3 미만이면 음영)" for i, lv in enumerate(["A", "B", "C", "D", "E", "미도달"])},
+        }
+        for column, tip in header_tips.items():
+            self.table_items.horizontalHeaderItem(column).setToolTip(tip)
         _setup_table(self.table_items, word_wrap=False, horizontal_scroll=True, row_height=30)
         self.table_items.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         # 정답률(idx 2), 변별도(idx 3) 컬럼에 막대 그리기
@@ -8792,6 +8938,8 @@ codex login status</pre>
     def _render_data_tab(self):
         if hasattr(self, "data_empty_state"):
             self.data_empty_state.setVisible(False)
+        if hasattr(self, "data_results"):
+            self.data_results.setVisible(True)
         ov = self.overall
         self.kpi_n.value_label.setText(f"{ov.n_students} 명")
         self.kpi_n_items.value_label.setText(f"{len(self.exam.items)} 문항")
@@ -8832,6 +8980,11 @@ codex login status</pre>
         self._data_score_col = 5
         self.table_data.setColumnCount(len(headers))
         self.table_data.setHorizontalHeaderLabels(headers)
+        for offset, it in enumerate(items):
+            header = self.table_data.horizontalHeaderItem(2 + len(score_headers) + offset)
+            if header is not None:
+                header.setToolTip(f"{it.item_type} {it.number}번 · 정답 {it.answer or '-'}\n"
+                                  "칸의 표시: . = 정답, 숫자 = 고른 오답 번호, 빈칸 = 무응답")
         self.table_data.setRowCount(len(self.exam.students))
 
         # 컬럼 폭 — 반/번호와 이름이 잘리지 않게 충분히 넓힘 (좌측 고정 효과)
@@ -10962,14 +11115,20 @@ codex login status</pre>
         counts = " · ".join(
             f"{cut['boundary']} 경계 학생 {report['border_counts'][cut['level']]}명" for cut in report["cuts"]
         )
+        # The conclusion first; the method and every note used to fill ten lines above the table.
+        headline = QLabel("<b>먼저 볼 것</b><br>" + "<br>".join(html.escape(line) for line in headline_lines(report)))
+        headline.setTextFormat(Qt.RichText)
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
         intro = QLabel(
-            "실측은 각 분할점수 위아래로 가장 가까운 학생(최소능력자에 가까운 경계 학생)의 정답률입니다. "
+            "<b>용어</b> · 경계 학생: 각 분할점수 바로 위아래 점수의 학생(그 수준에 겨우 도달한 '최소능력자'에 가까운 학생). "
+            "실제: 경계 학생이 그 문항을 맞힌 비율. 상대차: 실제−예측에서 그 경계의 모든 문항 평균 차이를 뺀 값.<br>"
             "분할점수 근처 학생은 평균적으로 그 분할점수만큼 득점하므로, 수준 전체의 높낮이는 적용한 분할점수에 묶여 확인할 수 없습니다. "
-            "이 비교는 <b>문항끼리의 상대차</b>(그 경계의 평균 차이를 뺀 값)로 어떤 문항·난이도를 높게 또는 낮게 예측했는지 봅니다.<br>" + counts
+            "그래서 이 비교는 <b>문항끼리의 상대차</b>로 어떤 문항·난이도를 높게 또는 낮게 예측했는지 봅니다.<br>" + counts
         )
+        intro.setTextFormat(Qt.RichText)
         intro.setWordWrap(True)
         intro.setProperty("role", "muted")
-        layout.addWidget(intro)
         notes = summary_lines(report) + cut_lines(report) + report["notes"]
         if report["unmatched"]:
             notes.append("분석 자료에서 찾지 못한 예측 문항: " + ", ".join(report["unmatched"]))
@@ -10977,7 +11136,21 @@ codex login status</pre>
             notes.append("예측값이 없는 시험 문항: " + ", ".join(report["not_designed"]))
         summary = QLabel("\n".join(notes))
         summary.setWordWrap(True)
-        layout.addWidget(summary)
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.addWidget(intro)
+        details_layout.addWidget(summary)
+        details.setVisible(False)
+        btn_details = QToolButton()
+        btn_details.setText("자세한 설명과 전체 요약 보기")
+        btn_details.setCheckable(True)
+        btn_details.toggled.connect(details.setVisible)
+        btn_details.toggled.connect(
+            lambda shown: btn_details.setText("설명 접기" if shown else "자세한 설명과 전체 요약 보기")
+        )
+        layout.addWidget(btn_details, 0, Qt.AlignLeft)
+        layout.addWidget(details)
 
         cut_table = QTableWidget(3, len(report["cuts"]))
         cut_table.setHorizontalHeaderLabels([c["boundary"] for c in report["cuts"]])
@@ -10996,7 +11169,14 @@ codex login status</pre>
         cut_table.setFocusPolicy(Qt.NoFocus)
         layout.addWidget(cut_table)
 
-        headers = ["구분", "번호", "난이도", "목표", "실측 목표", "배점", *[f"{lv} 예측→실측(상대차)" for lv in LEVELS_AE]]
+        legend = QLabel(
+            "표 읽는 법: 각 칸은 '예측 → 실제 (상대차)'입니다. 상대차가 +이면 예측보다 더 맞혔고(낮게 예측), "
+            "−이면 덜 맞혔습니다(높게 예측). 색 칸은 다른 문항보다 15%p 이상 빗나간 곳, '실측 목표'의 색은 목표수준이 실제와 다른 문항입니다."
+        )
+        legend.setWordWrap(True)
+        legend.setProperty("role", "muted")
+        layout.addWidget(legend)
+        headers = ["구분", "번호", "난이도", "목표", "실측 목표", "배점", *[f"{lv} 예측→실제(상대차)" for lv in LEVELS_AE]]
         observed_tip = "경계 학생의 실제 정답률과 가장 가까운 기준표 줄(목표 설정)의 목표수준입니다. 다르면 목표수준을 다시 보세요."
         table = QTableWidget(len(report["rows"]), len(headers))
         table.setHorizontalHeaderLabels(headers)
