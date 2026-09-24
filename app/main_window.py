@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from .data_loader import load_exam, apply_perform, ExamData
+from .data_loader import load_exam, load_item_info, apply_perform, ExamData
 from .analysis import (
     analyze_overall, analyze_items, build_score_matrix, analyze_serdap,
     grade_level, reliability_label, LEVELS,
@@ -54,7 +54,9 @@ from .expected_rates import (
     build_neis_rows, normalize_rates, summarize_designs, validate_design_items,
     write_estimation_workbook,
 )
-from .exam_structure import ExamReadError, designs_from_structure, extract_exam_text, parse_exam_structure
+from .exam_structure import (
+    DIFFICULTIES, ExamReadError, designs_from_structure, enrich_structure, extract_exam_text, parse_exam_structure,
+)
 from .export_privacy import (
     REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, new_student_hash_key,
     pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash, student_result_table,
@@ -10654,19 +10656,52 @@ codex login status</pre>
             return
         finally:
             QApplication.restoreOverrideCursor()
-        self._show_exam_structure_dialog(parse_exam_structure(text), how, Path(path).name)
+        result = parse_exam_structure(text)
+        rows, source = enrich_structure(result["items"], None)
+        for candidate in self._item_info_candidates():
+            rows, source = enrich_structure(result["items"], candidate)
+            if source == "문항정보표":
+                break
+        for row in rows:
+            row["target"] = self._import_target_level(row)
+        result["items"] = rows
+        self._show_exam_structure_dialog(result, how, Path(path).name, source)
 
-    def _show_exam_structure_dialog(self, result: dict, how: str, file_name: str):
+    def _item_info_candidates(self) -> list:
+        """문항정보표 items to try: the file chosen on the left, then the loaded analysis."""
+        candidates = []
+        path = self.fs_iteminfo.path() if hasattr(self, "fs_iteminfo") else ""
+        if path:
+            try:
+                candidates.append(load_item_info(path)[0])
+            except Exception:
+                pass
+        if self.exam is not None and self.exam.items:
+            candidates.append(self.exam.items)
+        return candidates
+
+    @staticmethod
+    def _import_target_level(row: dict) -> str:
+        """The app's difficulty rule (쉬움→E, 보통→C, 어려움→B). A loaded analysis may be an earlier
+        exam, so its per-number rates are not used for a new paper."""
+        return {"쉬움": "E", "어려움": "B"}.get(row.get("difficulty", "보통"), "C")
+
+    def _show_exam_structure_dialog(self, result: dict, how: str, file_name: str, source: str = ""):
         dialog = QDialog(self)
         dialog.setWindowTitle("시험지에서 문항 가져오기")
-        dialog.resize(self._px(900), self._px(600))
+        dialog.resize(self._px(1000), self._px(620))
         layout = QVBoxLayout(dialog)
         items = result["items"]
         counts = {kind: sum(1 for item in items if item["type"] == kind) for kind in ("선택형", "서답형")}
+        source_text = {
+            "문항정보표": "난이도·성취기준은 <b>문항정보표</b>에서 가져왔습니다.",
+            "배점 순서로 추정": "문항정보표가 없어 난이도를 <b>배점 순서로 추정</b>했습니다(배점이 높을수록 어려움). 왼쪽에서 문항정보표를 고르면 더 정확합니다.",
+            "문항정보표 불일치": "왼쪽 문항정보표의 배점이 이 시험지와 맞지 않아(다른 시험으로 보임) 쓰지 않고, 난이도를 <b>배점 순서로 추정</b>했습니다.",
+        }.get(source, "")
         head = QLabel(
             f"{file_name} · {how} · 선택형 {counts['선택형']}문항, 서답형 {counts['서답형']}문항 · 배점 합계 {result['total_points']:g}점<br>"
-            "시험지 내용은 이 PC 안에서만 읽고, 문항 번호·유형·배점만 씁니다. 표의 <b>배점</b>은 고칠 수 있고, 빼려는 문항은 체크를 끄세요. "
-            "계산기로 보내면 난이도 '보통', 목표수준 C와 현재 기준표의 기본 예상정답률로 채웁니다."
+            f"{source_text} 목표수준은 난이도로 정했습니다(쉬움→E, 보통→C, 어려움→B). "
+            "배점·난이도·목표는 표에서 고칠 수 있고, 빼려는 문항은 체크를 끄세요. 시험지 내용은 이 PC 안에서만 읽습니다."
         )
         head.setWordWrap(True)
         layout.addWidget(head)
@@ -10674,27 +10709,40 @@ codex login status</pre>
             warn = QLabel("\n".join("⚠ " + line for line in result["warnings"]))
             warn.setWordWrap(True)
             layout.addWidget(warn)
-        table = QTableWidget(len(items), 6)
-        table.setHorizontalHeaderLabels(["포함", "구분", "번호", "배점", "보기 수", "확인할 점 · 첫 줄"])
+        table = QTableWidget(len(items), 8)
+        table.setHorizontalHeaderLabels(["포함", "구분", "번호", "배점", "난이도", "목표", "보기 수", "확인할 점 · 첫 줄"])
         table.verticalHeader().setVisible(False)
+        combos = []
         for r, item in enumerate(items):
             include = QTableWidgetItem()
             include.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
             include.setCheckState(Qt.Checked)
             table.setItem(r, 0, include)
-            for c, value in ((1, item["type"]), (2, str(item["number"])), (4, str(item["choices"]))):
+            for c, value in ((1, item["type"]), (2, str(item["number"])), (6, str(item["choices"]))):
                 cell = _set_item(table, r, c, value)
                 cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
             points = QTableWidgetItem("" if item["points"] is None else f"{item['points']:g}")
             points.setTextAlignment(Qt.AlignCenter)
             table.setItem(r, 3, points)
-            note = _set_item(table, r, 5, " / ".join(item["flags"] + [item["preview"]]), align_left=True)
+            difficulty = QComboBox()
+            difficulty.addItems(list(DIFFICULTIES))
+            difficulty.setCurrentText(item.get("difficulty", "보통"))
+            target = QComboBox()
+            target.addItems(list(LEVELS_AE))
+            target.setCurrentText(item.get("target", "C"))
+            difficulty.currentTextChanged.connect(
+                lambda text, row=item, box=target: box.setCurrentText(self._import_target_level(dict(row, difficulty=text)))
+            )
+            table.setCellWidget(r, 4, difficulty)
+            table.setCellWidget(r, 5, target)
+            combos.append((difficulty, target))
+            note = _set_item(table, r, 7, " / ".join(item["flags"] + [item["preview"]]), align_left=True)
             note.setFlags(note.flags() & ~Qt.ItemIsEditable)
             if item["flags"]:
                 note.setBackground(QBrush(QColor(255, 225, 200)))
                 note.setForeground(QBrush(QColor(20, 20, 20)))
         table.resizeColumnsToContents()
-        table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
         layout.addWidget(table, 1)
 
         def send():
@@ -10707,12 +10755,15 @@ codex login status</pre>
                     points = float(raw) if raw else None
                 except ValueError:
                     points = None
-                rows.append({"type": item["type"], "number": item["number"], "points": points})
+                difficulty, target = combos[r]
+                rows.append({"type": item["type"], "number": item["number"], "points": points,
+                             "difficulty": difficulty.currentText(), "target": target.currentText(),
+                             "standard": item.get("standard", "")})
             if not rows:
                 QMessageBox.information(dialog, "시험지에서 문항 가져오기", "보낼 문항을 하나 이상 고르세요.")
                 return
             try:
-                designs = designs_from_structure(rows, self._target_level_rates("C", "보통"))
+                designs = designs_from_structure(rows, lambda target, difficulty: self._target_level_rates(target, difficulty))
                 project = self._project_from_neis_targets(designs)
             except ValueError as exc:
                 QMessageBox.warning(dialog, "시험지에서 문항 가져오기", str(exc))
@@ -10978,16 +11029,27 @@ codex login status</pre>
         dialog.setWindowTitle("가명 ↔ 실명 확인")
         layout = QVBoxLayout(dialog)
         note = QLabel("현재 분석의 가명과 실제 학생입니다. 화면에만 표시하며 파일로 저장하지 않습니다. "
-                      "다른 사람이 볼 수 없는 곳에서 확인하세요.")
+                      "다른 사람이 볼 수 없는 곳에서 확인하세요. 열 제목을 누르면 정렬됩니다.")
         note.setWordWrap(True)
         layout.addWidget(note)
         table = QTableWidget(len(rows), 4)
         table.setHorizontalHeaderLabels(["가명", "학급", "반/번호", "이름"])
         table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         table.verticalHeader().setVisible(False)
+        def number_key(text) -> tuple:
+            parts = re.findall(r"\d+", str(text or ""))
+            return (0, tuple(int(part) for part in parts)) if parts else (1, str(text or ""))
+
         for r, (pseudonym, st) in enumerate(rows):
-            for c, value in enumerate((pseudonym, st.grade_class, st.class_no, st.name)):
-                _set_item(table, r, c, value, align_left=c == 3)
+            _set_item(table, r, 0, pseudonym)
+            for c, value in ((1, st.grade_class), (2, st.class_no)):
+                item = NaturalItem(str(value or ""), number_key(value))  # "1/10" after "1/2"
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, c, item)
+            _set_item(table, r, 3, st.name, align_left=True)
+        table.setSortingEnabled(True)  # 열 제목을 누르면 오름차순·내림차순
+        table.sortByColumn(0, Qt.AscendingOrder)
+        table.horizontalHeader().setToolTip("열 제목을 누르면 오름차순·내림차순으로 정렬합니다.")
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         layout.addWidget(table, 1)
         btn_close = QPushButton("닫기")

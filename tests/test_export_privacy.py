@@ -298,6 +298,29 @@ class ExportPrivacyWindowTests(unittest.TestCase):
             unresolved = [row for row in window._load_portfolio_rows() if row["subject"] == "합성과목"]
             self.assertTrue(all(row["name"].startswith("학생#") and row["class_no"] == "" for row in unresolved))
 
+    def test_pseudonym_mapping_sorts_by_clicked_column_with_numbers_in_order(self):
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QApplication, QTableWidget
+        app = QApplication.instance() or QApplication([])
+        window = _window()
+        for index, (grade, class_no) in enumerate((("1", "1/10"), ("10", "1/2"), ("2", "2/1"))):
+            window.exam.students[index].grade_class = grade
+            window.exam.students[index].class_no = class_no
+        tables = []
+        with patch("app.main_window.QDialog") as dialog, patch("app.main_window.QVBoxLayout") as layout, \
+             patch("app.main_window.QLabel"), patch("app.main_window.QPushButton"):
+            layout.return_value.addWidget.side_effect = lambda widget, *a: tables.append(widget) if isinstance(widget, QTableWidget) else None
+            window.show_pseudonym_mapping()
+        table = tables[0]
+        self.assertTrue(table.isSortingEnabled())
+        column = lambda c: [table.item(r, c).text() for r in range(table.rowCount())]
+        self.assertEqual(column(0), ["학생 001", "학생 002", "학생 003"])
+        table.sortByColumn(2, Qt.AscendingOrder)
+        self.assertEqual(column(2), ["1/2", "1/10", "2/1"])      # 글자 순이면 1/10이 먼저 온다
+        table.sortByColumn(1, Qt.DescendingOrder)
+        self.assertEqual(column(1), ["10", "2", "1"])
+        self.assertEqual([table.item(r, 3).text() for r in range(3)][0], "합성학생나")  # 이름이 행과 함께 움직인다
+
     def test_pseudonym_mapping_is_shown_on_screen_only(self):
         window = _window()
         with TemporaryDirectory() as directory, \

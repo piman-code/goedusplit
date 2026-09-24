@@ -40,6 +40,11 @@ _DECLARED = re.compile(  # "선택형 1~20번", "서답형 2문항" on the cover
     r"(선택형|서답형|서술형|논술형)\s*(?:\d{1,2}\s*[~∼\-–]\s*(\d{1,2})\s*번|(\d{1,2})\s*문항)"
 )
 _MAX_SKIP = 2  # a header may skip at most this many numbers (e.g. a lost line in a PDF)
+_RUBRIC_START = re.compile(r"채점\s*기준")  # 논술형 채점 기준표 after the questions
+_RUBRIC_HEADER = re.compile(rf"^\s*(?:{_SERDAP_WORDS})\s*(\d{{1,2}})\s*$")
+_NUMBER_ONLY = re.compile(r"^\s*(\d{1,2}(?:\.\d{1,2})?)\s*$")
+_CHOICE_LINE = re.compile(r"^\s*[①②③④⑤⑥]")
+_AUTO_NUMBER_NOTE = "시험지에 문항 번호 글자가 없어(한글 자동 번호) 보기(①~⑤) 순서로 번호를 매겼습니다. 문항 수와 순서를 확인하세요."
 
 
 class ExamReadError(ValueError):
@@ -250,9 +255,102 @@ def _candidates(lines: list[str]) -> list[tuple[int, str, int, int | None, bool]
     return found
 
 
+def _item_points(block: str, header_line: str, has_parts: bool = False) -> tuple[float | None, list[str]]:
+    header_points = _points_in(header_line)
+    block_points = _points_in(block)
+    bare_points = _bare_points_in(block)
+    if has_parts and len(block_points) > 1:
+        return sum(block_points), [f"소문항 배점을 합했습니다({' + '.join(f'{p:g}' for p in block_points)})."]
+    if header_points:
+        return header_points[0], []
+    if len(block_points) == 1:
+        return block_points[0], []
+    if block_points:
+        return sum(block_points), [f"배점이 여러 곳에 있어 합했습니다({' + '.join(f'{p:g}' for p in block_points)})."]
+    if len(bare_points) == 1:
+        return bare_points[0], [f"괄호 없는 '{bare_points[0]:g}점'을 배점으로 읽었습니다. 확인하세요."]
+    return None, ["배점을 찾지 못했습니다."]
+
+
+def _rubric_points(lines: list[str], start: int) -> dict[int, float]:
+    """배점 of each 논술형 from the 채점 기준표: in each item's block the second number-only line.
+
+    The first is the score of the first step, the second the item's 배점 (e.g. 1.0 then 5.0).
+    """
+    result, current, numbers = {}, None, []
+    for line in lines[start:] + ["논술형 99"]:
+        header = _RUBRIC_HEADER.match(line)
+        if header:
+            if current is not None and len(numbers) >= 2:
+                result[current] = numbers[1]
+            current, numbers = int(header.group(1)), []
+            continue
+        number = _NUMBER_ONLY.match(line)
+        if current is not None and number:
+            numbers.append(float(number.group(1)))
+    return result
+
+
+def _parse_by_choices(lines: list[str], serdap_expected: int) -> list[dict]:
+    """For papers whose item numbers are HWP auto numbers (not in the text): one 선택형 per ① group."""
+    cutoff = next((i for i, line in enumerate(lines) if _RUBRIC_START.search(line)), len(lines))
+    groups = []  # (first choice line, last choice line)
+    index = 0
+    while index < cutoff:
+        if lines[index].startswith("①"):
+            end, look = index, index + 1
+            while look < cutoff and (not lines[look] or _CHOICE_LINE.match(lines[look])):
+                if lines[look]:
+                    end = look  # choices may be split over lines with blank lines between them
+                look += 1
+            groups.append((index, end))
+            index = end + 1
+        else:
+            index += 1
+    items, previous_end = [], -1
+    for number, (first, last) in enumerate(groups, start=1):
+        question = [line for line in lines[previous_end + 1:first] if line]
+        block = "\n".join(question)
+        points, flags = _item_points(block, question[-1] if question else "")
+        choices = len({mark for mark in CHOICE_MARKS if mark in "\n".join(lines[first:last + 1])})
+        items.append({"type": "선택형", "number": number, "points": points, "choices": choices, "flags": flags,
+                      "preview": re.sub(r"\s+", " ", question[-1] if question else "")[:40]})
+        previous_end = last
+    rest = [line for line in lines[previous_end + 1:cutoff]
+            if len(line) >= 15 and not line.startswith(("<", "○", "※", "(", "[", "①")) and not _CHOICE_LINE.match(line)]
+    rubric = _rubric_points(lines, cutoff)
+    for number, line in enumerate(rest[:serdap_expected] if serdap_expected else rest, start=1):
+        points = rubric.get(number)
+        flags = ["채점 기준표에서 배점을 읽었습니다. 확인하세요."] if points is not None else ["배점을 찾지 못했습니다."]
+        items.append({"type": "서답형", "number": number, "points": points, "choices": 0, "flags": flags,
+                      "preview": re.sub(r"\s+", " ", line)[:40]})
+    return items
+
+
+def _declared_counts(text: str) -> dict[str, int]:
+    declared = {}
+    for word, last_of_range, count in _DECLARED.findall(text):
+        kind = "선택형" if word == "선택형" else "서답형"
+        declared[kind] = max(declared.get(kind, 0), int(last_of_range or count))
+    return declared
+
+
 def parse_exam_structure(text: str) -> dict:
-    """Find item headers in reading order and read 배점 and choices from each item's block."""
+    """Numbered items when the text has item numbers; otherwise items by choice groups (HWP auto numbers)."""
     lines = [line.strip() for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    numbered = _parse_numbered(lines, text)
+    numbered_select = sum(1 for item in numbered["items"] if item["type"] == "선택형")
+    cutoff = next((i for i, line in enumerate(lines) if _RUBRIC_START.search(line)), len(lines))
+    group_count = sum(1 for line in lines[:cutoff] if line.startswith("①"))
+    if group_count >= 2 and group_count > numbered_select * 1.5:
+        declared = _declared_counts("\n".join(lines[:cutoff]))
+        items = _parse_by_choices(lines, declared.get("서답형", 0))
+        return _finish(items, declared, extra_warnings=[_AUTO_NUMBER_NOTE])
+    return numbered
+
+
+def _parse_numbered(lines: list[str], text: str) -> dict:
+    """Find item headers in reading order and read 배점 and choices from each item's block."""
     candidates = _candidates(lines)
     headers = []  # (line, kind, number, note, has sub-items)
     expected = {"선택형": 1, "서답형": 1}
@@ -280,26 +378,8 @@ def parse_exam_structure(text: str) -> dict:
     for position, (start, kind, number, note, has_parts) in enumerate(headers):
         end = headers[position + 1][0] if position + 1 < len(headers) else len(lines)
         block = "\n".join(lines[start:end])
-        header_points = _points_in(lines[start])
-        block_points = _points_in(block)
-        bare_points = _bare_points_in(block)
-        flags = [note] if note else []
-        if has_parts and len(block_points) > 1:
-            points = sum(block_points)
-            flags.append(f"소문항 배점을 합했습니다({' + '.join(f'{p:g}' for p in block_points)}).")
-        elif header_points:
-            points = header_points[0]
-        elif len(block_points) == 1:
-            points = block_points[0]
-        elif block_points:
-            points = sum(block_points)
-            flags.append(f"배점이 여러 곳에 있어 합했습니다({' + '.join(f'{p:g}' for p in block_points)}).")
-        elif len(bare_points) == 1:
-            points = bare_points[0]
-            flags.append(f"괄호 없는 '{points:g}점'을 배점으로 읽었습니다. 확인하세요.")
-        else:
-            points = None
-            flags.append("배점을 찾지 못했습니다.")
+        points, point_flags = _item_points(block, lines[start], has_parts)
+        flags = ([note] if note else []) + point_flags
         choices = _count_choices(block) if kind == "선택형" else len({m for m in CHOICE_MARKS if m in block})
         if kind == "선택형" and choices == 0:
             flags.append("보기(①~⑤)를 찾지 못했습니다.")
@@ -308,15 +388,23 @@ def parse_exam_structure(text: str) -> dict:
             "preview": re.sub(r"\s+", " ", lines[start])[:40],
         })
 
-    warnings = []
-    declared = {}
     cover = "\n".join(lines[:headers[0][0]]) if headers else text  # only the part before the first item
-    for word, last_of_range, count in _DECLARED.findall(cover):
-        kind = "선택형" if word == "선택형" else "서답형"
-        value = int(last_of_range or count)
-        if kind == "서답형" and serdap_offset and value > serdap_offset:
-            value -= serdap_offset
-        declared[kind] = max(declared.get(kind, 0), value)
+    declared = _declared_counts(cover)
+    if serdap_offset and declared.get("서답형", 0) > serdap_offset:
+        declared["서답형"] -= serdap_offset
+    return _finish(items, declared)
+
+
+def _finish(items: list[dict], declared: dict[str, int], extra_warnings: list[str] | None = None) -> dict:
+    warnings = list(extra_warnings or [])
+    missing = [item for item in items if item["points"] is None]
+    known = sum(item["points"] for item in items if item["points"] is not None)
+    if len(missing) == 1 and len(items) > 1 and 0 < 100 - known <= 20:
+        # School written exams total 100 points; one gap is usually a 배점 the text lost.
+        item = missing[0]
+        item["points"] = round(100 - known, 2)
+        item["flags"] = [flag for flag in item["flags"] if flag != "배점을 찾지 못했습니다."]
+        item["flags"].append(f"배점을 찾지 못해 총점 100점에서 나머지({item['points']:g}점)로 채웠습니다. 확인하세요.")
     for kind in ("선택형", "서답형"):
         numbers = [item["number"] for item in items if item["type"] == kind]
         top = max(numbers + [declared.get(kind, 0)]) if (numbers or kind in declared) else 0
@@ -333,15 +421,73 @@ def parse_exam_structure(text: str) -> dict:
     return {"items": items, "warnings": warnings, "total_points": total}
 
 
-def designs_from_structure(rows: list[dict], rates: dict[str, float], difficulty: str = "보통", target: str = "C") -> list[dict]:
-    """Calculator items for the confirmed rows. Every row needs 배점 greater than 0."""
+def designs_from_structure(rows: list[dict], rates_for) -> list[dict]:
+    """Calculator items for the confirmed rows. Every row needs 배점 greater than 0.
+
+    ``rates_for(target, difficulty)`` gives the default A~E rates (the app's preset table).
+    """
     designs = []
     for row in rows:
         points = row.get("points")
         if points is None or not float(points) > 0:
             raise ValueError(f"{row['type']} {row['number']}번의 배점을 입력해 주세요.")
+        difficulty = row.get("difficulty") if row.get("difficulty") in DIFFICULTIES else "보통"
+        target = row.get("target") if row.get("target") in ("A", "B", "C", "D", "E") else "C"
         designs.append({
             "number": int(row["number"]), "type": row["type"], "points": float(points),
-            "difficulty": difficulty, "target": target, "rates": dict(rates), "sampleSize": 20,
+            "difficulty": difficulty, "target": target, "standard": row.get("standard", ""),
+            "rates": dict(rates_for(target, difficulty)), "sampleSize": 20,
         })
     return designs
+
+
+DIFFICULTIES = ("쉬움", "보통", "어려움")
+
+
+def enrich_structure(items: list[dict], item_info: list | None) -> tuple[list[dict], str]:
+    """Add 난이도 (and 성취기준) to each item: from the NEIS 문항정보표 when given, else estimated.
+
+    ``item_info`` holds objects with item_type, number, difficulty, score, standard_code, standard.
+    The table is used only when its 배점 match this paper for at least 80% of the items that
+    have 배점, since the table chosen in the app may belong to an earlier exam.
+    Returns (rows, where the 난이도 came from: "문항정보표", "문항정보표 불일치" or "배점 순서로 추정").
+    """
+    rows = [dict(item, flags=list(item["flags"]), difficulty="보통", standard="") for item in items]
+    source = "배점 순서로 추정"
+    if item_info:
+        by_key = {(info.item_type, int(info.number)): info for info in item_info}
+        scored = [row for row in rows if row["points"] is not None]
+        agree = sum(1 for row in scored if (row["type"], row["number"]) in by_key
+                    and abs(float(by_key[(row["type"], row["number"])].score or 0) - row["points"]) < 1e-6)
+        if scored and agree / len(scored) < 0.8:
+            item_info, source = None, "문항정보표 불일치"
+    if item_info:
+        for row in rows:
+            info = by_key.get((row["type"], row["number"]))
+            if info is None:
+                row["flags"].append("문항정보표에 없는 문항입니다.")
+                continue
+            row["difficulty"] = info.difficulty if info.difficulty in DIFFICULTIES else "보통"
+            row["standard"] = f"{info.standard_code} {info.standard}".strip()
+            score = float(info.score or 0)
+            if score > 0 and row["points"] is None:
+                row["points"] = score
+                row["flags"] = [flag for flag in row["flags"] if flag != "배점을 찾지 못했습니다."]
+                row["flags"].append("문항정보표 배점으로 채웠습니다.")
+            elif score > 0 and abs(row["points"] - score) > 1e-6:
+                row["flags"].append(f"문항정보표 배점은 {score:g}점입니다. 확인하세요.")
+        return rows, "문항정보표"
+    # Without the table, higher 배점 usually means a harder item: split each type into thirds by 배점.
+    for kind in ("선택형", "서답형"):
+        scored = sorted((row for row in rows if row["type"] == kind and row["points"] is not None), key=lambda r: r["points"])
+        values = [row["points"] for row in scored]
+        if len(set(values)) < 2:
+            continue
+        third = len(values) // 3  # lowest third 쉬움, highest third 어려움, the rest 보통
+        low, high = values[max(0, third - 1)], values[min(len(values) - 1, len(values) - max(third, 1))]
+        for row in scored:
+            if low < high and row["points"] <= low:
+                row["difficulty"] = "쉬움"
+            elif low < high and row["points"] >= high:
+                row["difficulty"] = "어려움"
+    return rows, source

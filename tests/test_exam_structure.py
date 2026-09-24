@@ -5,8 +5,10 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from app.exam_structure import (
-    ExamReadError, designs_from_structure, extract_exam_text, find_kordoc, markdown_to_lines, parse_exam_structure,
+    ExamReadError, designs_from_structure, enrich_structure, extract_exam_text, find_kordoc, markdown_to_lines,
+    parse_exam_structure,
 )
+from types import SimpleNamespace
 
 try:
     from app.main_window import MainWindow
@@ -294,28 +296,133 @@ class ExamReadTests(unittest.TestCase):
         self.assertEqual(_summary(parse_exam_structure(text)), EXPECTED)
 
 
+AUTO_NUMBERED = """<table><tr><td>2026학년도 정기시험 합성과목</td></tr></table>
+※ 선택형 3문항, 논술형 2문항 / 총 5문항
+첫째 합성 질문의 값은? [4.5점]
+
+① 1	② 2	③ 3
+
+④ 4	⑤ 5
+둘째 합성 질문으로 옳은 것은? [4.6점]
+① 가
+
+② 나
+
+③ 다
+
+④ 라
+
+⑤ 마
+셋째 합성 질문은 줄이 길어 배점이 다음 줄로 넘어갔다.
+[5.9점]
+① 1	② 2	③ 3	④ 4	⑤ 5
+합성 논술형 첫째 문항의 과정을 서술하시오.
+합성 논술형 둘째 문항의 값을 구하고 이유를 쓰시오.
+<유의사항>
+논술형 문항 채점 기준표
+논술형 1
+① 첫 단계
+1.0
+5.0
+② 둘째 단계
+1.0
+논술형 2
+① 첫 단계
+2.0
+5.0
+합계
+10"""
+
+
+class AutoNumberedPaperTests(unittest.TestCase):
+    """HWP papers use 한글 auto numbering, so the extracted text has no item numbers."""
+
+    def test_items_follow_choice_groups_and_rubric_gives_serdap_points(self):
+        result = parse_exam_structure(AUTO_NUMBERED)
+        self.assertEqual([(i["type"], i["number"], i["points"], i["choices"]) for i in result["items"]],
+                         [("선택형", 1, 4.5, 5), ("선택형", 2, 4.6, 5), ("선택형", 3, 5.9, 5),
+                          ("서답형", 1, 5.0, 0), ("서답형", 2, 5.0, 0)])
+        self.assertIn("한글 자동 번호", result["warnings"][0])
+        self.assertIn("채점 기준표에서 배점을 읽었습니다. 확인하세요.", result["items"][3]["flags"])
+        self.assertTrue(result["items"][2]["preview"].startswith("[5.9점]") or "셋째" in result["items"][2]["preview"])
+
+    def test_numbered_papers_keep_the_numbered_parser(self):
+        self.assertNotIn("한글 자동 번호", " ".join(parse_exam_structure(PAPER)["warnings"]))
+
+    def test_one_missing_point_is_filled_from_a_100_point_total(self):
+        text = "\n".join(f"{n}. 문항 [20점]\n① 가" for n in range(1, 5)) + "\n5. 마지막 문항\n① 가"
+        item = parse_exam_structure(text)["items"][-1]
+        self.assertEqual(item["points"], 20.0)
+        self.assertIn("총점 100점에서 나머지(20점)로 채웠습니다. 확인하세요.", item["flags"][-1])
+        far = "\n".join(f"{n}. 문항 [19점]\n① 가" for n in range(1, 5)) + "\n5. 마지막 문항\n① 가"
+        self.assertIsNone(parse_exam_structure(far)["items"][-1]["points"])  # 24점은 너무 커서 채우지 않는다
+
+
+def _info(kind, number, difficulty, score, code="[10수학01-01]"):
+    return SimpleNamespace(item_type=kind, number=number, difficulty=difficulty, score=score, standard_code=code, standard="합성 기준")
+
+
+class EnrichStructureTests(unittest.TestCase):
+    def _items(self):
+        return [{"type": "선택형", "number": n, "points": p, "choices": 5, "flags": [], "preview": ""}
+                for n, p in ((1, 4.0), (2, 5.0), (3, 6.0), (4, None))]
+
+    def test_matching_item_info_gives_difficulty_standard_and_missing_points(self):
+        info = [_info("선택형", 1, "쉬움", 4.0), _info("선택형", 2, "어려움", 5.0), _info("선택형", 3, "보통", 6.0),
+                _info("선택형", 4, "보통", 7.0)]
+        rows, source = enrich_structure(self._items(), info)
+        self.assertEqual(source, "문항정보표")
+        self.assertEqual([r["difficulty"] for r in rows], ["쉬움", "어려움", "보통", "보통"])
+        self.assertEqual(rows[0]["standard"], "[10수학01-01] 합성 기준")
+        self.assertEqual(rows[3]["points"], 7.0)
+        self.assertIn("문항정보표 배점으로 채웠습니다.", rows[3]["flags"])
+
+    def test_item_info_of_another_exam_is_not_used(self):
+        other = [_info("선택형", n, "어려움", 9.0) for n in range(1, 5)]
+        rows, source = enrich_structure(self._items(), other)
+        self.assertEqual(source, "문항정보표 불일치")
+        self.assertEqual([r["difficulty"] for r in rows], ["쉬움", "보통", "어려움", "보통"])  # 배점 순서 추정
+
+    def test_without_item_info_difficulty_follows_points(self):
+        rows, source = enrich_structure(self._items(), None)
+        self.assertEqual(source, "배점 순서로 추정")
+        self.assertEqual([r["difficulty"] for r in rows], ["쉬움", "보통", "어려움", "보통"])
+        same = [dict(item, points=5.0) for item in self._items()]
+        self.assertEqual({r["difficulty"] for r in enrich_structure(same, None)[0]}, {"보통"})
+
+
 class ExamStructureToCalculatorTests(unittest.TestCase):
-    def test_designs_need_points_and_carry_default_rates(self):
-        rates = dict(zip("ABCDE", (90, 80, 70, 45, 25)))
-        designs = designs_from_structure([{"type": "선택형", "number": 1, "points": 3.5},
-                                          {"type": "서답형", "number": 1, "points": 6}], rates)
+    def test_designs_need_points_and_use_each_rows_difficulty_and_target(self):
+        calls = []
+        rates_for = lambda target, difficulty: calls.append((target, difficulty)) or dict(zip("ABCDE", (90, 80, 70, 45, 25)))
+        designs = designs_from_structure([
+            {"type": "선택형", "number": 1, "points": 3.5, "difficulty": "쉬움", "target": "E", "standard": "[10수학01-01] 합성"},
+            {"type": "서답형", "number": 1, "points": 6, "difficulty": "어려움", "target": "B"},
+        ], rates_for)
         self.assertEqual([(d["type"], d["number"], d["points"], d["target"], d["difficulty"]) for d in designs],
-                         [("선택형", 1, 3.5, "C", "보통"), ("서답형", 1, 6.0, "C", "보통")])
-        self.assertEqual(designs[0]["rates"], rates)
+                         [("선택형", 1, 3.5, "E", "쉬움"), ("서답형", 1, 6.0, "B", "어려움")])
+        self.assertEqual(calls, [("E", "쉬움"), ("B", "어려움")])
+        self.assertEqual(designs[0]["standard"], "[10수학01-01] 합성")
         for bad in (None, 0, -1):
             with self.assertRaises(ValueError):
-                designs_from_structure([{"type": "선택형", "number": 2, "points": bad}], rates)
+                designs_from_structure([{"type": "선택형", "number": 2, "points": bad}], rates_for)
 
     @unittest.skipIf(MainWindow is None, "main window unavailable")
     def test_designs_become_a_valid_calculator_project(self):
         window = MainWindow.__new__(MainWindow)
         window.exam, window.overall = None, None
-        rates = window._target_level_rates("C", "보통")
-        result = parse_exam_structure(PAPER)
-        project = window._project_from_neis_targets(designs_from_structure(result["items"], rates))
+        rows, _ = enrich_structure(parse_exam_structure(PAPER)["items"], None)
+        for row in rows:
+            row["target"] = MainWindow._import_target_level(row)
+        project = window._project_from_neis_targets(designs_from_structure(rows, window._target_level_rates))
         self.assertEqual([(i["type"], i["number"], i["points"]) for i in project["items"]],
                          [(t, n, p) for t, n, p, _ in EXPECTED])
-        self.assertEqual({i["targetLevel"] for i in project["items"]}, {"C"})
+        self.assertEqual([(i["difficulty"], i["targetLevel"]) for i in project["items"][:4]],
+                         [("쉬움", "E"), ("보통", "C"), ("보통", "C"), ("어려움", "B")])  # 배점 3.5/4/4.5/5
+
+    @unittest.skipIf(MainWindow is None, "main window unavailable")
+    def test_import_target_uses_difficulty_rule_only(self):
+        self.assertEqual([MainWindow._import_target_level({"difficulty": d}) for d in ("쉬움", "보통", "어려움")], ["E", "C", "B"])
 
 
 @unittest.skipIf(MainWindow is None, "main window unavailable")
