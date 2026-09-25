@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
-from PySide6.QtCore import Qt, QSettings, QUrl, QSize, QTimer, QObject, Slot
+from PySide6.QtCore import Qt, QEvent, QSettings, QUrl, QSize, QTimer, QObject, Slot
 from PySide6.QtGui import QAction, QActionGroup, QColor, QBrush, QFont, QKeySequence, QShortcut, QIcon, QPixmap, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout, QLabel,
@@ -37,12 +37,12 @@ from PySide6.QtWidgets import (
     QFormLayout, QDoubleSpinBox, QTableWidget, QTableWidgetItem, QHeaderView,
     QMessageBox, QSplitter, QComboBox, QSizePolicy, QCheckBox, QToolButton,
     QScrollArea, QAbstractItemView, QGridLayout, QTextBrowser, QPlainTextEdit, QInputDialog,
-    QDialog, QLayout,
+    QDialog, QLayout, QMenu,
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from .data_loader import load_exam, apply_perform, ExamData
+from .data_loader import load_exam, load_item_info, apply_perform, ExamData
 from .analysis import (
     analyze_overall, analyze_items, build_score_matrix, analyze_serdap,
     grade_level, reliability_label, LEVELS,
@@ -50,6 +50,21 @@ from .analysis import (
 from . import charts
 from .theme import ThemeManager
 from .cuts_loader import load_cut_scores
+from .expected_rates import (
+    build_neis_rows, normalize_rates, summarize_designs, validate_design_items,
+    write_estimation_workbook,
+)
+from .exam_structure import (
+    DIFFICULTIES, ExamReadError, designs_from_structure, enrich_structure, extract_exam_text, parse_exam_structure,
+)
+from .export_privacy import (
+    REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, new_student_hash_key,
+    pseudonym_ids, pseudonymize_evidence_payload, sanitize_csv_text, student_hash, student_result_table,
+)
+from .calibration import (
+    LARGE_GAP, build_calibration, cut_lines, headline_lines, observed_targets, suggest_presets, summary_lines,
+    write_calibration_workbook,
+)
 from .perform_loader import load_perform
 from . import fonts as font_pack
 from .grade_cut_calculator import (
@@ -83,9 +98,10 @@ except Exception:
     QWebEngineView = None
 
 try:
-    from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineDownloadRequest
 except Exception:
     QWebEnginePage = None
+    QWebEngineDownloadRequest = None
 
 try:
     from PySide6.QtWebChannel import QWebChannel
@@ -187,19 +203,17 @@ def build_data_empty_state_html() -> str:
         ("예상정답률 조정", "예상정답률 입력 탭에서 O/X 판단과 근거 추천을 보며 분할점수 산정 근거를 정리합니다."),
         ("모니터링·상담·내보내기", "모니터링 탭과 상담 모드, 포트폴리오, CSV/근거 엑셀 내보내기로 협의와 상담 자료를 마무리합니다."),
     ]
+    # <ol> numbers the steps itself; a number in the title printed "1. 1." and the title ran into the text.
     items = "".join(
-        "<li>"
-        f"<b>{idx}. {html.escape(title)}</b>"
-        f"<span>{html.escape(description)}</span>"
-        "</li>"
-        for idx, (title, description) in enumerate(steps, start=1)
+        f"<li><b>{html.escape(title)}</b> — {html.escape(description)}</li>"
+        for title, description in steps
     )
     return (
         "<h3>처음 시작하기</h3>"
         "<p>아직 분석 자료가 없습니다. 아래 순서대로 진행하면 됩니다.</p>"
         f"<ol>{items}</ol>"
-        "<p class='muted'>AI 문항 검토는 선택 기능입니다. 처음에는 AI 설정을 건드리지 않아도 되며, "
-        "AI 연결 없이도 기본 분석과 예상정답률 계산, 상담 모드, 내보내기를 사용할 수 있습니다.</p>"
+        "<p class='muted'>시험지(HWP·HWPX·PDF)의 문항 번호·배점은 예상정답률 탭의 '자료 → 시험지에서 문항 가져오기'로 가져올 수 있습니다. "
+        "시험지 오류 검토와 AI 연결은 후속 버전에서 제공합니다.</p>"
     )
 
 LUCIDE_PATHS = {
@@ -266,6 +280,129 @@ class FileSelector(QWidget):
         return self.path_edit.text().strip()
 
 
+class _MarginKeepingCanvas(FigureCanvas):
+    """Fits a chart's margins to its labels when the widget is smaller than the chart's design.
+
+    Charts set margins as fractions of their designed size (e.g. bottom=0.18 of 3.9 in). In a
+    shorter pane the same fraction left too little room and axis titles were cut off. Below the
+    designed size the margins are measured from the actual labels (tight_layout); at or above it
+    the designed margins are used as before.
+    """
+
+    def __init__(self, fig):
+        super().__init__(fig)
+        pars = fig.subplotpars
+        # Decided once: tight_layout leaves a placeholder layout engine behind, which would read as
+        # "the chart manages its own layout" on every later resize and freeze the first margins.
+        self._own_layout = fig.get_layout_engine() is not None
+        self._design_size = tuple(fig.get_size_inches())
+        self._design_pars = {"left": pars.left, "right": pars.right, "bottom": pars.bottom, "top": pars.top}
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        fig = self.figure
+        if self._own_layout:
+            return
+        w0, h0 = self._design_size
+        w, h = fig.get_size_inches()
+        fig.set_layout_engine(None)
+        fig.subplots_adjust(**self._design_pars)
+        if w < w0 - 0.05 or h < h0 - 0.05:
+            try:
+                fig.tight_layout(pad=0.5)
+            except Exception:
+                fig.subplots_adjust(**self._design_pars)
+            fig.set_layout_engine(None)
+
+
+class FoldSection(QWidget):
+    """A large area (chart, table, explanation) with a header that folds it to one line.
+
+    Open by default. On a laptop screen a teacher can fold what they are not looking at; the
+    freed height goes to the other areas (also inside a QSplitter, through the maximum height),
+    and the choice is kept in the app settings under ``ui/fold/<key>``.
+    """
+    OPEN_MAX = 16777215
+
+    def __init__(self, title: str, body: QWidget, *, settings=None, key: str = "", parent=None):
+        super().__init__(parent)
+        self.body = body
+        self._settings = settings
+        self._key = f"ui/fold/{key}" if key else ""
+        self._last_open_height = 0
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self.toggle = QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle.setProperty("role", "collapsebtn")
+        self.toggle.setToolTip("눌러서 이 영역을 접거나 펼칩니다. 접은 상태는 다음 실행 때도 유지됩니다.")
+        layout.addWidget(self.toggle, 0, Qt.AlignLeft)
+        layout.addWidget(body, 1)
+        opened = True
+        if settings is not None and self._key:
+            opened = str(settings.value(self._key, "1")) != "0"
+        self.toggle.setChecked(opened)
+        self._apply(opened, remember=False)
+        self.toggle.toggled.connect(self._apply)
+        if not opened:  # not in its splitter yet: hand the room over once the layout exists
+            QTimer.singleShot(0, lambda: self._fit_splitter(False))
+
+    def is_open(self) -> bool:
+        return self.toggle.isChecked()
+
+    def _apply(self, opened: bool, remember: bool = True):
+        if not opened and self.body.isVisible():
+            self._last_open_height = self.height()
+        self.body.setVisible(opened)
+        self.toggle.setArrowType(Qt.DownArrow if opened else Qt.RightArrow)
+        if opened:
+            self.setMaximumHeight(self.OPEN_MAX)
+            self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        else:
+            self.setMaximumHeight(self.toggle.sizeHint().height() + 4)
+            self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._fit_splitter(opened)
+        if remember and self._settings is not None and self._key:
+            self._settings.setValue(self._key, "1" if opened else "0")
+
+    def _fit_splitter(self, opened: bool):
+        """A QSplitter neither gives a folded area's height to its neighbours nor gives it back on
+        unfolding (a blank gap stayed behind). Move that height to or from the largest open sibling."""
+        splitter = self.parentWidget()
+        if not isinstance(splitter, QSplitter) or splitter.orientation() != Qt.Vertical:
+            return
+        sizes = splitter.sizes()
+        index = splitter.indexOf(self)
+        if index < 0 or not sizes:
+            return
+
+        def is_open(j):
+            widget = splitter.widget(j)
+            return not isinstance(widget, FoldSection) or widget.is_open()
+
+        others = [j for j in range(len(sizes)) if j != index and is_open(j)]
+        if not others:
+            return
+        largest = max(others, key=lambda j: sizes[j])
+        if opened:
+            want = max(self._last_open_height, 160)
+            give = min(want - sizes[index], max(0, sizes[largest] - 120))
+            if give <= 0:
+                return
+            sizes[index] += give
+            sizes[largest] -= give
+        else:
+            extra = sizes[index] - self.maximumHeight()
+            if extra <= 0:
+                return
+            sizes[index] -= extra
+            sizes[largest] += extra
+        splitter.setSizes(sizes)
+
+
 class CanvasHolder(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -275,7 +412,7 @@ class CanvasHolder(QWidget):
     def set_figure(self, fig):
         if self._canvas is not None:
             self._layout.removeWidget(self._canvas); self._canvas.setParent(None); self._canvas.deleteLater()
-        self._canvas = FigureCanvas(fig)
+        self._canvas = _MarginKeepingCanvas(fig)
         self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         # 마우스 휠로 줌, 더블클릭으로 원상 복귀
         attach_wheel_zoom(self._canvas)
@@ -359,6 +496,28 @@ class SpliterWebBridge(QObject):
     def __init__(self, window):
         super().__init__(window)
         self.window = window
+
+    @Slot(str, result=bool)
+    def saveNeisProjectJson(self, raw: str) -> bool:
+        try:
+            project = json.loads(raw)
+            designs = self.window._neis_design_items_from_spliter_project(project)
+            validate_design_items(designs)
+            if not designs:
+                raise ValueError("저장할 문항이 없습니다.")
+            path, _ = QFileDialog.getSaveFileName(
+                self.window, "분할점수 검토표 저장", "분할점수_검토표.xlsx", "Excel 통합문서 (*.xlsx)",
+            )
+            if not path:
+                return False
+            if not path.lower().endswith(".xlsx"):
+                path += ".xlsx"
+            write_estimation_workbook(path, designs)
+            self.window.statusBar().showMessage("문항별 입력값·NEIS 입력표·분할점수 비교를 저장했습니다.", 6000)
+            return True
+        except (ValueError, TypeError, OSError) as exc:
+            QMessageBox.warning(self.window, "분할점수 검토표", str(exc))
+            return False
 
     @Slot(str, str, result=bool)
     def copyText(self, content: str, label: str = "") -> bool:
@@ -462,6 +621,8 @@ class MainWindow(QMainWindow):
         # 화면 배율(%). 100이 기본이고 50~160 사이에서 조절한다.
         self._zoom = 100
         self._base_font_pt = 13
+        self._sidebar_user_choice = None
+        self._sidebar_hidden_for_calculator = False
 
         # Qt에 번들 폰트 등록 → 시스템에 Gowun Dodum/NanumGothic이 없어도 동작
         try: font_pack.register_fonts()
@@ -482,7 +643,11 @@ class MainWindow(QMainWindow):
         return "#2a7770"
 
     def _apply_tool_icon(self, button: QToolButton, name: str):
-        button.setText("")
+        # A button with an "iconLabel" shows its word next to the icon: an icon alone (shield, circular
+        # arrow) did not say what it does to a first-time user.
+        label = str(button.property("iconLabel") or "")
+        button.setText(label)
+        button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if label else Qt.ToolButtonIconOnly)
         button.setIcon(_lucide_icon(name, self._icon_color()))
         button.setIconSize(QSize(18, 18))
 
@@ -503,17 +668,20 @@ class MainWindow(QMainWindow):
         # 좁아질 때 자동 접힘 가능
         self.splitter.setCollapsible(0, True)
         self.splitter.setCollapsible(1, False)
+        self.splitter.splitterMoved.connect(self._on_sidebar_dragged)
         outer.addWidget(self.splitter, 1)
         self.setCentralWidget(central)
 
     def _build_header_bar(self) -> QWidget:
         bar = QFrame(); bar.setProperty("role", "headerbar")
+        self.header_bar = bar
         h = QHBoxLayout(bar); h.setContentsMargins(8, 4, 8, 4); h.setSpacing(8)
 
         # 사이드바 토글 (좁은 창에서 입력 패널 보이기/숨기기)
         self.btn_sidebar = QToolButton()
         self.btn_sidebar.setProperty("role", "iconbtn")
         self.btn_sidebar.setToolTip("입력 패널 보이기/숨기기")
+        self.btn_sidebar.setProperty("iconLabel", "입력 패널")
         self.btn_sidebar.clicked.connect(self._toggle_sidebar)
         self._apply_tool_icon(self.btn_sidebar, "menu")
         h.addWidget(self.btn_sidebar)
@@ -532,11 +700,15 @@ class MainWindow(QMainWindow):
         self.btn_counsel_mode.setToolTip(
             "상담 모드 (Ctrl+Shift+H): 검색한 학생 외 이름과 반/번호를 화면에서 가립니다."
         )
+        self.btn_counsel_mode.setProperty("iconLabel", "상담 모드")
         self.btn_counsel_mode.toggled.connect(self._on_counseling_mode_changed)
         self._apply_tool_icon(self.btn_counsel_mode, "shield")
         h.addWidget(self.btn_counsel_mode)
 
         # 줌 컨트롤
+        self.lbl_zoom_title = QLabel("화면 크기")
+        self.lbl_zoom_title.setProperty("role", "muted")
+        h.addWidget(self.lbl_zoom_title)
         self.btn_zoom_out = QToolButton()
         self.btn_zoom_out.setToolTip("화면 축소 (Ctrl+−, 최소 50%)")
         self.btn_zoom_out.setProperty("role", "iconbtn")
@@ -553,6 +725,7 @@ class MainWindow(QMainWindow):
         self._apply_tool_icon(self.btn_zoom_in, "plus")
         self.btn_zoom_reset = QToolButton()
         self.btn_zoom_reset.setToolTip("기본 크기로 (Ctrl+0)")
+        self.btn_zoom_reset.setProperty("iconLabel", "기본")
         self.btn_zoom_reset.setProperty("role", "iconbtn")
         self.btn_zoom_reset.clicked.connect(lambda: self._set_zoom(100))
         self._apply_tool_icon(self.btn_zoom_reset, "rotate")
@@ -565,6 +738,7 @@ class MainWindow(QMainWindow):
         self.btn_theme = QToolButton()
         self.btn_theme.setProperty("role", "iconbtn")
         self.btn_theme.setToolTip("라이트/다크 전환  (Ctrl+1: 라이트 / Ctrl+2: 다크 / Ctrl+3: 자동)")
+        self.btn_theme.setProperty("iconLabel", "밝기")
         self.btn_theme.clicked.connect(self._toggle_theme_button)
         h.addWidget(self.btn_theme)
         self._update_theme_button_icon()
@@ -710,6 +884,7 @@ class MainWindow(QMainWindow):
             # ThemeManager가 없을 때도 차트는 다시 그려야 폰트 반영
             self._refresh_all_charts()
         self._apply_zoom_to_surfaces()
+        self._apply_header_compactness()
         # % 라벨 갱신 (기본 13pt = 100%)
         pct = self._zoom_percent()
         if hasattr(self, "lbl_zoom"):
@@ -718,6 +893,8 @@ class MainWindow(QMainWindow):
 
     def _toggle_sidebar(self):
         sizes = self.splitter.sizes()
+        self._sidebar_user_choice = sizes[0] <= 4
+        self._sidebar_hidden_for_calculator = False
         if sizes[0] <= 4:
             # 펼치기
             side_w = self._sidebar_default_width()
@@ -725,10 +902,38 @@ class MainWindow(QMainWindow):
         else:
             # 접기
             self.splitter.setSizes([0, sum(sizes)])
+        self._apply_responsive_tab_labels()
+
+    def _on_sidebar_dragged(self, _position, _index):
+        self._sidebar_user_choice = self.splitter.sizes()[0] > 4
+        self._sidebar_hidden_for_calculator = False
+        self._apply_responsive_tab_labels()
+
+    def _update_responsive_sidebar(self):
+        if not hasattr(self, "splitter") or len(self.splitter.sizes()) < 2:
+            return
+        sizes = self.splitter.sizes()
+        choice = self._sidebar_user_choice
+        if choice is not None:
+            return
+        calculator = hasattr(self, "tabs") and self.tabs.currentWidget() is self.tab_spliter
+        if self.width() < 1180 or (calculator and self.width() < 1440):
+            if self.width() < 1180:
+                self._sidebar_hidden_for_calculator = False  # hidden for the window size, not the calculator
+            if sizes[0] > 0:
+                self._sidebar_hidden_for_calculator = calculator and self.width() >= 1180
+                self.splitter.setSizes([0, sum(sizes)])
+        elif sizes[0] == 0 and (self.width() >= 1440 or self._sidebar_hidden_for_calculator):
+            # Only the calculator needed the room: give the input panel back when leaving it.
+            self._sidebar_hidden_for_calculator = False
+            side_w = self._sidebar_default_width()
+            self.splitter.setSizes([side_w, max(600, sum(sizes) - side_w)])
 
     def _show_sidebar(self):
         if not hasattr(self, "splitter"):
             return
+        self._sidebar_user_choice = True
+        self._sidebar_hidden_for_calculator = False
         sizes = self.splitter.sizes()
         total = sum(sizes) if sizes else 1320
         if not sizes or sizes[0] <= 4:
@@ -736,17 +941,31 @@ class MainWindow(QMainWindow):
             self.splitter.setSizes([side_w, max(600, total - side_w)])
         self.statusBar().showMessage("입력 패널을 열었습니다. 정오표와 문항정보표를 지정한 뒤 분석 실행을 누르세요.", 4000)
 
+    def _apply_header_compactness(self):
+        """Words on the less used header buttons only while they fit (large zoom on a laptop)."""
+        if not hasattr(self, "btn_theme") or not hasattr(self, "header_bar"):
+            return
+
+        def show_words(on: bool):
+            self.lbl_zoom_title.setVisible(on)
+            for button, word in ((self.btn_zoom_reset, "기본"), (self.btn_theme, "밝기")):
+                button.setProperty("iconLabel", word if on else "")
+                button.setText(word if on else "")
+                button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon if on else Qt.ToolButtonIconOnly)
+
+        show_words(True)
+        available = self.width() - 24  # the central layout's side margins
+        if self.header_bar.minimumSizeHint().width() > available:
+            show_words(False)
+
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         try:
+            self._apply_header_compactness()
+            self._update_responsive_sidebar()
             self._apply_responsive_tab_labels()
             w = self.width()
             sizes = self.splitter.sizes()
-            if w < 1180 and sizes[0] > 0:
-                self.splitter.setSizes([0, sum(sizes)])
-            elif w >= 1280 and sizes[0] == 0:
-                side_w = self._sidebar_default_width()
-                self.splitter.setSizes([side_w, max(600, sum(sizes) - side_w)])
             # KPI 카드 자동 줄바꿈
             if hasattr(self, "_kpis") and self._kpis:
                 content_w = max(300, w - sizes[0] - 60)
@@ -922,14 +1141,7 @@ class MainWindow(QMainWindow):
         self.cuts_box = self._make_collapsible_panel("분할점수 (고정 분할 방식)", cuts_body)
         v.addWidget(self.cuts_box)
 
-        # 액션 버튼
-        # 액션 버튼들
-        run_btn = QPushButton("분석 실행")
-        run_btn.setProperty("role", "primary")
-        run_btn.setMinimumHeight(40)
-        run_btn.clicked.connect(self.run_analysis)
-        v.addWidget(run_btn)
-
+        # 액션 버튼들 ('분석 실행'은 스크롤 밖 패널 맨 아래에 고정)
         action_row = QHBoxLayout(); action_row.setSpacing(6)
         self.btn_revert = QPushButton(SIDEBAR_REVERT_BUTTON_TEXT)
         self.btn_revert.setToolTip("마지막으로 분석 실행했을 때의 입력값으로 되돌립니다.\n실수로 분할점수나 파일 경로를 건드렸을 때 사용하세요.")
@@ -958,7 +1170,25 @@ class MainWindow(QMainWindow):
         credit.setAlignment(Qt.AlignRight)
         v.addWidget(credit)
         self._update_cut_box_title()
-        return outer
+
+        # The run button used to sit below every optional panel and needed scrolling to find at the
+        # default window height; keep it pinned under the scroll area instead.
+        panel = QWidget()
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(0, 0, 0, 0)
+        panel_layout.setSpacing(0)
+        panel_layout.addWidget(outer, 1)
+        run_bar = QFrame()
+        run_layout = QVBoxLayout(run_bar)
+        run_layout.setContentsMargins(12, 8, 12, 10)
+        self.btn_run_analysis = QPushButton("분석 실행")
+        self.btn_run_analysis.setProperty("role", "primary")
+        self.btn_run_analysis.setMinimumHeight(40)
+        self.btn_run_analysis.setToolTip("정오표와 문항정보표로 분석합니다 (Ctrl+R).")
+        self.btn_run_analysis.clicked.connect(self.run_analysis)
+        run_layout.addWidget(self.btn_run_analysis)
+        panel_layout.addWidget(run_bar)
+        return panel
 
     def _current_cut_scores_from_inputs(self) -> dict[str, float]:
         if not hasattr(self, "spin_cuts"):
@@ -1296,7 +1526,27 @@ class MainWindow(QMainWindow):
     def _portfolio_store_dir(self) -> Path:
         return self._ensure_writable_dir(self._ai_material_root_dir() / "subject_snapshots", "subject_snapshots")
 
+    def _portfolio_hash_key(self) -> bytes:
+        """포트폴리오 학생 해시용 비밀 키. 이 PC의 앱 설정에만 둔다."""
+        try:
+            key = bytes.fromhex(str(self.settings.value("privacy/portfolio_hash_key", "") or ""))
+        except ValueError:
+            key = b""
+        if len(key) != 32:
+            key = new_student_hash_key()
+            self.settings.setValue("privacy/portfolio_hash_key", key.hex())
+        return key
+
+    def _current_identity_by_hash(self) -> dict[str, tuple[str, str]]:
+        """지금 불러온 분석 자료로 해시만 저장된 스냅샷의 반/번호·이름을 화면에서만 되찾는다."""
+        if self.exam is None:
+            return {}
+        key = self._portfolio_hash_key()
+        return {student_hash(key, st.sid, st.class_no, st.name): (st.class_no, st.name) for st in self.exam.students}
+
     def _portfolio_student_key(self, row: dict) -> str:
+        if row.get("student_hash"):
+            return f"hash:{row['student_hash']}"
         sid = str(row.get("sid", "") or "").strip()
         class_no = str(row.get("class_no", "") or "").strip()
         name = str(row.get("name", "") or "").strip()
@@ -1324,13 +1574,12 @@ class MainWindow(QMainWindow):
         if self.exam is None or self.overall is None:
             return None
         grade9_labels, grade5_labels = self._current_relative_grades()
+        key = self._portfolio_hash_key()
         students = []
         for idx, st in enumerate(self.exam.students):
             level = self.overall.levels_arr[idx] if idx < len(self.overall.levels_arr) else grade_level(st.final_score, self.exam.cut_scores)
             students.append({
-                "class_no": st.class_no,
-                "sid": st.sid,
-                "name": st.name,
+                "student_hash": student_hash(key, st.sid, st.class_no, st.name),
                 "level": level,
                 "grade9": grade9_labels[idx] if idx < len(grade9_labels) else "",
                 "grade5": grade5_labels[idx] if idx < len(grade5_labels) else "",
@@ -1339,8 +1588,9 @@ class MainWindow(QMainWindow):
                 "pencil_total": round(float(st.total), 2),
                 "perform_score": round(float(st.perform_score), 2),
             })
+        students.sort(key=lambda student: student["student_hash"])  # 목록 순서로 명부 순서가 드러나지 않게
         return {
-            "version": 1,
+            "version": 2,
             "saved_at": datetime.now().isoformat(timespec="seconds"),
             "subject": self.exam.subject or "(과목 미상)",
             "grade": self.exam.grade,
@@ -1370,6 +1620,8 @@ class MainWindow(QMainWindow):
 
     def _load_portfolio_rows(self) -> list[dict]:
         store = self._portfolio_store_dir()
+        key = self._portfolio_hash_key()
+        identities = self._current_identity_by_hash()
         rows = []
         for path in sorted(store.glob("*.json"), reverse=True):
             try:
@@ -1380,13 +1632,19 @@ class MainWindow(QMainWindow):
             subject = str(data.get("subject", ""))
             term = " ".join(part for part in [str(data.get("semester", "")), str(data.get("grade", ""))] if part)
             for student in data.get("students", []):
+                hashed = str(student.get("student_hash", "") or "")
+                if hashed:  # version 2: 학번·이름 없이 해시만 저장
+                    class_no, name = identities.get(hashed, ("", f"학생#{hashed[:6]}"))
+                else:  # version 1: 예전 실명 스냅샷도 같은 해시로 연결
+                    class_no, name = str(student.get("class_no", "")), str(student.get("name", ""))
+                    hashed = student_hash(key, student.get("sid", ""), class_no, name)
                 rows.append({
                     "saved_at": saved_at,
                     "subject": subject,
                     "term": term,
-                    "class_no": str(student.get("class_no", "")),
-                    "sid": str(student.get("sid", "")),
-                    "name": str(student.get("name", "")),
+                    "student_hash": hashed,
+                    "class_no": class_no,
+                    "name": name,
                     "level": str(student.get("level", "")),
                     "grade9": str(student.get("grade9", "")),
                     "grade5": str(student.get("grade5", "")),
@@ -1473,10 +1731,12 @@ class MainWindow(QMainWindow):
         self.table_portfolio.setSortingEnabled(True)
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
+            # The full folder path was long and technical here; the '저장 위치' button shows and opens it.
             self.lbl_portfolio_note.setText(
-                f"저장 위치: {self._portfolio_store_dir()} · 저장 과목 {len(set(row['subject'] for row in rows))}개 · 현재 저장 행 {len(rows)}개. "
-                "Data 탭의 '포트폴리오 저장'을 과목마다 누르면 다과목 포트폴리오가 누적됩니다."
+                f"저장 과목 {len(set(row['subject'] for row in rows))}개 · 현재 저장 행 {len(rows)}개. "
+                "Data 탭의 '포트폴리오 저장'을 과목마다 누르면 다과목 포트폴리오가 누적됩니다. 저장 폴더는 '저장 위치' 버튼으로 확인합니다."
             )
+            self.lbl_portfolio_note.setToolTip(f"저장 위치: {self._portfolio_store_dir()}")
 
     def _filter_portfolio_table(self, text: str = ""):
         if not hasattr(self, "table_portfolio"):
@@ -2256,7 +2516,7 @@ class MainWindow(QMainWindow):
         self.tab_items = QWidget(); self._init_tab_items()
         self.tab_choice = QWidget(); self._init_tab_choice()
         self.tab_standard = QWidget(); self._init_tab_standard()
-        self.tab_ai_review = QWidget(); self._init_tab_ai_review()
+        self.tab_ai_review = None
         self.tab_spliter = QWidget(); self._init_tab_spliter()
         self.tab_monitor = QWidget(); self._init_tab_monitor()
         self.tab_help = QWidget(); self._init_tab_help()
@@ -2268,7 +2528,6 @@ class MainWindow(QMainWindow):
             (self.tab_items, "문항 분석", "문항", "문항"),
             (self.tab_choice, "성취수준별 답지반응 분포", "답지반응", "답지"),
             (self.tab_standard, "성취기준 분석 결과", "성취기준", "기준"),
-            (self.tab_ai_review, "AI 문항 검토", "AI 검토", "AI"),
             (self.tab_spliter, "예상정답률 입력", "예상정답률", "정답률"),
             (self.tab_monitor, "모니터링", "모니터링", "모니터"),
             (self.tab_help, "도움말", "도움말", "도움"),
@@ -2277,14 +2536,25 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(widget, full)
             self.tabs.setTabToolTip(self.tabs.indexOf(widget), full)
         self.tabs.currentChanged.connect(self._on_main_tab_changed)
+        # The window's own resize arrives before the tab bar is laid out, so names picked there used
+        # the tiny set at first launch ("학생·성취·답지") until a tab was clicked; follow the tab bar.
+        self.tabs.installEventFilter(self)
         self._apply_responsive_tab_labels()
         return self.tabs
+
+    def eventFilter(self, watched, event):
+        if watched is getattr(self, "tabs", None) and event.type() == QEvent.Resize:
+            QTimer.singleShot(0, self._apply_responsive_tab_labels)
+        return super().eventFilter(watched, event)
 
     def _apply_responsive_tab_labels(self):
         if not hasattr(self, "tabs") or not hasattr(self, "_tab_label_sets"):
             return
-        width = self.width() or 1600
-        label_index = 3 if width < 1120 else (2 if width < 1480 else 1)
+        width = self.tabs.width() or self.width()
+        if self._sidebar_hidden_for_calculator and self.splitter.sizes()[0] == 0:
+            # Keep the names the other tabs show; the wider tab bar alone used to switch every name.
+            width -= self._sidebar_default_width()
+        label_index = 3 if width < 780 else (2 if width < 1400 else 1)
         for labels in self._tab_label_sets:
             widget = labels[0]
             idx = self.tabs.indexOf(widget)
@@ -2295,24 +2565,31 @@ class MainWindow(QMainWindow):
     # ---- 예상정답률 입력 ----------------------------------------------
     def _init_tab_spliter(self):
         layout = QVBoxLayout(self.tab_spliter)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setSpacing(4)
 
         self.spliter_toolbar = QFrame()
-        self.spliter_toolbar.setProperty("role", "card")
         toolbar_layout = QHBoxLayout(self.spliter_toolbar)
-        toolbar_layout.setContentsMargins(12, 10, 12, 10)
-        toolbar_layout.setSpacing(8)
+        toolbar_layout.setContentsMargins(4, 0, 4, 0)
+        toolbar_layout.setSpacing(6)
 
-        self.lbl_spliter_status = QLabel("분석 전 · 계산기는 아래에서 바로 사용할 수 있습니다.")
+        self.lbl_spliter_status = QLabel("예상정답률 · 분석 전")
         self.lbl_spliter_status.setProperty("role", "muted")
-        self.lbl_spliter_status.setWordWrap(True)
         toolbar_layout.addWidget(self.lbl_spliter_status, 1)
 
-        btn_send = QPushButton("분석자료 보내기")
-        btn_send.setProperty("role", "primary")
-        btn_send.clicked.connect(self.send_spliter_evidence_to_web)
-        toolbar_layout.addWidget(btn_send)
+        data_menu = QMenu(self.spliter_toolbar)
+        data_menu.addAction("분석자료 보내기", self.send_spliter_evidence_to_web)
+        data_menu.addAction("시험지에서 문항 가져오기", self.import_exam_structure)
+        data_menu.addAction("문항 구성안", self.suggest_expected_rate_blueprint)
+        data_menu.addAction("근거 엑셀", self.export_spliter_evidence)
+        data_menu.addAction("예측-실측 비교", self.show_calibration_report)
+        data_menu.addAction("가명 ↔ 실명 확인", self.show_pseudonym_mapping)
+        data_menu.addSeparator()
+        data_menu.addAction("계산기 새로고침", lambda: self._load_spliter_web(force_recreate=True))
+        btn_data = QPushButton("자료")
+        btn_data.setToolTip("분석자료 보내기 · 문항 구성안 · 근거 엑셀")
+        btn_data.setMenu(data_menu)
+        toolbar_layout.addWidget(btn_data)
         btn_neis = QPushButton("NEIS 입력표")
         btn_neis.setToolTip(
             "문항별 목표 성취수준을 교사가 수정한 뒤 5% 단위 NEIS 입력표를 만들거나 "
@@ -2320,26 +2597,6 @@ class MainWindow(QMainWindow):
         )
         btn_neis.clicked.connect(self.open_neis_expected_rate_dialog)
         toolbar_layout.addWidget(btn_neis)
-        btn_import_paper = QPushButton("시험지 반영")
-        btn_import_paper.setToolTip(
-            "시험지 HWPX/PDF/자료를 읽어 문항 초안을 만들고 예상정답률 계산기에 바로 반영합니다. "
-            "AI 없이 로컬 규칙으로 먼저 처리하며, AI 문항 검토 탭에서 보강할 수 있습니다."
-        )
-        btn_import_paper.clicked.connect(self.import_exam_paper_to_spliter)
-        toolbar_layout.addWidget(btn_import_paper)
-        btn_blueprint = QPushButton("문항 구성안")
-        btn_blueprint.setToolTip(
-            "문항 수를 입력하면 분석자료의 난이도·정답률·배점 분포를 참고해 "
-            "성취수준 목표와 배점 초안을 예상정답률 계산기에 제안합니다."
-        )
-        btn_blueprint.clicked.connect(self.suggest_expected_rate_blueprint)
-        toolbar_layout.addWidget(btn_blueprint)
-        btn_export = QPushButton("근거 엑셀")
-        btn_export.clicked.connect(self.export_spliter_evidence)
-        toolbar_layout.addWidget(btn_export)
-        btn_reload = QPushButton("새로고침")
-        btn_reload.clicked.connect(lambda: self._load_spliter_web(force_recreate=True))
-        toolbar_layout.addWidget(btn_reload)
         layout.addWidget(self.spliter_toolbar, 0)
 
         if QWebEngineView is None:
@@ -2366,13 +2623,65 @@ class MainWindow(QMainWindow):
             self._spliter_load_signal_connected = False
         if QWebEnginePage is not None:
             self.spliter_view.setPage(QWebEnginePage(self.spliter_view))
+        self._connect_spliter_downloads()
         self._install_spliter_web_bridge()
         self.spliter_view.loadFinished.connect(self._on_spliter_loaded)
         self._spliter_load_signal_connected = True
 
+    def _connect_spliter_downloads(self):
+        """계산기의 작업 저장·CSV 내보내기는 브라우저식 다운로드라, 받아 주지 않으면 Qt가 조용히 취소한다."""
+        profile = self.spliter_view.page().profile()
+        if profile.property("goeduDownloadsConnected"):
+            return
+        profile.downloadRequested.connect(self._on_spliter_download_requested)
+        profile.setProperty("goeduDownloadsConnected", True)
+
+    def _on_spliter_download_requested(self, request):
+        if self.spliter_view is None or request.page() is not self.spliter_view.page():
+            request.cancel()
+            return
+        name = re.sub(r'[\\/:*?"<>|]+', "_", request.downloadFileName() or "").strip() or "goedu-split-download"
+        suffix = Path(name).suffix.lower()
+        file_filter = {".json": "작업 파일 (*.json)", ".csv": "CSV (*.csv)"}.get(suffix, "모든 파일 (*.*)")
+        path, _ = QFileDialog.getSaveFileName(self, "계산기 파일 저장", str(Path.home() / "Desktop" / name), file_filter)
+        if not path:
+            request.cancel()
+            return
+        target = Path(path)
+        if suffix and not target.suffix:
+            target = target.with_suffix(suffix)
+        request.setDownloadDirectory(str(target.parent))
+        request.setDownloadFileName(target.name)
+        request.isFinishedChanged.connect(lambda: self._on_spliter_download_finished(request, csv_file=suffix == ".csv"))
+        request.accept()
+
+    def _on_spliter_download_finished(self, request, csv_file: bool | None = None):
+        if not request.isFinished():
+            return
+        target = Path(request.downloadDirectory()) / request.downloadFileName()
+        if request.state() != QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+            QMessageBox.warning(self, "계산기 파일 저장", f"저장하지 못했습니다.\n{target}\n{request.interruptReasonString()}")
+            return
+        if csv_file if csv_file is not None else target.suffix.lower() == ".csv":
+            try:
+                with open(target, encoding="utf-8", newline="") as f:
+                    text = f.read()
+                if not text.startswith("\ufeff"):
+                    text = "\ufeff" + text  # 한글 Excel이 UTF-8로 열도록
+                temp = target.with_name(target.name + ".goedu-tmp")
+                with open(temp, "w", encoding="utf-8", newline="") as f:
+                    f.write(sanitize_csv_text(text))
+                os.replace(temp, target)
+            except (OSError, UnicodeError, csv.Error) as exc:
+                QMessageBox.warning(self, "계산기 파일 저장", f"저장한 CSV를 점검하지 못했습니다.\n{target}\n{exc}")
+                return
+        self.statusBar().showMessage(f"계산기 파일을 저장했습니다 · {target}", 8000)
+
     def _on_main_tab_changed(self, _index: int):
         if not hasattr(self, "tabs") or not hasattr(self, "tab_spliter"):
             return
+        self._update_responsive_sidebar()
+        QTimer.singleShot(0, self._apply_responsive_tab_labels)
         if hasattr(self, "tab_ai_review") and self.tabs.currentWidget() is self.tab_ai_review:
             self._schedule_ai_ollama_mlx_help_popup()
         if self.tabs.currentWidget() is self.tab_spliter:
@@ -2470,108 +2779,14 @@ class MainWindow(QMainWindow):
   }}
 
   function installCompactStyle() {{
+    document.body.classList.add('goedu-desktop');
+    if (document.getElementById('goedu-desktop-style')) return;
     document.getElementById('goedu-priority-ui-style')?.remove();
-    const style = document.createElement('style');
-    style.id = 'goedu-priority-ui-style';
-    style.textContent = `
-      html, body, #root {{ height:100% !important; overflow:hidden !important; }}
-      .app-shell {{ padding:10px !important; }}
-      .app-shell {{ height:100vh !important; min-height:0 !important; overflow:hidden !important; display:flex !important; flex-direction:column !important; }}
-      .sticky-head {{ margin:-10px -10px 6px !important; padding:7px 10px !important; }}
-      .sticky-head {{ flex:0 0 auto !important; position:relative !important; top:auto !important; z-index:30 !important; }}
-      .topbar {{ align-items:center !important; gap:6px !important; flex-wrap:wrap !important; margin:0 auto 6px !important; }}
-      .top-title {{ flex:1 1 240px !important; min-width:200px !important; }}
-      .topbar h1 {{ font-size:19px !important; line-height:1.1 !important; margin:0 !important; letter-spacing:0 !important; }}
-      .topbar .eyebrow {{ margin:0 0 2px !important; font-size:11px !important; }}
-      .topbar .muted, .top-title span {{ font-size:11px !important; }}
-      .top-actions {{ flex:1 1 420px !important; justify-content:flex-end !important; gap:6px !important; }}
-      .top-actions button, .icon-button, .zoom-chip {{ flex:0 0 auto !important; min-width:34px !important; min-height:32px !important; border-radius:7px !important; white-space:nowrap !important; overflow:hidden !important; text-overflow:clip !important; }}
-      .summary-grid {{ display:none !important; }}
-      .workspace {{ display:flex !important; flex:1 1 auto !important; flex-direction:column !important; gap:8px !important; min-height:0 !important; overflow:hidden !important; }}
-      .splitter {{ display:none !important; }}
-      .table-panel {{ order:1 !important; display:flex !important; flex:1 1 auto !important; flex-direction:column !important; height:100% !important; min-height:0 !important; overflow:hidden !important; border-color:var(--accent) !important; }}
-      .table-toolbar {{ position:relative !important; top:auto !important; flex:0 0 auto !important; z-index:12 !important; background:var(--panel) !important; align-items:center !important; gap:6px 10px !important; flex-wrap:wrap !important; padding:7px 9px !important; border-bottom:1px solid var(--line) !important; }}
-      .table-toolbar > div:first-child {{ flex:1 1 280px !important; min-width:220px !important; }}
-      .table-toolbar h2 {{ font-size:16px !important; line-height:1.15 !important; margin:0 0 2px !important; letter-spacing:0 !important; }}
-      .table-toolbar p {{ max-width:680px !important; margin:0 !important; font-size:11px !important; line-height:1.25 !important; }}
-      .table-controls {{ flex:2 1 560px !important; justify-content:flex-end !important; align-items:center !important; flex-wrap:wrap !important; gap:5px !important; min-width:360px !important; }}
-      .table-controls button, .table-controls select, .table-controls label {{ flex:0 0 auto !important; font-size:12px !important; min-height:30px !important; white-space:nowrap !important; overflow:hidden !important; text-overflow:clip !important; }}
-      .goedu-main-actions {{ display:inline-flex !important; flex-wrap:wrap !important; gap:6px !important; align-items:center !important; }}
-      .goedu-main-action {{ flex:0 0 auto !important; min-height:30px !important; padding:0 9px !important; border-radius:7px !important; border:1px solid var(--line) !important; background:var(--panel) !important; color:var(--ink) !important; font-weight:800 !important; cursor:pointer !important; white-space:nowrap !important; overflow:hidden !important; text-overflow:clip !important; }}
-      .goedu-main-action.primary {{ background:var(--accent) !important; border-color:var(--accent) !important; color:#fff !important; }}
-      .goedu-main-action.active {{ outline:2px solid color-mix(in srgb, var(--accent), transparent 45%) !important; }}
-      body.goedu-hide-web-head .sticky-head {{ display:none !important; }}
-      body.goedu-hide-summary .table-toolbar > div:first-child {{ display:none !important; }}
-      body.goedu-hide-summary .table-toolbar {{ padding:5px 8px !important; }}
-      .goedu-score-strip {{ display:flex !important; flex:0 0 auto !important; flex-wrap:wrap !important; align-items:center !important; gap:8px !important; margin:0 0 5px !important; padding:9px 11px !important; border:2px solid color-mix(in srgb, var(--accent), transparent 38%) !important; border-radius:8px !important; background:linear-gradient(180deg, color-mix(in srgb, var(--accent), transparent 86%), color-mix(in srgb, var(--accent), transparent 94%)) !important; box-shadow:inset 4px 0 0 var(--accent) !important; font-size:14px !important; }}
-      .goedu-score-title {{ color:var(--ink) !important; margin-right:4px !important; font-size:15px !important; font-weight:950 !important; letter-spacing:0 !important; }}
-      .goedu-score-source {{ display:inline-flex !important; align-items:center !important; min-height:24px !important; padding:2px 7px !important; border-radius:999px !important; background:color-mix(in srgb, var(--accent), transparent 82%) !important; color:var(--accent) !important; font-size:11px !important; font-weight:950 !important; white-space:nowrap !important; }}
-      .goedu-score-pill {{ display:inline-flex !important; align-items:baseline !important; gap:5px !important; border:1px solid color-mix(in srgb, var(--accent), transparent 50%) !important; border-radius:999px !important; padding:5px 10px !important; background:var(--panel) !important; color:var(--ink) !important; font-size:13px !important; font-weight:850 !important; white-space:nowrap !important; }}
-      .goedu-score-pill span {{ color:var(--muted) !important; font-size:11px !important; font-weight:800 !important; }}
-      .goedu-score-pill strong {{ color:var(--ink) !important; font-size:17px !important; line-height:1 !important; font-weight:950 !important; }}
-      .goedu-score-pill em {{ color:var(--muted) !important; font-style:normal !important; font-size:11px !important; font-weight:800 !important; }}
-      .goedu-score-note {{ flex:1 1 260px !important; min-width:220px !important; color:var(--muted) !important; font-size:11px !important; line-height:1.25 !important; font-weight:750 !important; }}
-      .goedu-preset-strip {{ display:flex !important; flex:0 0 auto !important; flex-wrap:wrap !important; align-items:center !important; gap:4px !important; margin:0 0 5px !important; padding:5px 7px !important; border:1px solid var(--line) !important; border-radius:7px !important; background:var(--row) !important; font-size:11px !important; }}
-      .goedu-preset-strip b {{ color:var(--ink) !important; margin-right:3px !important; }}
-      .goedu-preset-strip button {{ flex:0 0 auto !important; min-height:26px !important; padding:0 8px !important; white-space:nowrap !important; overflow:hidden !important; text-overflow:clip !important; }}
-      .goedu-preset-pill {{ color:var(--muted) !important; border:1px solid var(--line) !important; border-radius:999px !important; padding:2px 6px !important; background:var(--panel) !important; font-size:10px !important; white-space:nowrap !important; }}
-      .item-table-wrap {{ flex:1 1 auto !important; height:auto !important; min-height:0 !important; overflow:auto !important; overscroll-behavior:contain !important; }}
-      .item-table {{ width:100% !important; min-width:980px !important; table-layout:fixed !important; font-size:12px !important; }}
-      .item-table th, .item-table td {{ white-space:nowrap !important; padding:5px 6px !important; }}
-      .item-table thead th {{ position:sticky !important; top:0 !important; z-index:18 !important; box-shadow:0 1px 0 var(--line) !important; }}
-      .item-table input, .item-table select, .rate-cell {{ font-size:12px !important; min-height:30px !important; }}
-      .item-table .select-col {{ width:40px !important; min-width:40px !important; }}
-      .item-table .number-input, .item-table .points-input {{ width:60px !important; min-width:60px !important; }}
-      .item-table select {{ width:76px !important; min-width:76px !important; padding-left:6px !important; padding-right:18px !important; }}
-      .sample-pill {{ min-width:58px !important; padding:6px 8px !important; }}
-      .rate-cell {{ min-width:58px !important; padding:4px 5px !important; }}
-      .rate-cell b {{ font-size:13px !important; }}
-      .item-table th:nth-child(13), .item-table td:nth-child(13),
-      .item-table th:nth-child(14), .item-table td:nth-child(14) {{ display:none !important; }}
-      .side-panel, .detail-panel {{ order:2 !important; display:none !important; max-height:42vh !important; overflow:auto !important; }}
-      body.goedu-show-left .side-panel, body.goedu-show-right .detail-panel {{ display:block !important; }}
-      body.goedu-show-left .table-panel, body.goedu-show-right .table-panel {{ flex:0 0 56vh !important; min-height:0 !important; }}
-      .goedu-side-rail {{ display:none !important; }}
-      @media (max-width: 1180px) {{
-        .app-shell {{ padding:8px !important; }}
-        .sticky-head {{ margin:-8px -8px 6px !important; padding:7px 8px !important; }}
-        .topbar h1 {{ font-size:18px !important; }}
-        .top-actions {{ justify-content:flex-start !important; }}
-        .table-controls {{ min-width:0 !important; justify-content:flex-start !important; }}
-        .table-panel {{ min-height:0 !important; }}
-        .item-table {{ width:100% !important; min-width:900px !important; table-layout:fixed !important; }}
-        .item-table th:nth-child(4), .item-table td:nth-child(4),
-        .item-table th:nth-child(7), .item-table td:nth-child(7) {{ display:none !important; }}
-      }}
-      @media (max-width: 860px) {{
-        .topbar h1 {{ font-size:17px !important; }}
-        .top-actions {{ flex-basis:100% !important; }}
-        .table-toolbar {{ padding:6px 7px !important; }}
-        .table-toolbar h2 {{ font-size:15px !important; }}
-        .table-toolbar p {{ display:none !important; }}
-        .table-controls {{ justify-content:flex-start !important; }}
-        .goedu-preset-strip .goedu-preset-pill {{ display:none !important; }}
-        .goedu-score-strip {{ padding:6px 8px !important; gap:5px !important; border-width:1px !important; }}
-        .goedu-score-title {{ font-size:13px !important; margin-right:2px !important; }}
-        .goedu-score-source {{ min-height:22px !important; padding:2px 6px !important; }}
-        .goedu-score-pill {{ padding:4px 7px !important; }}
-        .goedu-score-pill strong {{ font-size:15px !important; }}
-        .goedu-score-note {{ flex-basis:100% !important; min-width:0 !important; }}
-        .item-table th, .item-table td {{ padding:4px !important; }}
-        .item-table .number-input, .item-table .points-input {{ width:52px !important; min-width:52px !important; }}
-        .item-table select {{ width:68px !important; min-width:68px !important; }}
-        .sample-pill {{ min-width:50px !important; padding:5px 6px !important; }}
-        .rate-cell {{ min-width:50px !important; }}
-      }}
-    `;
+    const style = document.createElement('link');
+    style.id = 'goedu-desktop-style';
+    style.rel = 'stylesheet';
+    style.href = new URL('desktop-layout.css', document.baseURI).href;
     document.head.appendChild(style);
-  }}
-
-  function formatPresets() {{
-    return Object.entries(presets).map(([target, row]) => {{
-      const values = ['A','B','C','D','E'].map(level => `${{level}}${{row[level] ?? ''}}`).join('/');
-      return `<span class="goedu-preset-pill"><b>목표 ${{target}}</b>${{values}}</span>`;
-    }}).join('');
   }}
 
   function getCutScoreSource() {{
@@ -2595,69 +2810,74 @@ class MainWindow(QMainWindow):
     return null;
   }}
 
-  function numberFromText(text) {{
-    const match = String(text || '').replace(',', '.').match(/-?\\d+(?:\\.\\d+)?/);
-    return match ? Number(match[0]) : NaN;
-  }}
-
   function getLiveTableCuts() {{
-    const rows = Array.from(document.querySelectorAll('.item-table tbody tr'));
-    if (!rows.length) return null;
-    const totals = {{ A: 0, B: 0, C: 0, D: 0, E: 0 }};
-    let totalPoints = 0;
-    let itemCount = 0;
-    rows.forEach((row) => {{
-      const cells = row.querySelectorAll('td');
-      const points = Number(cells[2]?.querySelector('input')?.value ?? cells[2]?.textContent ?? 0);
-      if (!Number.isFinite(points) || points <= 0) return;
-      totalPoints += points;
-      itemCount += 1;
-      ['A', 'B', 'C', 'D', 'E'].forEach((level, index) => {{
-        const cell = cells[7 + index];
-        const pctText = cell?.querySelector('.rate-cell span')?.textContent || cell?.textContent || '';
-        const pct = numberFromText(pctText);
-        if (Number.isFinite(pct)) totals[level] += points * pct / 100;
-      }});
-    }});
-    if (totalPoints <= 0) return null;
-    const cuts = {{}};
-    ['A', 'B', 'C', 'D', 'E'].forEach((level) => {{
-      cuts[level] = totals[level] / totalPoints * 100;
-    }});
-    return {{
-      cuts,
-      label: `계산 · 전체 ${{itemCount}}문항 ${{formatScore(totalPoints)}}점`,
-      note: '선택 체크와 무관하게 표 전체 문항의 배점 × A~D 예상정답률로 계산합니다.'
-    }};
+    const project = window.__GOEDUSPLIT_GET_PROJECT__?.();
+    if (!project || !window.GoeduExpectedRates) return null;
+    if (!project.items?.length) return {{ error: '문항 없음 · 분할점수 미산출' }};
+    try {{
+      // Keep showing cut scores while a teacher is part way through changing an item: clicking a count
+      // cycles from 0, which briefly puts A below B and used to replace every score with an error.
+      const summary = window.GoeduExpectedRates.summarize(project, {{ allowInversions: true }});
+      return {{ cuts: summary.scaled_cuts, summary, inversions: summary.inversions || [],
+        label: `검토안 평균 · 전체 ${{summary.item_count}}문항 · 총점 ${{formatScore(summary.total_points)}}점` }};
+    }} catch (error) {{
+      return {{ error: error.message }};
+    }}
   }}
 
   function formatScore(value) {{
     const number = Number(value);
     if (!Number.isFinite(number)) return '';
-    if (Math.abs(number - Math.round(number)) < 0.01) return String(Math.round(number));
-    return number.toFixed(1);
+    return number.toFixed(2).replace(/\\.?0+$/, '');
   }}
 
   function formatCutScores() {{
     const source = getCutScoreSource();
+    const escape = value => String(value).replace(/[&<>"']/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[ch]));
+    if (source?.error) return `<span class="goedu-score-warning" role="status">분할점수를 계산하지 못했습니다 · ${{escape(source.error)}}</span>`;
     if (!source?.cuts) return '<span class="goedu-score-pill"><span>기본</span><strong>90</strong><em>점</em></span>';
     const cuts = source.cuts;
-    const pairs = [['A/B', 'A'], ['B/C', 'B'], ['C/D', 'C'], ['D/E', 'D']];
+    const pairs = [['A/B', 'A'], ['B/C', 'B'], ['C/D', 'C'], ['D/E', 'D'], ['E/미도달', 'E']];
     const prefix = `<span class="goedu-score-source">${{source.label || '기준'}}</span>`;
     const pills = pairs.map(([label, key]) => {{
       const score = formatScore(cuts[key]);
       return `<span class="goedu-score-pill"><span>${{label}}</span><strong>${{score || '-'}}</strong><em>점</em></span>`;
     }}).join('');
-    const note = source.note ? `<span class="goedu-score-note">${{source.note}}</span>` : '';
-    return prefix + pills + note;
+    const summary = source.summary;
+    const note = summary ? `<span class="goedu-score-note">100점 환산 기준 · 원점수: ${{pairs.map(([label, key]) => label + ' ' + formatScore(summary.raw_cuts[key])).join(' / ')}}<br>NEIS 표 반올림 후(100점 환산): ${{pairs.map(([label, key]) => label + ' ' + formatScore(summary.neis_scaled_cuts[key])).join(' / ')}}</span>` : '';
+    const inversions = source.inversions || [];
+    const shown = inversions.slice(0, 3).map(item => `${{item.type}} ${{item.number}}번(${{item.pairs.map(([upper, lower]) => upper + '<' + lower).join(', ')}})`);
+    const warning = inversions.length
+      ? `<span class="goedu-score-warning" role="status">⚠ 위 수준보다 정답률이 높은 칸: ${{escape(shown.join(', '))}}${{inversions.length > 3 ? ` 외 ${{inversions.length - 3}}문항` : ''}} · NEIS 표를 만들기 전에 고치세요</span>`
+      : '';
+    return prefix + pills + warning + note;
+  }}
+
+  // React keeps references to its text nodes. Replacing textContent swaps those nodes out, and React
+  // then fails with "removeChild ... not a child" when it later updates or unmounts the element
+  // (e.g. loading a saved work file while analysis evidence is shown). Change nodeValue instead.
+  function setTextKeepingNodes(el, text) {{
+    if (el.children.length) return;
+    const nodes = [...el.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE);
+    if (!nodes.length) return;
+    if (nodes.map((node) => node.nodeValue).join('') === text) return;
+    nodes[0].nodeValue = text;
+    nodes.slice(1).forEach((node) => {{ node.nodeValue = ''; }});
+  }}
+
+  function replaceInTextNodes(el, from, to) {{
+    const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {{
+      if (node.nodeValue.includes(from)) node.nodeValue = node.nodeValue.replace(from, to);
+    }}
   }}
 
   function polishText(root) {{
     (root || document).querySelectorAll('.panel-title').forEach((el) => {{
       const text = (el.textContent || '').trim();
-      if (text === '교사 입력') el.textContent = '검토안';
-      if (text.includes('예상정답 판단')) el.textContent = text.replace('예상정답 판단', 'A~E 수준별 조정');
-      if (text === '교사별 A/B') el.textContent = '검토안별 A/B';
+      if (text === '교사 입력') setTextKeepingNodes(el, '검토안');
+      if (text.includes('예상정답 판단')) replaceInTextNodes(el, '예상정답 판단', 'A~E 수준별 조정');
+      if (text === '교사별 A/B') setTextKeepingNodes(el, '검토안별 A/B');
     }});
     (root || document).querySelectorAll('label.field-label').forEach((el) => {{
       if ((el.firstChild && el.firstChild.nodeType === Node.TEXT_NODE) && el.firstChild.nodeValue.includes('선택 교사명')) {{
@@ -2665,14 +2885,14 @@ class MainWindow(QMainWindow):
       }}
     }});
     (root || document).querySelectorAll('button').forEach((el) => {{
-      if (el.textContent === '교사 추가') el.textContent = '검토안 추가';
+      if (el.textContent === '교사 추가') setTextKeepingNodes(el, '검토안 추가');
     }});
     (root || document).querySelectorAll('p').forEach((el) => {{
       if ((el.textContent || '').includes('입력값을 편집 중입니다.')) {{
-        el.textContent = el.textContent.replace('입력값을 편집 중입니다.', '검토안을 편집 중입니다.');
+        replaceInTextNodes(el, '입력값을 편집 중입니다.', '검토안을 편집 중입니다.');
       }}
       if ((el.textContent || '').includes('교사들이 입력한 예상정답률')) {{
-        el.textContent = '검토안별 예상정답률의 평균과 표준편차입니다. 표준편차가 클수록 재논의가 필요합니다.';
+        setTextKeepingNodes(el, '검토안별 예상정답률의 평균과 표준편차입니다. 표준편차가 클수록 재논의가 필요합니다.');
       }}
     }});
   }}
@@ -2688,25 +2908,23 @@ class MainWindow(QMainWindow):
       scoreStrip.className = 'goedu-score-strip';
       panel.insertBefore(scoreStrip, wrap);
     }}
-    const scoreHtml = `<b class="goedu-score-title">전체 예상 분할점수</b>${{formatCutScores()}}`;
+    const scoreHtml = `<b class="goedu-score-title">예상 분할점수 · 100점 환산</b>${{formatCutScores()}}<button type="button" data-score-details aria-controls="goedu-score-source goedu-score-note">점수 비교</button>`;
     if (scoreStrip.dataset.html !== scoreHtml) {{
       scoreStrip.innerHTML = scoreHtml;
       scoreStrip.dataset.html = scoreHtml;
     }}
-    let strip = document.getElementById('goedu-preset-strip');
-    if (!strip) {{
-      strip = document.createElement('div');
-      strip.id = 'goedu-preset-strip';
-      strip.className = 'goedu-preset-strip';
-      panel.insertBefore(strip, wrap);
-    }}
-    const html = `<b>{TARGET_RATE_PRESET_TITLE}</b>${{formatPresets()}}<button type="button" data-open-presets>설정</button>`;
-    if (strip.dataset.html !== html) {{
-      strip.innerHTML = html;
-      strip.dataset.html = html;
-    }}
-    const button = strip.querySelector('[data-open-presets]');
-    if (button) button.onclick = () => callBridge('openTargetRatePresets');
+    const source = scoreStrip.querySelector('.goedu-score-source');
+    const note = scoreStrip.querySelector('.goedu-score-note');
+    if (source) source.id = 'goedu-score-source';
+    if (note) note.id = 'goedu-score-note';
+    const button = scoreStrip.querySelector('[data-score-details]');
+    const syncDetails = () => button.setAttribute('aria-expanded', String(scoreStrip.classList.contains('goedu-details-open')));
+    button.hidden = !source && !note;
+    button.onclick = () => {{
+      scoreStrip.classList.toggle('goedu-details-open');
+      syncDetails();
+    }};
+    syncDetails();
   }}
 
   function installMainActions() {{
@@ -2715,59 +2933,149 @@ class MainWindow(QMainWindow):
     const group = document.createElement('span');
     group.dataset.goeduMainActions = '1';
     group.className = 'goedu-main-actions';
-    group.innerHTML = `
-      <button type="button" class="goedu-main-action" data-proxy-load>작업 불러오기</button>
-      <button type="button" class="goedu-main-action" data-proxy-save>작업 저장</button>
-      <button type="button" class="goedu-main-action primary" data-proxy-presets>목표 설정</button>
-      <button type="button" class="goedu-main-action" data-toggle-head>제목줄 숨기기</button>
-      <button type="button" class="goedu-main-action" data-toggle-summary>요약 숨기기</button>
-      <button type="button" class="goedu-main-action" data-toggle-left>검토안·근거</button>
-      <button type="button" class="goedu-main-action" data-toggle-right>선택 문항</button>
-    `;
+    // A short word next to each icon: the icons alone (arrows, a disk) did not say load / export / save.
+    for (const [title, label, word] of [['불러오기', '작업 불러오기', '불러오기'], ['CSV 내보내기', 'CSV 내보내기', 'CSV'], ['작업 저장', '작업 저장', '저장']]) {{
+      const original = document.querySelector('.top-actions button[title="' + title + '"]');
+      if (!original) continue;
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'goedu-file-action';
+      button.title = label;
+      button.setAttribute('aria-label', label);
+      const icon = original.querySelector('svg');
+      if (icon) button.appendChild(icon.cloneNode(true));
+      const text = document.createElement('span');
+      text.textContent = word;
+      button.appendChild(text);
+      button.onclick = () => document.querySelector('.top-actions button[title="' + title + '"]')?.click();
+      group.appendChild(button);
+    }}
+    const presetsButton = document.createElement('button');
+    presetsButton.type = 'button';
+    presetsButton.textContent = '목표 설정';
+    presetsButton.onclick = () => callBridge('openTargetRatePresets');
+    group.appendChild(presetsButton);
+    const views = document.createElement('span');
+    views.className = 'goedu-view-tabs';
+    views.setAttribute('role', 'tablist');
+    views.setAttribute('aria-label', '예상정답률 보기');
+    for (const [view, label] of [['table', '문항표'], ['right', '선택 문항'], ['left', '검토안·근거']]) {{
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.dataset.goeduView = view;
+      button.id = 'goedu-view-' + view;
+      button.textContent = label;
+      button.setAttribute('role', 'tab');
+      button.setAttribute('aria-controls', 'goedu-panel-' + view);
+      button.onclick = () => setView(view);
+      views.appendChild(button);
+    }}
+    group.appendChild(views);
+    const judge = document.createElement('span');
+    judge.className = 'goedu-current-judge';
+    judge.dataset.currentJudge = '1';
+    group.appendChild(judge);
+    const item = document.createElement('span');
+    item.className = 'goedu-current-item';
+    item.dataset.currentItem = '1';
+    group.appendChild(item);
     controls.insertBefore(group, controls.firstChild);
-    group.querySelector('[data-proxy-load]').onclick = () => document.querySelector('button[title="불러오기"]')?.click();
-    group.querySelector('[data-proxy-save]').onclick = () => document.querySelector('button[title="작업 저장"]')?.click();
-    group.querySelector('[data-proxy-presets]').onclick = () => callBridge('openTargetRatePresets');
-    const headButton = group.querySelector('[data-toggle-head]');
-    const summaryButton = group.querySelector('[data-toggle-summary]');
-    const leftButton = group.querySelector('[data-toggle-left]');
-    const rightButton = group.querySelector('[data-toggle-right]');
-    try {{
-      if (localStorage.getItem('goedu-hide-web-head') === '1') document.body.classList.add('goedu-hide-web-head');
-      if (localStorage.getItem('goedu-hide-summary') === '1') document.body.classList.add('goedu-hide-summary');
-    }} catch (error) {{}}
-    const savePref = (key, enabled) => {{
-      try {{ localStorage.setItem(key, enabled ? '1' : '0'); }} catch (error) {{}}
+    const setView = (view, focusPanel = true) => {{
+      if (view === 'right' && !document.querySelector('.detail-panel')) view = 'table';
+      window.__GOEDUSPLIT_DESKTOP_VIEW__ = view;
+      document.body.classList.toggle('goedu-show-left', view === 'left');
+      document.body.classList.toggle('goedu-show-right', view === 'right');
+      views.querySelectorAll('button').forEach(button => {{
+        const active = button.dataset.goeduView === view;
+        button.setAttribute('aria-selected', String(active));
+        button.tabIndex = active ? 0 : -1;
+      }});
+      if (focusPanel) document.getElementById('goedu-panel-' + view)?.focus({{preventScroll:true}});
     }};
-    const sync = () => {{
-      const headHidden = document.body.classList.contains('goedu-hide-web-head');
-      const summaryHidden = document.body.classList.contains('goedu-hide-summary');
-      headButton.textContent = headHidden ? '제목줄 보이기' : '제목줄 숨기기';
-      summaryButton.textContent = summaryHidden ? '요약 보이기' : '요약 숨기기';
-      headButton.classList.toggle('active', headHidden);
-      summaryButton.classList.toggle('active', summaryHidden);
-      leftButton.classList.toggle('active', document.body.classList.contains('goedu-show-left'));
-      rightButton.classList.toggle('active', document.body.classList.contains('goedu-show-right'));
-    }};
-    headButton.onclick = () => {{
-      document.body.classList.toggle('goedu-hide-web-head');
-      savePref('goedu-hide-web-head', document.body.classList.contains('goedu-hide-web-head'));
-      sync();
-    }};
-    summaryButton.onclick = () => {{
-      document.body.classList.toggle('goedu-hide-summary');
-      savePref('goedu-hide-summary', document.body.classList.contains('goedu-hide-summary'));
-      sync();
-    }};
-    leftButton.onclick = () => {{
-      document.body.classList.toggle('goedu-show-left');
-      sync();
-    }};
-    rightButton.onclick = () => {{
-      document.body.classList.toggle('goedu-show-right');
-      sync();
-    }};
-    sync();
+    views.addEventListener('keydown', event => {{
+      const buttons = [...views.querySelectorAll('button:not(:disabled)')];
+      const index = buttons.indexOf(document.activeElement);
+      const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
+      if (!offset || index < 0) return;
+      event.preventDefault();
+      const next = buttons[(index + offset + buttons.length) % buttons.length];
+      setView(next.dataset.goeduView, false);
+      next.focus();
+    }});
+    document.addEventListener('keydown', event => {{
+      const modalOpen = [...document.querySelectorAll('dialog[open], [aria-modal="true"]')]
+        .some(dialog => dialog.getClientRects().length && getComputedStyle(dialog).visibility !== 'hidden');
+      if (event.key !== 'Escape' || event.defaultPrevented || modalOpen) return;
+      if (window.__GOEDUSPLIT_DESKTOP_VIEW__ !== 'table') {{
+        setView('table', false);
+        views.querySelector('[data-goedu-view="table"]').focus();
+      }}
+    }});
+    window.__GOEDUSPLIT_SET_VIEW__ = setView;
+    setView(window.__GOEDUSPLIT_DESKTOP_VIEW__ || 'table', false);
+  }}
+
+  function updateViewContext() {{
+    for (const [view, selector] of [['table', '.item-table-wrap'], ['right', '.detail-panel'], ['left', '.side-panel']]) {{
+      const panel = document.querySelector(selector);
+      if (!panel) continue;
+      panel.id = 'goedu-panel-' + view;
+      panel.tabIndex = -1;
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', 'goedu-view-' + view);
+    }}
+    const rightButton = document.querySelector('[data-goedu-view="right"]');
+    if (rightButton) rightButton.disabled = !document.querySelector('.detail-panel');
+    if (rightButton?.disabled && window.__GOEDUSPLIT_DESKTOP_VIEW__ === 'right') window.__GOEDUSPLIT_SET_VIEW__?.('table');
+    const project = window.__GOEDUSPLIT_GET_PROJECT__?.();
+    const activeJudge = project?.judges?.find(judge => judge.id === project.activeJudgeId);
+    const label = document.querySelector('[data-current-judge]');
+    const activeNumber = document.querySelector('.item-table .active-selected .number-input')?.value;
+    const context = activeJudge?.name || '';
+    if (label && label.textContent !== context) {{
+      label.textContent = context;
+      label.title = context;
+    }}
+    const itemLabel = document.querySelector('[data-current-item]');
+    const itemText = activeNumber ? activeNumber + '번' : '';
+    if (itemLabel && itemLabel.textContent !== itemText) {{
+      itemLabel.textContent = itemText;
+      itemLabel.title = itemText;
+    }}
+    const previewNote = document.querySelector('.panel-block:has(.evidence-preview-list) .panel-note');
+    if (previewNote) {{
+      const count = document.querySelectorAll('.item-table tbody tr.selected').length;
+      const scope = itemText + ' 미리보기 · 선택 ' + count + '문항 반영';
+      setTextKeepingNodes(previewNote, scope);
+    }}
+    document.querySelectorAll('.level-editor').forEach((editor, index) => {{
+      const level = ['A', 'B', 'C', 'D', 'E'][index];
+      editor.querySelectorAll('input').forEach((input, field) => {{
+        input.setAttribute('aria-label', level + (field === 0 ? ' 수준 목표 정답률' : ' 수준 직접 정답률'));
+      }});
+      editor.querySelectorAll('.ox').forEach((button, student) => {{
+        button.setAttribute('aria-label', level + ' 수준 가상학생 ' + (student + 1) + ' 정답');
+        button.setAttribute('aria-pressed', String(button.classList.contains('on')));
+      }});
+    }});
+    // Cells whose rate comes from a direct % (analysis evidence) showed e.g. "3/3 · 99.0%", which read
+    // as an error; mark them so the percentage reads "직접 99.0%". Clicking a cell switches it to O/X.
+    document.querySelectorAll('.item-table .rate-cell').forEach(cell => {{
+      const parts = (cell.querySelector('b')?.textContent || '').split('/').map(part => Number(part.trim()));
+      const rate = parseFloat(cell.querySelector('span')?.textContent || '');
+      const direct = parts.length === 2 && Number.isFinite(parts[0]) && Number.isFinite(parts[1]) && Number.isFinite(rate)
+        && (parts[1] > 0 ? Math.abs(parts[0] / parts[1] * 100 - rate) > 0.05 : rate > 0);
+      if (direct) cell.dataset.goeduDirect = '1';
+      else delete cell.dataset.goeduDirect;
+    }});
+    document.querySelectorAll('.item-table tbody tr').forEach(row => {{
+      const number = row.querySelector('.number-input')?.value || '';
+      const labels = ['선택', '문항 번호', '배점', '유형', '난이도', '목표 성취수준'];
+      [...row.cells].forEach((cell, index) => {{
+        if (index < 1 || index > 5) return;
+        cell.querySelector('input, select')?.setAttribute('aria-label', number + '번 ' + labels[index]);
+      }});
+    }});
   }}
 
   function apply() {{
@@ -2779,6 +3087,7 @@ class MainWindow(QMainWindow):
     polishText(document);
     installPresetStrip();
     installMainActions();
+    updateViewContext();
   }}
   let attempts = 0;
   function applyWhenReady() {{
@@ -2801,19 +3110,19 @@ class MainWindow(QMainWindow):
       }}
     }});
     window.addEventListener('goedu-evidence-updated', () => setTimeout(apply, 0));
-    document.addEventListener('input', (event) => {{
-      if (event.target?.closest?.('.table-panel')) scheduleApply();
-    }}, true);
-    document.addEventListener('change', (event) => {{
-      if (event.target?.closest?.('.table-panel')) scheduleApply();
-    }}, true);
-    document.addEventListener('click', (event) => {{
-      if (event.target?.closest?.('.table-panel')) scheduleApply();
-    }}, true);
+    // O/X and direct % edits happen in the selected-item panel too, not only in the table, and a
+    // changed count arrives as a text-node mutation (no closest()); refresh the scores for all of them.
+    const editArea = '.table-panel, .detail-panel, .side-panel';
+    const inEditArea = (node) => (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.(editArea);
+    for (const type of ['input', 'change', 'click']) {{
+      document.addEventListener(type, (event) => {{
+        if (inEditArea(event.target)) scheduleApply();
+      }}, true);
+    }}
     const root = document.querySelector('#root');
     if (root) {{
       const observer = new MutationObserver((mutations) => {{
-        if (mutations.some((mutation) => mutation.target?.closest?.('.table-panel') || Array.from(mutation.addedNodes || []).some((node) => node.nodeType === 1 && node.closest?.('.table-panel')))) {{
+        if (mutations.some((mutation) => inEditArea(mutation.target) || Array.from(mutation.addedNodes || []).some(inEditArea))) {{
           scheduleApply();
         }}
       }});
@@ -2934,8 +3243,12 @@ class MainWindow(QMainWindow):
     def _flush_spliter_project_payload(self):
         if self.spliter_view is None or not self._spliter_loaded or self._spliter_pending_project_payload is None:
             return
-        payload = self._spliter_pending_project_payload
+        payload = dict(self._spliter_pending_project_payload)
         self._spliter_pending_project_payload = None
+        # Evidence accompanying an explicit design is reference data, not a new recommendation.
+        if self._spliter_pending_payload is not None:
+            payload["evidenceData"] = self._spliter_pending_payload
+            self._spliter_pending_payload = None
         data = json.dumps(payload, ensure_ascii=False)
         script = (
             f"window.__GOEDUSPLIT_PROJECT__ = {data};"
@@ -3222,16 +3535,13 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "lbl_spliter_status"):
             return
         if self.exam is None or self.overall is None:
-            self.lbl_spliter_status.setText("분석 전 · 계산기는 아래에서 바로 사용할 수 있습니다.")
+            self.lbl_spliter_status.setText("예상정답률 · 분석 전")
             return
         select_count = len(self.exam.select_items)
         serdap_count = len(self.exam.serdap_items)
         serdap_text = f" · 서답형 {serdap_count}문항" if serdap_count else ""
         self.lbl_spliter_status.setText(
-            f"<b>분석자료</b>: {self.exam.subject or '(과목 미상)'} · "
-            f"학생 {len(self.exam.students)}명 · 선택형 근거 문항 {select_count}개{serdap_text} · "
-            f"분할점수 A≥{self.exam.cut_scores['A']:.0f} B≥{self.exam.cut_scores['B']:.0f} "
-            f"C≥{self.exam.cut_scores['C']:.0f} D≥{self.exam.cut_scores['D']:.0f} E≥{self.exam.cut_scores['E']:.0f}"
+            f"예상정답률 · 분석 근거 선택형 {select_count}문항{serdap_text}"
         )
 
     # ---- Data 탭 -----------------------------------------------------
@@ -3244,7 +3554,9 @@ class MainWindow(QMainWindow):
         self.kpi_subject = self._kpi_card("과목", "-")
         self._kpis = [self.kpi_n, self.kpi_n_items, self.kpi_subject]
         self._relayout_kpis(cols=3)
-        layout.addLayout(self.kpi_grid)
+        kpi_box = QWidget()
+        kpi_box.setLayout(self.kpi_grid)
+        layout.addWidget(self._fold("data.summary", "요약", kpi_box))
 
         self.data_empty_state = QFrame()
         self.data_empty_state.setProperty("role", "card")
@@ -3266,6 +3578,17 @@ class MainWindow(QMainWindow):
         empty_buttons.addStretch(1)
         empty_layout.addLayout(empty_buttons)
         layout.addWidget(self.data_empty_state)
+
+        # Search, chart and table stay hidden until an analysis exists: empty chart boxes and disabled
+        # filters under the start guide looked like something was broken.
+        self.data_results = QWidget()
+        results_layout = QVBoxLayout(self.data_results)
+        results_layout.setContentsMargins(0, 0, 0, 0)
+        results_layout.setSpacing(layout.spacing())
+        self.data_results.setVisible(False)
+        layout.addWidget(self.data_results, 1)
+        layout.addStretch(0)
+        layout = results_layout
 
         # 학생 검색창 (이름·반/번호로 즉시 필터)
         search_box = QVBoxLayout()
@@ -3364,25 +3687,26 @@ class MainWindow(QMainWindow):
         self.lbl_normal_note.setProperty("role", "muted"); self.lbl_normal_note.setWordWrap(True)
         normal_layout.addWidget(self.lbl_normal_note)
         self.score_chart_tabs.addTab(normal_page, "정규분포·점검")
-        data_split.addWidget(self.score_chart_tabs)
+        data_split.addWidget(self._fold("data.chart", "점수 분포 그래프", self.score_chart_tabs))
 
         self.table_data = QTableWidget(0, 0)
         _setup_table(self.table_data, word_wrap=False, horizontal_scroll=True)
         self.table_data.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.table_data.setSortingEnabled(True)  # 헤더 클릭으로 정렬
-        data_split.addWidget(self.table_data)
+        data_split.addWidget(self._fold("data.table", "학생별 결과 표", self.table_data))
 
         data_split.setStretchFactor(0, 1); data_split.setStretchFactor(1, 2)
         data_split.setSizes([240, 380])
         layout.addWidget(data_split, 1)
 
         self.lbl_data_note = QLabel(
+            "▸ 문항 칸(문1, 문2 …): . = 정답, 숫자 = 고른 오답 번호, 빈칸 = 무응답 (NEIS 정오표 표기)\n"
             "▸ 표 머리글을 클릭하면 정렬됩니다 ▸ 학생 검색과 성취도/9등급/5등급 필터를 함께 사용할 수 있습니다 ▸ 그래프 위 마우스 휠로 확대/축소\n"
             "성취수준은 환산점수를 반올림한 원점수 기준, 9등급/5등급은 현재 분석 집단 안의 상대 석차 기준입니다. "
             "상담 모드(Ctrl+Shift+H)를 켜면 검색 학생 외 이름과 반/번호를 가립니다."
         )
         self.lbl_data_note.setProperty("role", "muted"); self.lbl_data_note.setWordWrap(True)
-        layout.addWidget(self.lbl_data_note)
+        layout.addWidget(self._fold("data.note", "표 읽는 법", self.lbl_data_note))
 
     # ---- 학생 포트폴리오 ----------------------------------------------
     def _init_tab_portfolio(self):
@@ -3444,6 +3768,9 @@ class MainWindow(QMainWindow):
         self.refresh_portfolio_tab()
 
     # ---- 모니터링 ------------------------------------------------------
+    def _fold(self, key: str, title: str, body: QWidget) -> FoldSection:
+        return FoldSection(title, body, settings=getattr(self, "settings", None), key=key)
+
     def _make_collapsible_panel(self, title: str, body: QWidget, *, opened: bool = True) -> QFrame:
         panel = QFrame()
         panel.setProperty("role", "card")
@@ -3499,7 +3826,9 @@ class MainWindow(QMainWindow):
         intro = QLabel(
             "현재 과목의 A 비율, 과목 평균, A/B 분할점수를 "
             "동일 학교유형·교과군의 전국 평균±표준편차 및 전년도 값과 비교합니다. "
-            "전국 기준값은 외부 모니터링 자료가 있을 때 입력하세요."
+            "위쪽 카드(현재 값)는 분석 결과에서 자동으로 들어옵니다. 아래 칸은 직접 넣는 값입니다: "
+            "전국 기준은 교육청 등에서 받은 성취평가 모니터링 자료에 있을 때만, 전년도 값은 작년 같은 과목 결과로 넣으세요. "
+            "모르는 칸은 '미입력'으로 두면 되고, 그 항목은 판정 대신 '기준 입력 필요'로 표시됩니다."
         )
         intro.setProperty("role", "muted")
         intro.setWordWrap(True)
@@ -3528,8 +3857,8 @@ class MainWindow(QMainWindow):
         input_row = QSplitter(Qt.Horizontal)
         national_body = QWidget()
         national_form = QFormLayout(national_body); national_form.setLabelAlignment(Qt.AlignRight)
-        self._add_monitor_spin(national_form, "ref_a_mean", "A 비율 평균", 0.0, suffix=" %")
-        self._add_monitor_spin(national_form, "ref_a_sd", "A 비율 표준편차", 0.0, suffix=" %p")
+        self._add_monitor_spin(national_form, "ref_a_mean", "A 비율 평균", 0.0, suffix=" %", tip="같은 학교유형·교과군 학교들의 A 비율 평균(모니터링 자료)")
+        self._add_monitor_spin(national_form, "ref_a_sd", "A 비율 표준편차", 0.0, suffix=" %p", tip="같은 자료의 A 비율 표준편차. 평균과 함께 있어야 Ⅰ/Ⅱ/Ⅲ 수준을 판정합니다")
         self._add_monitor_spin(national_form, "ref_mean_mean", "과목 평균", 0.0, suffix=" 점")
         self._add_monitor_spin(national_form, "ref_mean_sd", "과목 평균 표준편차", 0.0, suffix=" 점")
         self._add_monitor_spin(national_form, "ref_cut_mean", "A/B 분할점수 평균", 0.0, suffix=" 점")
@@ -3539,20 +3868,28 @@ class MainWindow(QMainWindow):
 
         history_body = QWidget()
         history_form = QFormLayout(history_body); history_form.setLabelAlignment(Qt.AlignRight)
-        self._add_monitor_spin(history_form, "prev_a_pct", "전년도 A 비율", 0.0, suffix=" %")
-        self._add_monitor_spin(history_form, "prev_mean", "전년도 과목 평균", 0.0, suffix=" 점")
-        self._add_monitor_spin(history_form, "prev_cut_a", "전년도 A/B 분할점수", 0.0, suffix=" 점")
+        self._add_monitor_spin(history_form, "prev_a_pct", "전년도 A 비율", 0.0, suffix=" %", tip="작년 같은 과목·같은 학기의 A 비율")
+        self._add_monitor_spin(history_form, "prev_mean", "전년도 과목 평균", 0.0, suffix=" 점", tip="작년 같은 과목·같은 학기의 과목 평균")
+        self._add_monitor_spin(history_form, "prev_cut_a", "전년도 A/B 분할점수", 0.0, suffix=" 점", tip="작년 같은 과목·같은 학기의 A/B 분할점수")
         self._add_monitor_spin(history_form, "th_a_delta", "A 비율 증가 기준", 10.0, suffix=" %p")
         self._add_monitor_spin(history_form, "th_mean_stable", "평균 큰 변동 아님", 5.0, suffix=" 점")
         self._add_monitor_spin(history_form, "th_cut_delta", "분할점수 감소 기준", 10.0, suffix=" 점")
         history_box = self._make_collapsible_panel("전년도·판정 기준", history_body)
         input_row.addWidget(history_box)
         input_row.setStretchFactor(0, 1); input_row.setStretchFactor(1, 1)
-        top_layout.addWidget(input_row, 1)
+        # Twelve input rows are taller than their share of the tab and squeezed the chart below to
+        # a line; let them scroll instead.
+        input_scroll = QScrollArea()
+        input_scroll.setWidgetResizable(True)
+        input_scroll.setFrameShape(QFrame.NoFrame)
+        input_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        input_scroll.setWidget(input_row)
+        top_layout.addWidget(input_scroll, 1)
 
         body = QSplitter(Qt.Vertical)
         self.canvas_monitor = CanvasHolder()
-        body.addWidget(self.canvas_monitor)
+        self.canvas_monitor.setMinimumHeight(self._px(170))
+        body.addWidget(self._fold("monitor.chart", "기준 비교 그래프", self.canvas_monitor))
 
         flow_note = QLabel(
             "점검 흐름: 1단계 A 비율 변화 확인 → 2단계 대상교·학생 특성 확인 → "
@@ -3569,11 +3906,11 @@ class MainWindow(QMainWindow):
         _setup_table(self.table_monitor, word_wrap=True, horizontal_scroll=True, row_height=42)
         self.table_monitor.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         table_layout.addWidget(self.table_monitor, 1)
-        body.addWidget(table_wrap)
+        body.addWidget(self._fold("monitor.table", "점검 표", table_wrap))
         body.setStretchFactor(0, 1); body.setStretchFactor(1, 2)
         body.setSizes([260, 360])
         monitor_split = QSplitter(Qt.Vertical)
-        monitor_split.addWidget(top_area)
+        monitor_split.addWidget(self._fold("monitor.inputs", "현재 값과 비교 기준 입력", top_area))
         monitor_split.addWidget(body)
         monitor_split.setStretchFactor(0, 0)
         monitor_split.setStretchFactor(1, 1)
@@ -3586,9 +3923,15 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("모니터링 탭을 새로고침했습니다.", 2500)
 
     def _add_monitor_spin(self, form: QFormLayout, key: str, label: str, value: float,
-                          *, suffix: str = ""):
+                          *, suffix: str = "", tip: str = ""):
         spin = StepperSpinBox(value=value, minimum=-100.0, maximum=200.0,
                               step=1.0, decimals=1, suffix=suffix)
+        if key.startswith(("ref_", "prev_")):
+            # 0 already means "not entered" in the checks below; show it as such instead of "0.0 %".
+            spin.spin.setMinimum(0.0)
+            spin.spin.setSpecialValueText("미입력")
+        if tip:
+            spin.setToolTip(tip)
         spin.valueChanged.connect(lambda *_: self._render_monitor_tab())
         self.monitor_spins[key] = spin
         form.addRow(label, spin)
@@ -3599,14 +3942,14 @@ class MainWindow(QMainWindow):
         return float(spin.value()) if spin is not None else 0.0
 
     def _monitor_z_status(self, value: float, ref: float, sd: float, *, low_is_risk: bool = False):
-        if sd <= 0:
+        if sd <= 0 or ref <= 0:  # 0 is shown as '미입력': a missing mean must not be compared as 0
             return "기준 입력 필요", "전국 평균과 표준편차를 입력하면 Ⅰ/Ⅱ/Ⅲ 수준을 자동 판정합니다.", 0
         z = (ref - value) / sd if low_is_risk else (value - ref) / sd
         if z >= 2:
-            return "Ⅲ 점검", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} {z:.2f}σ 벗어났습니다.", 3
+            return "Ⅲ 점검", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} 표준편차의 {z:.2f}배 벗어났습니다.", 3
         if z >= 1:
-            return "Ⅱ 주의", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} {z:.2f}σ 벗어났습니다.", 2
-        return "참고 범위", f"전국 평균±1σ 안쪽 또는 위험 방향이 아닙니다. z={z:.2f}", 1
+            return "Ⅱ 주의", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} 표준편차의 {z:.2f}배 벗어났습니다.", 2
+        return "참고 범위", f"전국 평균±1SD(표준편차) 안쪽 또는 위험 방향이 아닙니다. z={z:.2f}", 1
 
     def _monitor_rows_and_benchmarks(self):
         if self.exam is None or self.overall is None:
@@ -3629,7 +3972,7 @@ class MainWindow(QMainWindow):
         rows.append((
             "필수 1 · 성취수준 A 비율이 높음",
             f"{a_pct:.1f}%",
-            "전국 평균+1σ 이상: Ⅱ · +2σ 이상: Ⅲ",
+            "전국 평균+1SD 이상: Ⅱ · +2SD 이상: Ⅲ",
             status,
             f"{detail} A 비율만으로 단정하지 않고 평균·분할점수와 함께 봅니다.",
             sev,
@@ -3656,7 +3999,7 @@ class MainWindow(QMainWindow):
         rows.append((
             "특성 3 · 과목 평균이 높음",
             f"{mean:.1f}점",
-            "전국 평균+1σ 이상: 주의 · +2σ 이상: 점검",
+            "전국 평균+1SD 이상: 주의 · +2SD 이상: 점검",
             status,
             f"{detail} 평가도구가 쉬웠는지, 학생 특성이 높은지 함께 봅니다.",
             sev,
@@ -3669,7 +4012,7 @@ class MainWindow(QMainWindow):
         rows.append((
             "특성 4 · A/B 분할점수가 낮음",
             f"{cut_a:.1f}점",
-            "전국 평균-1σ 이하: 주의 · -2σ 이하: 점검",
+            "전국 평균-1SD 이하: 주의 · -2SD 이하: 점검",
             status,
             f"{detail} A 비율이 높은 원인이 낮은 분할점수인지 확인합니다.",
             sev,
@@ -3723,22 +4066,22 @@ class MainWindow(QMainWindow):
             {
                 "label": "A 비율",
                 "value": a_pct,
-                "ref": self._monitor_value("ref_a_mean") if self._monitor_value("ref_a_sd") > 0 else None,
-                "sd": self._monitor_value("ref_a_sd") if self._monitor_value("ref_a_sd") > 0 else None,
+                "ref": self._monitor_value("ref_a_mean") if self._monitor_value("ref_a_mean") > 0 and self._monitor_value("ref_a_sd") > 0 else None,
+                "sd": self._monitor_value("ref_a_sd") if self._monitor_value("ref_a_mean") > 0 and self._monitor_value("ref_a_sd") > 0 else None,
                 "color": "#ef4444",
             },
             {
                 "label": "과목 평균",
                 "value": mean,
-                "ref": self._monitor_value("ref_mean_mean") if self._monitor_value("ref_mean_sd") > 0 else None,
-                "sd": self._monitor_value("ref_mean_sd") if self._monitor_value("ref_mean_sd") > 0 else None,
+                "ref": self._monitor_value("ref_mean_mean") if self._monitor_value("ref_mean_mean") > 0 and self._monitor_value("ref_mean_sd") > 0 else None,
+                "sd": self._monitor_value("ref_mean_sd") if self._monitor_value("ref_mean_mean") > 0 and self._monitor_value("ref_mean_sd") > 0 else None,
                 "color": "#f59e0b",
             },
             {
                 "label": "A/B 분할점수",
                 "value": cut_a,
-                "ref": self._monitor_value("ref_cut_mean") if self._monitor_value("ref_cut_sd") > 0 else None,
-                "sd": self._monitor_value("ref_cut_sd") if self._monitor_value("ref_cut_sd") > 0 else None,
+                "ref": self._monitor_value("ref_cut_mean") if self._monitor_value("ref_cut_mean") > 0 and self._monitor_value("ref_cut_sd") > 0 else None,
+                "sd": self._monitor_value("ref_cut_sd") if self._monitor_value("ref_cut_mean") > 0 and self._monitor_value("ref_cut_sd") > 0 else None,
                 "color": "#2a7770",
             },
         ]
@@ -3820,17 +4163,17 @@ class MainWindow(QMainWindow):
         self.canvas_level_means = CanvasHolder()
         top_l.addWidget(self.canvas_level_stack, 1)
         top_l.addWidget(self.canvas_level_means, 1)
-        ov_split.addWidget(top_widget)
+        ov_split.addWidget(self._fold("overview.levels", "성취수준 비율·평균 그래프", top_widget))
 
         # 가운데: 성취수준 표
         self.table_level = QTableWidget(0, 5)
         self.table_level.setHorizontalHeaderLabels(["성취수준", "학생수", "비율(%)", "평균(원점수)", "표준편차"])
         _setup_table(self.table_level)
-        ov_split.addWidget(self.table_level)
+        ov_split.addWidget(self._fold("overview.table", "성취수준 표", self.table_level))
 
         # 아래: 학급별 평균
         self.canvas_class = CanvasHolder()
-        ov_split.addWidget(self.canvas_class)
+        ov_split.addWidget(self._fold("overview.classes", "학급별 평균 그래프", self.canvas_class))
 
         ov_split.setSizes([340, 200, 280])
         ov_split.setStretchFactor(0, 3); ov_split.setStretchFactor(1, 1); ov_split.setStretchFactor(2, 2)
@@ -3862,7 +4205,9 @@ class MainWindow(QMainWindow):
         }
         for i, card in enumerate(self.perform_cards.values()):
             grid.addWidget(card, 0, i)
-        layout.addLayout(grid)
+        perform_cards_box = QWidget()
+        perform_cards_box.setLayout(grid)
+        layout.addWidget(self._fold("perform.summary", "요약", perform_cards_box))
 
         split = QSplitter(Qt.Vertical)
 
@@ -3872,7 +4217,7 @@ class MainWindow(QMainWindow):
         self.canvas_perform_scatter = CanvasHolder()
         chart_layout.addWidget(self.canvas_perform_area, 1)
         chart_layout.addWidget(self.canvas_perform_scatter, 1)
-        split.addWidget(chart_row)
+        split.addWidget(self._fold("perform.charts", "영역별·지필-수행 그래프", chart_row))
 
         table_tabs = QTabWidget()
         self.perform_table_tabs = table_tabs
@@ -3960,7 +4305,7 @@ class MainWindow(QMainWindow):
         recalc_layout.addWidget(recalc_split, 1)
         table_tabs.addTab(recalc_page, "분할점수 재산정")
 
-        split.addWidget(table_tabs)
+        split.addWidget(self._fold("perform.tables", "수행평가 표", table_tabs))
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 2)
         split.setSizes([300, 430])
@@ -4158,11 +4503,20 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(self.tab_items)
         self.lbl_alpha = QLabel("지필평가 신뢰도 (Cronbach's alpha): -")
         f = self.lbl_alpha.font(); f.setPointSize(f.pointSize()+3); f.setBold(True); self.lbl_alpha.setFont(f)
+        self.lbl_alpha.setToolTip(
+            "신뢰도: 문항들이 같은 능력을 얼마나 일관되게 재는지(0~1).\n"
+            "0.9 이상 매우 우수 · 0.8 우수 · 0.7 양호 · 0.6 보통 · 그 아래 재검토 필요"
+        )
         layout.addWidget(self.lbl_alpha)
 
-        sub = QLabel("선다형 문항 분석 결과 (음영: 성취수준별 정답률 2/3 미만)")
+        sub = QLabel(
+            "선다형 문항 분석 결과 (음영: 그 성취수준 학생의 정답률이 2/3 미만) · "
+            "정답률 = 맞힌 학생 비율(높을수록 쉬움) · 변별도 = 점수가 높은 학생일수록 더 많이 맞혔는지(0.3 이상 양호, 0.2 미만 재검토) · "
+            "머리글에 마우스를 올리면 설명이 보입니다."
+        )
+        sub.setWordWrap(True)
         sub.setStyleSheet("color:#888;")
-        layout.addWidget(sub)
+        layout.addWidget(self._fold("items.terms", "용어 설명", sub))
 
         # 통합 문항분석 테이블 — 컬럼이 16개라 가로스크롤 허용
         headers = ["문항", "예상난이도", "정답률(%)", "변별도",
@@ -4170,6 +4524,17 @@ class MainWindow(QMainWindow):
                    "A", "B", "C", "D", "E", "미도달"]
         self.table_items = QTableWidget(0, len(headers))
         self.table_items.setHorizontalHeaderLabels(headers)
+        header_tips = {
+            1: "문항정보표에 적힌 예상 난이도(쉬움·보통·어려움)",
+            2: "전체 학생 중 맞힌 비율. 80% 이상 매우 쉬움 · 60~80 쉬움 · 40~60 보통 · 20~40 어려움 · 20% 미만 매우 어려움",
+            3: "변별도(점이연 상관, point-biserial): 점수가 높은 학생일수록 이 문항을 더 많이 맞혔는지.\n"
+               "0.4 이상 매우 양호 · 0.3 양호 · 0.2 보통 · 0.1 낮음 · 그 아래나 음수는 문항 재검토",
+            **{4 + i: f"{i + 1}번 답지를 고른 학생 비율(노란 칸 = 정답)" for i in range(5)},
+            9: "답하지 않은 학생 비율",
+            **{10 + i: f"{lv} 수준 학생의 정답률(2/3 미만이면 음영)" for i, lv in enumerate(["A", "B", "C", "D", "E", "미도달"])},
+        }
+        for column, tip in header_tips.items():
+            self.table_items.horizontalHeaderItem(column).setToolTip(tip)
         _setup_table(self.table_items, word_wrap=False, horizontal_scroll=True, row_height=30)
         self.table_items.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         # 정답률(idx 2), 변별도(idx 3) 컬럼에 막대 그리기
@@ -4191,17 +4556,18 @@ class MainWindow(QMainWindow):
         self._serdap_bar_delegate = ItemBarDelegate(self.table_serdap)
         self.table_serdap.setItemDelegateForColumn(5, self._serdap_bar_delegate)
         self.table_serdap.setItemDelegateForColumn(6, self._serdap_bar_delegate)
-        layout.addWidget(self.table_serdap)
+        sub2.setVisible(False)  # the fold header below carries this title
+        layout.addWidget(self._fold("items.serdap", "서답형 문항 분석 결과", self.table_serdap))
 
         # 표와 보조 차트 사이를 splitter로 감싸 비율 조절 가능
         body = QSplitter(Qt.Vertical)
-        body.addWidget(self.table_items)
+        body.addWidget(self._fold("items.table", "선다형 문항 표", self.table_items))
         chart_row = QWidget(); chr_l = QHBoxLayout(chart_row); chr_l.setContentsMargins(0,0,0,0)
         self.canvas_pvalue = CanvasHolder()
         self.canvas_discr = CanvasHolder()
         chr_l.addWidget(self.canvas_pvalue, 1)
         chr_l.addWidget(self.canvas_discr, 1)
-        body.addWidget(chart_row)
+        body.addWidget(self._fold("items.charts", "정답률·변별도 그래프", chart_row))
         body.setStretchFactor(0, 2); body.setStretchFactor(1, 1)
         body.setSizes([400, 280])
         layout.addWidget(body, 1)
@@ -4228,10 +4594,10 @@ class MainWindow(QMainWindow):
         self.table_choice.setHorizontalHeaderLabels(
             ["성취수준", "정답률(%)", "1", "2", "3", "4", "5", "무응답"])
         _setup_table(self.table_choice)
-        choice_split.addWidget(self.table_choice)
+        choice_split.addWidget(self._fold("choice.table", "성취수준별 응답 표", self.table_choice))
         # 답지반응분포 차트
         self.canvas_choice = CanvasHolder()
-        choice_split.addWidget(self.canvas_choice)
+        choice_split.addWidget(self._fold("choice.chart", "답지반응 그래프", self.canvas_choice))
         choice_split.setStretchFactor(0, 1); choice_split.setStretchFactor(1, 2)
         choice_split.setSizes([240, 360])
         layout.addWidget(choice_split, 1)
@@ -4258,11 +4624,11 @@ class MainWindow(QMainWindow):
         self.table_std.setItemDelegateForColumn(2, self._std_bar_delegate)
         # 표/차트를 splitter로 묶어서 사용자가 비율 조절 + 차트는 ScrollArea로 잘림 방지
         std_split = QSplitter(Qt.Vertical)
-        std_split.addWidget(self.table_std)
+        std_split.addWidget(self._fold("standard.table", "성취기준 표", self.table_std))
         self.canvas_std = CanvasHolder()
         std_chart_scroll = QScrollArea(); std_chart_scroll.setWidgetResizable(True)
         std_chart_scroll.setWidget(self.canvas_std)
-        std_split.addWidget(std_chart_scroll)
+        std_split.addWidget(self._fold("standard.chart", "성취기준 그래프", std_chart_scroll))
         std_split.setStretchFactor(0, 2); std_split.setStretchFactor(1, 3)
         std_split.setSizes([280, 420])
         layout.addWidget(std_split, 1)
@@ -8449,35 +8815,49 @@ codex login status</pre>
         <h2>예상정답률 입력</h2>
         <p>분석된 실제 학생 자료를 근거로 새 문항의 예상정답률을 O/X 방식으로 조정합니다.
         A, B, C, D, E 수준 최소능력자가 맞힐지 판단하면 분할점수 산정용 예상정답률로 환산됩니다.</p>
-        <p>이 앱에서 <b>A 수준 문항</b>이라는 말은 A 수준 학생 대표 3명 중 약 2명, 즉 2/3 정도가 맞힐 수 있는 문항이라는 뜻입니다.
-        B, C, D, E 문항도 같은 방식으로 이해하면 됩니다.</p>
+        <p>목표 성취수준과 기본 예상정답률은 교사 판단을 위한 초기 제안입니다.
+        기본 제안에 쓰이는 2/3은 공식적으로 강제되는 기준이 아닙니다. 직접 입력한 0~100%와 소수값은 그대로 보존합니다.</p>
         <p>분석자료 없이도 기본 문항으로 바로 사용할 수 있습니다. 분석자료가 전달되면 지난 정기시험의
         난이도·성취수준별 응답 자료를 기준으로 기본 예상정답률을 맞춘 뒤, 교사가 새 시험 설계에 맞게 조정합니다.</p>
         <p><b>문항 추가</b>로 새 문항을 만들고, 표에서 체크한 문항은 <b>선택 제거</b>로 한 번에 삭제할 수 있습니다.
-        행 끝의 휴지통 아이콘은 해당 문항 하나만 지울 때 사용합니다.</p>
-        <p><b>시험지 자동 반영</b>은 HWPX, PDF, DOCX, 엑셀, 텍스트 자료를 문항 단위로 읽어 예상정답률 계산기에 바로 넣습니다.
-        HWP 파일은 로컬에 <code>kordoc</code> 또는 <code>hwp5txt</code> 변환기가 설치된 경우 자동으로 시도하며, 안정성을 위해 HWPX 저장본을 권장합니다.</p>
+        한 문항만 체크하면 <b>문항 제거</b>로 해당 문항만 삭제합니다.</p>
+        <p>작은 창에서는 입력 패널이 자동으로 접힙니다. 왼쪽 위 메뉴 아이콘으로 다시 열 수 있고,
+        직접 접거나 펼친 상태는 창 크기를 바꿔도 유지됩니다.</p>
+        <p><b>문항표</b>에서 문항을 선택하고 <b>선택 문항</b>으로 전환하면 A~E 입력을 넓게 편집할 수 있습니다.
+        <b>문항표</b> 또는 Escape로 돌아가면 입력값과 표의 스크롤 위치가 유지됩니다.
+        <b>검토안·근거</b>에서는 검토안을 선택하고 근거 자료를 확인합니다.</p>
+        <p>불러오기·CSV 내보내기·작업 저장은 상단 아이콘으로 실행합니다. 아이콘 위에 마우스를 두면 이름이 표시됩니다.
+        <b>자료</b> 메뉴에 분석자료 보내기, 문항 구성안, 근거 엑셀과 계산기 새로고침이 있습니다.</p>
+        <p><b>전체 예상 분할점수</b>는 선택 여부와 관계없이 전체 문항을 합산합니다. 여러 판단자가 있으면 문항별 평균을 사용합니다.
+        A/B부터 E/미도달까지 100점 환산점수를 항상 표시합니다.
+        <b>점수 비교</b>를 펼치면 원점수와 NEIS 표 반올림 후 결과를 확인할 수 있습니다.</p>
+        <p><b>NEIS 입력표</b>는 문항구분·난이도별 배점 가중평균을 구한 뒤 A~E 모두 가장 가까운 5%로 반올림합니다(중간값 올림).
+        엑셀에는 문항별 원래 입력값, 분할점수 비교, NEIS 준비표를 함께 저장합니다. 이 표는 NEIS 자동 입력이나 공식 확정값이 아닙니다.</p>
         <p><b>문항 구성안 제안</b>은 사용자가 입력한 문항 수에 맞춰 성취수준 목표와 배점을 먼저 제시합니다.
         분석자료가 있으면 기존 문항의 정답률·난이도·배점 분포를 참고하고, 없으면 100점 기준 기본 구성안을 만듭니다.</p>
         <p>지필평가는 문항별 예상정답률을 합산해 분할점수를 만들고, 수행평가는 평가요소별 예상점수를 합산해 분할점수를 만듭니다.
         두 기능은 모두 “최소능력자가 어느 정도 수행할 수 있는가”를 숫자로 옮기는 같은 구조입니다.</p>
 
-        <h2>AI 문항 검토 방향</h2>
-        <p><b>AI 문항 검토</b> 탭은 시험 문제 자료를 먼저 문항 단위로 읽고, 별도로 넣은 성취기준·성취수준 자료와 대조해 검토 초안을 만드는 작업 공간입니다.</p>
-        <ul>
-          <li><b>문항 자료</b>: 시험 문제 HWPX/PDF/DOCX, 문항정보표, 수행평가 채점기준표를 문항 자료 칸으로 불러옵니다. PDF는 텍스트 추출 가능한 파일이어야 합니다.</li>
-          <li><b>성취기준·수준 자료</b>: 성취기준, 성취수준 A~E 설명, 최소능력자 특성 자료를 참고자료 칸으로 불러옵니다.</li>
-          <li><b>현재 문항정보표</b>: 이미 분석한 문항정보표를 검토 원문으로 가져옵니다.</li>
-          <li><b>검토 초안 생성</b>: 문항 자료를 먼저 나누고 참고자료와 대조해 성취기준 후보, 평가유형, 목표수준 후보, 난이도 후보, 근거, 추가 확인 질문을 표로 정리합니다.</li>
-          <li><b>AI로 보강</b>: AI 설정에 지정한 Ollama 로컬 모델 또는 Codex CLI OAuth가 문항 자료와 성취기준·수준 자료를 함께 읽고 검토표를 다시 제안합니다. 기본값은 외부 전송이 없는 로컬 초안입니다.</li>
-          <li><b>A~E 예상</b>: 지필 문항은 각 수준 대표 3명 중 몇 명이 맞힐지 <code>2/3</code>처럼 표시하고, 수행평가는 <code>80%</code> 또는 <code>8점</code>처럼 예상점수를 표시합니다.</li>
-          <li><b>AI 설정</b>: Ollama 로컬과 Codex CLI 클라우드 OAuth를 선택합니다. Codex 경로는 API Key를 쓰지 않고 터미널의 <code>codex login</code> 상태를 사용합니다.</li>
-          <li><b>개인정보 제거</b>: 외부 서버로 보낼 때 학생 이름, 반/번호, 전화번호, 이메일을 가능한 한 제거합니다. 그래도 최종 전송 여부는 교사가 확인합니다.</li>
-          <li><b>지필→예상정답률</b>: 선택형·서답형 문항 초안과 A~E 예상 O/X 값을 예상정답률 계산기로 보내 문항별 판단을 이어갑니다.</li>
-          <li><b>수행→재산정</b>: 수행평가 평가요소 초안과 A~E 예상점수를 수행평가 분할점수 재산정 표로 보내 합산을 이어갑니다.</li>
-          <li><b>AI 프롬프트</b>: 향후 AI 연결 또는 별도 AI 검토에 바로 사용할 수 있는 안전한 검토 요청문을 만듭니다.</li>
-        </ul>
-        <p>AI 판정은 자동 확정이 아니라, 근거 문장과 함께 제안하고 교사가 최종 수정하는 방식으로 사용합니다.</p>
+        <h2>이번 버전의 범위</h2>
+        <p>시험지 문항 오류 검토, 오류 후보 탐지와 AI 연결은 후속 버전으로 미룹니다.
+        현재 버전은 시험지에서 문항 번호·유형·배점만 읽으며, AI 제공자 연결 화면을 제공하지 않습니다.</p>
+
+        <h2>시험지에서 문항 가져오기</h2>
+        <p><b>자료</b> 메뉴의 <b>시험지에서 문항 가져오기</b>는 HWP·HWPX·PDF 시험지에서 문항 번호·유형·배점만 이 PC 안에서 읽어
+        계산기 문항 초안을 만듭니다. HWP는 kordoc이 설치된 PC에서 인터넷을 쓰는 옵션 없이 읽습니다. 보내기 전에 미리보기에서 배점을 확인하세요.</p>
+
+        <h2>시험 후 예측-실측 비교</h2>
+        <p>시험 후 분석을 실행하고 시험 전 작업을 계산기에 불러온 뒤 <b>자료</b> 메뉴의 <b>예측-실측 비교</b>를 누르면,
+        문항별 A~E 예상정답률과 각 분할점수 위아래로 가장 가까운 경계 학생의 실제 정답률을 비교합니다.
+        수준 전체의 높낮이는 적용한 분할점수에 묶이므로, 문항끼리의 상대차로 높게·낮게 예측한 문항을 봅니다.
+        <b>다음 시험 기준표 제안</b>으로 목표수준별 기본 예상정답률을 고칠 수 있습니다.</p>
+
+        <h2>내보내기와 학생 정보</h2>
+        <p>결과 CSV, 근거 엑셀, 계산기로 보내는 분석자료는 기본적으로 가명(학생 001…)을 씁니다.
+        실명은 저장 창의 <b>실명 포함</b>을 켜고 경고를 확인한 경우에만 들어갑니다.
+        가명은 익명이 아니므로 가명 파일도 성적 자료로 관리하세요.
+        가명과 실제 학생은 예상정답률 탭 <b>자료</b> 메뉴의 <b>가명 ↔ 실명 확인</b>에서 화면으로만 볼 수 있습니다.
+        학생 포트폴리오 스냅샷에는 실명 대신 이 PC의 비밀 키로 만든 학번 해시만 저장합니다.</p>
 
         <h2>단축키와 조작</h2>
         <ul>
@@ -8654,6 +9034,8 @@ codex login status</pre>
     def _render_data_tab(self):
         if hasattr(self, "data_empty_state"):
             self.data_empty_state.setVisible(False)
+        if hasattr(self, "data_results"):
+            self.data_results.setVisible(True)
         ov = self.overall
         self.kpi_n.value_label.setText(f"{ov.n_students} 명")
         self.kpi_n_items.value_label.setText(f"{len(self.exam.items)} 문항")
@@ -8694,6 +9076,11 @@ codex login status</pre>
         self._data_score_col = 5
         self.table_data.setColumnCount(len(headers))
         self.table_data.setHorizontalHeaderLabels(headers)
+        for offset, it in enumerate(items):
+            header = self.table_data.horizontalHeaderItem(2 + len(score_headers) + offset)
+            if header is not None:
+                header.setToolTip(f"{it.item_type} {it.number}번 · 정답 {it.answer or '-'}\n"
+                                  "칸의 표시: . = 정답, 숫자 = 고른 오답 번호, 빈칸 = 무응답")
         self.table_data.setRowCount(len(self.exam.students))
 
         # 컬럼 폭 — 반/번호와 이름이 잘리지 않게 충분히 넓힘 (좌측 고정 효과)
@@ -9200,7 +9587,7 @@ codex login status</pre>
         self.canvas_std.set_figure(charts.fig_standard_attainment(rows))
 
     # ---------------------------------------------------------- 내보내기
-    def _build_spliter_evidence_payload(self):
+    def _build_spliter_evidence_payload(self, include_identity: bool = False):
         select_items = sorted(self.exam.select_items, key=lambda it: it.number)
         serdap_items = sorted(self.exam.serdap_items, key=lambda it: it.number)
         serdap_max_total = sum(float(it.score) for it in serdap_items)
@@ -9328,7 +9715,14 @@ codex login status</pre>
             "items": evidence_items,
             "students": students,
         }
-        return payload
+        return payload if include_identity else pseudonymize_evidence_payload(payload, self._student_pseudonyms())
+
+    def _student_pseudonyms(self) -> list[str]:
+        """분석 자료마다 한 번 섞은 가명. 같은 자료의 CSV·근거 엑셀·계산기가 같은 가명을 쓴다."""
+        cached = getattr(self, "_pseudonym_cache", None)
+        if cached is None or cached[0] is not self.exam or len(cached[1]) != len(self.exam.students):
+            self._pseudonym_cache = (self.exam, pseudonym_ids(len(self.exam.students)))
+        return self._pseudonym_cache[1]
 
     @staticmethod
     def _excel_cell_value(value):
@@ -9350,6 +9744,9 @@ codex login status</pre>
 
         def append(ws_, row):
             ws_.append([self._excel_cell_value(value) for value in row])
+            for cell in ws_[ws_.max_row]:
+                if cell.data_type == "f":  # 수식처럼 보이는 문자열도 글자로 저장
+                    cell.data_type = "s"
 
         append(ws, ["항목", "값"])
         append(ws, ["내보낸 시각", payload.get("exportedAt", "")])
@@ -9529,6 +9926,7 @@ codex login status</pre>
         target: str,
         sample_size: int | None = None,
     ) -> dict[str, int]:
+        """목표수준 초기 제안에만 적용하며, 문항별 입력값 변환에는 사용하지 않는다."""
         target = self._ai_review_level(target, "C")
         ordered = self._enforce_neis_rate_order(rates)
         target_index = LEVELS_AE.index(target)
@@ -9742,16 +10140,13 @@ codex login status</pre>
         return self._enforce_target_rate_rules(target_rates, target, sample_size)
 
     def _judgments_from_rates(self, rates: dict[str, int], sample_size: int, judges: list[dict], target: str = "C") -> dict:
-        sample_size = max(1, min(20, int(sample_size or 20)))
-        target = self._ai_review_level(target, "C")
-        min_target_count = math.ceil(sample_size * 2 / 3)
+        sample_size = self._neis_sample_size(sample_size)
+        rates = normalize_rates(rates)
         judgments = {}
         for judge in judges:
             by_level = {}
             for level in LEVELS_AE:
                 count = max(0, min(sample_size, round(rates[level] / 100 * sample_size)))
-                if level == target:
-                    count = max(count, min_target_count)
                 by_level[level] = {
                     "correct": [idx < count for idx in range(sample_size)],
                     "targetRate": rates[level],
@@ -9800,31 +10195,36 @@ codex login status</pre>
     def _parse_neis_int(self, value, default: int = 1) -> int:
         try:
             text = str(value).replace(",", "").strip()
-            return max(1, int(round(float(text))))
-        except Exception:
-            return max(1, int(default))
+            number = float(text)
+        except (TypeError, ValueError):
+            raise ValueError("문항 번호는 1 이상의 정수여야 합니다.") from None
+        if isinstance(value, bool) or not math.isfinite(number) or number < 1 or not number.is_integer():
+            raise ValueError("문항 번호는 1 이상의 정수여야 합니다.")
+        return int(number)
+
+    def _neis_sample_size(self, value) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not 1 <= value <= 20 or int(value) != value:
+            raise ValueError("가상학생 수는 1~20 사이의 정수여야 합니다.")
+        return int(value)
 
     def _parse_neis_float(self, value, default: float = 0.0) -> float:
         try:
             text = str(value).replace(",", "").strip()
-            return max(0.0, float(text))
-        except Exception:
-            return max(0.0, float(default))
+            number = float(text)
+        except (TypeError, ValueError):
+            raise ValueError("배점은 0보다 큰 유한한 숫자여야 합니다.") from None
+        if isinstance(value, bool) or not math.isfinite(number) or number <= 0:
+            raise ValueError("배점은 0보다 큰 유한한 숫자여야 합니다.")
+        return number
 
     def _normalize_neis_difficulty(self, value) -> str:
         text = str(value or "").strip()
         return text if text in {"쉬움", "보통", "어려움"} else "보통"
 
     def _normalize_neis_rates(self, rates) -> dict[str, float] | None:
-        if not isinstance(rates, dict):
+        if rates is None:
             return None
-        normalized = {}
-        for level in LEVELS_AE:
-            try:
-                normalized[level] = max(0.0, min(100.0, float(rates.get(level, 0))))
-            except Exception:
-                return None
-        return normalized
+        return normalize_rates(rates)
 
     def _neis_rate_text(self, rates: dict[str, float | int]) -> str:
         def fmt(value) -> str:
@@ -9832,9 +10232,7 @@ codex login status</pre>
                 number = float(value)
             except Exception:
                 return "0"
-            if abs(number - round(number)) < 0.01:
-                return str(int(round(number)))
-            return f"{number:.1f}".rstrip("0").rstrip(".")
+            return str(int(number)) if number.is_integer() else str(number)
 
         return " / ".join(f"{level}{fmt(rates.get(level, 0))}" for level in LEVELS_AE)
 
@@ -9860,6 +10258,7 @@ codex login status</pre>
         item_map = self._exam_item_by_neis_key()
         source_item = item_map.get(key) or item_map.get(str(source_key))
         rates = self._normalize_neis_rates(number_item.data(NEIS_RATES_ROLE))
+        origin = number_item.data(Qt.UserRole + 2) or {}
         return {
             "id": str(number_item.data(Qt.UserRole) or key),
             "key": key,
@@ -9867,129 +10266,87 @@ codex login status</pre>
             "number": number,
             "type": item_type,
             "difficulty": difficulty,
-            "points": round(points, 2),
+            "points": points,
             "target": target,
             "standard": standard_item.text().strip() if standard_item else "",
             "source_item": source_item,
             "rates": rates,
             "sampleSize": number_item.data(Qt.UserRole + 1),
+            "calculator_item": origin.get("calculator_item"),
+            "calculator_project": origin.get("calculator_project"),
         }
 
     def _collect_neis_design_items(self, table: QTableWidget) -> list[dict]:
         designs = []
         for row in range(table.rowCount()):
             design = self._neis_design_item_from_cells(table, row)
-            if design is not None:
-                designs.append(design)
+            if design is None:
+                raise ValueError(f"{row + 1}행 문항 입력을 확인해 주세요.")
+            designs.append(design)
         return designs
 
-    def _project_from_neis_targets(self, design_items: list[dict], sample_size: int = 20, rate_mode: str = "target") -> dict:
-        sample_size = max(1, min(20, int(sample_size or 20)))
-        judges = [{"id": "teacher-1", "name": "검토안 1"}, {"id": "teacher-2", "name": "검토안 2"}]
-        items = []
-        for idx, design in enumerate(design_items, start=1):
-            item_type = self._normalize_neis_item_type(design.get("type", ""))
-            difficulty = self._normalize_neis_difficulty(design.get("difficulty", ""))
-            target = self._ai_review_level(design.get("target", ""), "C")
-            source_item = design.get("source_item")
-            item_sample = max(1, min(20, int(design.get("sampleSize") or sample_size)))
-            rates = self._normalize_neis_rates(design.get("rates"))
+    def _prepare_neis_design_items(self, design_items: list[dict], sample_size: int = 20, rate_mode: str = "target") -> list[dict]:
+        if not isinstance(design_items, list) or len(design_items) > 1000:
+            raise ValueError("문항 목록은 1,000개 이내여야 합니다.")
+        sample_size = self._neis_sample_size(sample_size)
+        prepared = []
+        for index, design in enumerate(design_items, 1):
+            if not isinstance(design, dict):
+                raise ValueError(f"{index}행 문항 형식을 확인해 주세요.")
+            item = dict(design)
+            raw_sample = item.get("sampleSize")
+            item["sampleSize"] = self._neis_sample_size(sample_size if raw_sample is None else raw_sample)
+            rates = self._normalize_neis_rates(item.get("rates"))
             if rates is None:
                 rates = self._expected_rates_for_target(
-                    target,
-                    difficulty,
-                    item_sample,
-                    item=source_item,
-                    rate_mode=rate_mode,
+                    item.get("target", "C"), item.get("difficulty", "보통"),
+                    item["sampleSize"], item=item.get("source_item"), rate_mode=rate_mode,
                 )
-            rates = self._enforce_target_rate_rules(rates, target, item_sample)
-            number = self._parse_neis_int(design.get("number", idx), idx)
-            standard = str(design.get("standard", "")).strip()
-            items.append({
-                "id": str(design.get("id") or f"neis-{idx}-{item_type}-{number}"),
-                "number": number,
-                "title": f"{item_type} {number}번",
-                "standard": standard,
-                "points": round(float(design.get("points", 0) or 0), 2),
-                "sampleSize": item_sample,
-                "type": item_type,
-                "difficulty": difficulty,
-                "targetLevel": target,
-                "judgmentsByJudge": self._judgments_from_rates(rates, item_sample, judges, target),
-                "evidence": ["NEIS 설계표", "계산기 현재값" if design.get("rates") else rate_mode],
-                "note": "NEIS 입력표에서 수정한 문항 수, 문항구분, 난이도, 배점, 목표 성취수준을 반영했습니다.",
-            })
-        project = {
+            item["rates"] = normalize_rates(rates)
+            prepared.append(item)
+        validate_design_items(prepared)
+        return prepared
+
+    def _project_from_neis_targets(self, design_items: list[dict], sample_size: int = 20, rate_mode: str = "target") -> dict:
+        from copy import deepcopy
+
+        designs = self._prepare_neis_design_items(design_items, sample_size, rate_mode)
+        metadata = next((d["calculator_project"] for d in designs if isinstance(d.get("calculator_project"), dict)), None)
+        project = deepcopy(metadata) if metadata is not None else {
             "version": 1,
-            "judges": judges,
+            "judges": [{"id": "teacher-1", "name": "검토안 1"}, {"id": "teacher-2", "name": "검토안 2"}],
             "activeJudgeId": "teacher-1",
-            "items": items,
             "evidenceMode": "difficultyAverage",
         }
-        if self.exam is not None and self.overall is not None:
+        judges = project["judges"]
+        items = []
+        for idx, design in enumerate(designs, start=1):
+            original = design.get("calculator_item")
+            item = deepcopy(original) if isinstance(original, dict) else {}
+            rates = design["rates"]
+            if not item or self._rates_from_spliter_item(item, judges) != rates:
+                item["judgmentsByJudge"] = self._judgments_from_rates(rates, design["sampleSize"], judges, design.get("target", "C"))
+            number = int(design["number"])
+            item.update({
+                "id": str(design.get("id") or f"neis-{idx}-{design['type']}-{number}"),
+                "number": number,
+                "standard": str(design.get("standard", "")).strip(),
+                "points": float(design["points"]),
+                "sampleSize": design["sampleSize"],
+                "type": design["type"],
+                "difficulty": design["difficulty"],
+                "targetLevel": design.get("target", "C"),
+            })
+            item.setdefault("title", f"{design['type']} {number}번")
+            item.setdefault("evidence", ["NEIS 설계표", "계산기 현재값"])
+            items.append(item)
+        project["items"] = items
+        if metadata is None and self.exam is not None and self.overall is not None:
             project["evidenceData"] = self._build_spliter_evidence_payload()
         return project
 
     def _build_neis_expected_rows(self, design_items: list[dict], sample_size: int = 20, rate_mode: str = "target") -> list[dict]:
-        groups: dict[tuple[str, str], dict] = {}
-        for design in design_items:
-            item_type = self._normalize_neis_item_type(design.get("type", ""))
-            difficulty = self._normalize_neis_difficulty(design.get("difficulty", ""))
-            target = self._ai_review_level(design.get("target", ""), "C")
-            points = float(design.get("points", 0) or 0)
-            rates = self._normalize_neis_rates(design.get("rates"))
-            if rates is None:
-                rates = self._expected_rates_for_target(
-                    target,
-                    difficulty,
-                    sample_size,
-                    item=design.get("source_item"),
-                    rate_mode=rate_mode,
-                )
-            rates = self._enforce_target_rate_rules(rates, target, sample_size)
-            number = self._parse_neis_int(design.get("number", 0), 0)
-            group_key = (item_type, difficulty)
-            group = groups.setdefault(group_key, {
-                "문항구분": item_type,
-                "난이도": difficulty,
-                "문항번호": [],
-                "목표수준": [],
-                "문항수": 0,
-                "배점합": 0.0,
-                "weighted": {level: 0.0 for level in LEVELS_AE},
-                "weight_sum": 0.0,
-            })
-            group["문항번호"].append(number)
-            group["목표수준"].append(f"{number}:{target}")
-            group["문항수"] += 1
-            group["배점합"] += points
-            weight = points if points > 0 else 1.0
-            group["weight_sum"] += weight
-            for level in LEVELS_AE:
-                group["weighted"][level] += float(rates[level]) * weight
-        order_type = {"선택형": 0, "서답형": 1}
-        order_diff = {"쉬움": 0, "보통": 1, "어려움": 2}
-        rows = []
-        for (_type, _difficulty), group in sorted(
-            groups.items(),
-            key=lambda kv: (order_type.get(kv[0][0], 9), order_diff.get(kv[0][1], 9), kv[0][1]),
-        ):
-            denom = group["weight_sum"] if group["weight_sum"] > 0 else max(1.0, float(group["문항수"]))
-            row = {
-                "문항구분": group["문항구분"],
-                "난이도": group["난이도"],
-                "해당문항번호": ", ".join(str(n) for n in sorted(group["문항번호"])),
-                "목표수준": ", ".join(group["목표수준"]),
-                "문항수": group["문항수"],
-                "배점합": round(group["배점합"], 2),
-            }
-            for level in LEVELS_AE:
-                row[level] = group["weighted"][level] / denom
-            ordered = self._enforce_neis_rate_order(row)
-            for level in LEVELS_AE:
-                row[level] = ordered[level]
-            rows.append(row)
-        return rows
+        return build_neis_rows(self._prepare_neis_design_items(design_items, sample_size, rate_mode))
 
     def _neis_row_headers(self) -> list[str]:
         return ["문항구분", "난이도", "해당문항번호", "문항수", "배점합", "A", "B", "C", "D", "E", "목표수준"]
@@ -10017,13 +10374,18 @@ codex login status</pre>
         if self.spliter_view is None:
             QMessageBox.information(self, "예상정답률 계산기", "이 환경에서는 내장 예상정답률 계산기를 열 수 없습니다.")
             return
-        designs = self._collect_neis_design_items(table)
+        try:
+            designs = self._collect_neis_design_items(table)
+            project = self._project_from_neis_targets(
+                designs, int(sample_combo.currentText()), mode_combo.currentData() or "target",
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "NEIS 입력값 오류", str(exc))
+            return
         if not designs:
             QMessageBox.warning(self, "NEIS 입력표", "계산기로 보낼 문항이 없습니다.")
             return
-        sample_size = int(sample_combo.currentText())
-        rate_mode = mode_combo.currentData() or "target"
-        self._spliter_pending_project_payload = self._project_from_neis_targets(designs, sample_size, rate_mode)
+        self._spliter_pending_project_payload = project
         if self.exam is not None and self.overall is not None:
             self._spliter_pending_payload = self._build_spliter_evidence_payload()
         self._activate_spliter_tab_for_pending_payloads()
@@ -10032,11 +10394,14 @@ codex login status</pre>
         self.statusBar().showMessage(f"수정한 {len(designs)}문항 설계안을 예상정답률 계산기로 보냈습니다.", 7000)
 
     def _copy_neis_expected_rows(self, table: QTableWidget, sample_combo: QComboBox, mode_combo: QComboBox, *, markdown: bool = False):
-        rows = self._build_neis_expected_rows(
-            self._collect_neis_design_items(table),
-            int(sample_combo.currentText()),
-            mode_combo.currentData() or "target",
-        )
+        try:
+            rows = self._build_neis_expected_rows(
+                self._collect_neis_design_items(table),
+                int(sample_combo.currentText()), mode_combo.currentData() or "target",
+            )
+        except ValueError as exc:
+            QMessageBox.warning(self, "NEIS 입력값 오류", str(exc))
+            return
         if not rows:
             QMessageBox.warning(self, "NEIS 입력표", "복사할 문항 묶음이 없습니다.")
             return
@@ -10045,7 +10410,7 @@ codex login status</pre>
         label = "마크다운" if markdown else "엑셀용"
         self.statusBar().showMessage(f"NEIS 입력용 표 {len(rows)}행을 {label} 형식으로 복사했습니다.", 6000)
 
-    def _save_neis_rows_xlsx(self, rows: list[dict]):
+    def _save_neis_rows_xlsx(self, rows: list[dict], *, designs: list[dict] | None = None):
         if not rows:
             QMessageBox.warning(self, "NEIS 입력표", "저장할 문항 묶음이 없습니다.")
             return
@@ -10064,6 +10429,10 @@ codex login status</pre>
         if not path.lower().endswith(".xlsx"):
             path += ".xlsx"
         try:
+            if designs is not None:
+                write_estimation_workbook(path, designs)
+                QMessageBox.information(self, "NEIS 입력표", f"저장했습니다.\n{path}")
+                return
             import openpyxl
             from openpyxl.styles import Alignment, Font, PatternFill
             wb = openpyxl.Workbook()
@@ -10093,12 +10462,16 @@ codex login status</pre>
         QMessageBox.information(self, "NEIS 입력표", f"저장했습니다.\n{path}")
 
     def _save_neis_expected_rows_xlsx(self, table: QTableWidget, sample_combo: QComboBox, mode_combo: QComboBox):
-        rows = self._build_neis_expected_rows(
-            self._collect_neis_design_items(table),
-            int(sample_combo.currentText()),
-            mode_combo.currentData() or "target",
-        )
-        self._save_neis_rows_xlsx(rows)
+        try:
+            designs = self._prepare_neis_design_items(
+                self._collect_neis_design_items(table),
+                int(sample_combo.currentText()), mode_combo.currentData() or "target",
+            )
+            rows = build_neis_rows(designs)
+        except ValueError as exc:
+            QMessageBox.warning(self, "NEIS 입력값 오류", str(exc))
+            return
+        self._save_neis_rows_xlsx(rows, designs=designs)
 
     def _fetch_spliter_project(self, callback, *, title: str = "NEIS 입력표"):
         if self.spliter_view is None:
@@ -10107,92 +10480,136 @@ codex login status</pre>
         if not self._spliter_loaded:
             QMessageBox.information(self, title, "예상정답률 계산기 탭을 먼저 연 뒤 다시 시도해 주세요.")
             return
-        script = "window.__GOEDUSPLIT_GET_PROJECT__ ? window.__GOEDUSPLIT_GET_PROJECT__() : null"
-        self.spliter_view.page().runJavaScript(script, callback)
+        # Qt hands JavaScript objects back as '' in some PySide6 builds, so send JSON text and parse it here.
+        script = "JSON.stringify(window.__GOEDUSPLIT_GET_PROJECT__ ? window.__GOEDUSPLIT_GET_PROJECT__() : null)"
+        self.spliter_view.page().runJavaScript(script, lambda raw: callback(self._parse_spliter_project(raw)))
+
+    # The calculator bundle's example: points per item and difficulty from the target level.
+    _SAMPLE_POINTS = (4, 4, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 8, 8)
+
+    @classmethod
+    def _is_sample_calculator_project(cls, project) -> bool:
+        """The calculator starts with 18 example items: titles "N번", default points, nothing else filled in.
+
+        Only the rates can differ unnoticed, so callers must not act on this silently.
+        """
+        items = project.get("items") if isinstance(project, dict) else None
+        if not isinstance(items, list) or len(items) != 18:
+            return False
+        for number, item in enumerate(items, start=1):
+            target = "E" if number <= 3 else "D" if number <= 6 else "C" if number <= 11 else "B" if number <= 15 else "A"
+            difficulty = "어려움" if target in ("A", "B") else "보통" if target == "C" else "쉬움"
+            if not isinstance(item, dict):
+                return False
+            try:
+                points = float(item.get("points"))
+            except (TypeError, ValueError):
+                return False
+            if (item.get("number"), item.get("type"), item.get("title"), item.get("targetLevel"), item.get("difficulty")) != (
+                number, "선택형", f"{number}번", target, difficulty,
+            ) or points != cls._SAMPLE_POINTS[number - 1] or item.get("standard") or item.get("note") or item.get("evidence"):
+                return False
+        return True
+
+    @staticmethod
+    def _parse_spliter_project(raw):
+        if isinstance(raw, dict):
+            return raw
+        try:
+            project = json.loads(raw) if isinstance(raw, str) and raw else None
+        except ValueError:
+            return None
+        return project if isinstance(project, dict) else None
 
     def _rate_from_spliter_judgment(self, judgment) -> float | None:
         if not isinstance(judgment, dict):
             return None
         override = judgment.get("overrideRate")
         if override not in (None, ""):
-            try:
-                return max(0.0, min(100.0, float(override)))
-            except Exception:
-                pass
+            return normalize_rates({level: override for level in LEVELS_AE})["A"]
         correct = judgment.get("correct")
         if isinstance(correct, list) and correct:
-            return sum(1 for value in correct if bool(value)) / len(correct) * 100
+            if any(type(value) not in (bool, int) or value not in (0, 1) for value in correct):
+                raise ValueError("정오 판단값은 O/X 또는 0/1이어야 합니다.")
+            return sum(correct) / len(correct) * 100
         target = judgment.get("targetRate")
         if target not in (None, ""):
-            try:
-                return max(0.0, min(100.0, float(target)))
-            except Exception:
-                pass
+            return normalize_rates({level: target for level in LEVELS_AE})["A"]
         return None
 
-    def _rates_from_spliter_item(self, item: dict, judges: list[dict]) -> dict[str, int]:
+    def _rates_from_spliter_item(self, item: dict, judges: list[dict]) -> dict[str, float]:
         judgments = item.get("judgmentsByJudge") if isinstance(item, dict) else None
         if not isinstance(judgments, dict):
             judgments = {}
         judge_ids = [str(j.get("id")) for j in judges if isinstance(j, dict) and j.get("id")]
         if not judge_ids:
             judge_ids = [str(key) for key in judgments.keys()]
-        fallback = self._target_level_rates(
-            self._ai_review_level(item.get("targetLevel", ""), "C"),
-            self._normalize_neis_difficulty(item.get("difficulty", "")),
-        )
+        if not judge_ids or len(judge_ids) != len(set(judge_ids)):
+            raise ValueError("검토안 목록이 비어 있거나 ID가 중복되었습니다.")
         rates = {}
         for level in LEVELS_AE:
             values = []
             for judge_id in judge_ids:
                 by_level = judgments.get(judge_id)
-                if isinstance(by_level, dict):
-                    rate = self._rate_from_spliter_judgment(by_level.get(level))
-                    if rate is not None:
-                        values.append(rate)
-            rates[level] = sum(values) / len(values) if values else fallback[level]
-        return self._enforce_target_rate_rules(
-            rates,
-            self._ai_review_level(item.get("targetLevel", ""), "C"),
-            self._parse_neis_int(item.get("sampleSize", 20), 20),
-        )
+                rate = self._rate_from_spliter_judgment(by_level.get(level)) if isinstance(by_level, dict) else None
+                if rate is None:
+                    raise ValueError(f"문항 {item.get('number', '')}: {level} 수준의 검토안 판단값이 비어 있습니다.")
+                values.append(rate)
+            rates[level] = math.fsum(values) / len(values)
+        return normalize_rates(rates)
 
     def _neis_design_items_from_spliter_project(self, project) -> list[dict]:
+        from copy import deepcopy
+
         if not isinstance(project, dict):
             return []
         raw_items = project.get("items")
         if not isinstance(raw_items, list):
             return []
+        if len(raw_items) > 1000:
+            raise ValueError("문항 목록은 1,000개 이내여야 합니다.")
         judges = project.get("judges") if isinstance(project.get("judges"), list) else []
+        if not judges and raw_items:
+            judgments = raw_items[0].get("judgmentsByJudge", {}) if isinstance(raw_items[0], dict) else {}
+            judges = [{"id": str(key), "name": str(key)} for key in judgments]
+        if any(not isinstance(j, dict) or not isinstance(j.get("id"), str) or not j["id"] for j in judges):
+            raise ValueError("검토안 ID를 확인해 주세요.")
+        metadata = deepcopy({key: value for key, value in project.items() if key != "items"})
+        metadata["judges"] = deepcopy(judges)
         item_map = self._exam_item_by_neis_key()
         designs = []
+        item_ids = set()
         for idx, item in enumerate(raw_items, start=1):
             if not isinstance(item, dict):
-                continue
-            number = self._parse_neis_int(item.get("number", idx), idx)
+                raise ValueError(f"{idx}행 문항 형식을 확인해 주세요.")
+            number = self._parse_neis_int(item.get("number"))
             item_type = self._normalize_neis_item_type(item.get("type", ""))
             key = self._neis_item_key_from_parts(item_type, number)
             source_item = item_map.get(key)
+            item_id = str(item.get("id") or f"calc-{idx}-{number}")
+            if item_id in item_ids:
+                raise ValueError("문항 ID가 중복되었습니다.")
+            item_ids.add(item_id)
             designs.append({
-                "id": str(item.get("id") or f"calc-{idx}-{number}"),
+                "id": item_id,
                 "key": key,
                 "source_key": key,
                 "number": number,
                 "type": item_type,
                 "difficulty": self._normalize_neis_difficulty(item.get("difficulty", "")),
-                "points": round(self._parse_neis_float(item.get("points", 0.0), 0.0), 2),
+                "points": self._parse_neis_float(item.get("points")),
                 "target": self._ai_review_level(item.get("targetLevel", ""), "C"),
                 "standard": str(item.get("standard", "") or "").strip(),
                 "source_item": source_item,
                 "rates": self._rates_from_spliter_item(item, judges),
-                "sampleSize": self._parse_neis_int(item.get("sampleSize", 20), 20),
+                "sampleSize": self._neis_sample_size(item.get("sampleSize", 20)),
+                "calculator_item": deepcopy(item),
+                "calculator_project": metadata,
             })
+        validate_design_items(designs)
         return designs
 
     def open_neis_expected_rate_dialog(self):
-        if self.exam is None or self.overall is None:
-            QMessageBox.warning(self, "NEIS 입력표", "먼저 분석을 실행해 주세요.")
-            return
         dialog = QDialog(self)
         dialog.setWindowTitle("NEIS 예상정답률 입력표")
         dialog.resize(self._px(1220), self._px(700))
@@ -10200,9 +10617,8 @@ codex login status</pre>
         layout.setContentsMargins(14, 14, 14, 14)
         layout.setSpacing(10)
         note = QLabel(
-            "이전 분석자료를 기준으로 다음 시험 문항 설계표를 만듭니다. 문항 수, 문항구분, 난이도, 배점, "
-            "목표수준을 수정할 수 있고, 계산기 현재값을 불러오면 계산기에서 교사가 고친 정답률을 "
-            "NEIS 표에 그대로 반영합니다. 논술형·주관식은 NEIS 기준에 맞춰 서답형으로 통일합니다."
+            "문항별 입력값은 그대로 보존합니다. NEIS 표는 문항구분·난이도별 배점가중평균을 구한 뒤 "
+            "A~E 모두 5% 단위로 반올림한 값입니다."
         )
         note.setProperty("role", "muted")
         note.setWordWrap(True)
@@ -10218,8 +10634,9 @@ codex login status</pre>
         top.addWidget(QLabel("산출 기준"))
         mode_combo = QComboBox()
         mode_combo.addItem("목표수준 기준", "target")
-        mode_combo.addItem("목표+분석 혼합", "blend")
-        mode_combo.addItem("분석자료 우선", "analysis")
+        if self.exam is not None and self.overall is not None:
+            mode_combo.addItem("목표+분석 혼합", "blend")
+            mode_combo.addItem("분석자료 우선", "analysis")
         mode_combo.setCurrentIndex(0)
         top.addWidget(mode_combo)
         btn_defaults = QPushButton(f"{TARGET_RATE_PRESET_TITLE}…")
@@ -10230,6 +10647,7 @@ codex login status</pre>
         btn_delete = QPushButton("선택 행 삭제")
         top.addWidget(btn_delete)
         btn_reload_analysis = QPushButton("분석자료 기준 새로 채우기")
+        btn_reload_analysis.setEnabled(self.exam is not None and self.overall is not None)
         top.addWidget(btn_reload_analysis)
         btn_load_calc = QPushButton("계산기 현재값 불러오기")
         btn_load_calc.setToolTip("예상정답률 계산기에서 문항 수, 목표수준, O/X, 직접%를 수정한 현재 상태를 NEIS 설계표로 가져옵니다.")
@@ -10238,10 +10656,45 @@ codex login status</pre>
         layout.addLayout(top)
 
         table = QTableWidget(0, 8)
-        table.setHorizontalHeaderLabels(["문항", "문항구분", "난이도", "배점", "목표수준", "A~E 제안", "성취기준", ""])
+        table.setHorizontalHeaderLabels(["문항", "문항구분", "난이도", "배점", "목표수준", "A~E 입력값(%)", "성취기준", ""])
         table.setSelectionBehavior(QTableWidget.SelectRows)
         table.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed | QTableWidget.AnyKeyPressed)
         table.verticalHeader().setVisible(False)
+
+        summary_label = QLabel()
+        summary_label.setObjectName("neisEstimationSummary")
+        summary_label.setWordWrap(True)
+        summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+
+        def update_summary():
+            try:
+                designs = self._prepare_neis_design_items(
+                    self._collect_neis_design_items(table), int(sample_combo.currentText()),
+                    mode_combo.currentData() or "target",
+                )
+                summary = summarize_designs(designs)
+            except ValueError as exc:
+                summary_label.setText(f"입력 오류: {exc}")
+                return
+            if not designs:
+                summary_label.setText("문항 없음")
+                return
+            boundaries = dict(zip(LEVELS_AE, ("A/B", "B/C", "C/D", "D/E", "E/미도달")))
+
+            def values(key):
+                return " · ".join(f"{boundaries[lv]} {summary[key][lv]:.2f}" for lv in LEVELS_AE)
+
+            differences = " · ".join(
+                f"{boundaries[lv]} {summary['neis_scaled_cuts'][lv] - summary['scaled_cuts'][lv]:+.2f}"
+                for lv in LEVELS_AE
+            )
+            summary_label.setText(
+                f"{summary['item_count']}문항 · 총배점 {summary['total_points']:g}\n"
+                f"문항별 원점수: {values('raw_cuts')}\n"
+                f"100점 환산: {values('scaled_cuts')}\n"
+                f"NEIS 반올림 후 100점 환산: {values('neis_scaled_cuts')}\n"
+                f"100점 환산 차이: {differences}"
+            )
 
         def row_for_widget(widget: QWidget) -> int:
             for r in range(table.rowCount()):
@@ -10250,46 +10703,43 @@ codex login status</pre>
                         return r
             return -1
 
-        def update_row(row: int, *, clear_custom: bool = False):
+        def update_row(row: int):
             if row < 0 or row >= table.rowCount():
                 return
             number_cell = table.item(row, 0)
             if number_cell is None:
                 return
-            if clear_custom:
-                number_cell.setData(NEIS_RATES_ROLE, None)
-            design = self._neis_design_item_from_cells(table, row)
-            if design is None:
-                return
-            rates = self._normalize_neis_rates(design.get("rates"))
-            from_calculator = rates is not None
-            if rates is None:
-                rates = self._expected_rates_for_target(
-                    design["target"],
-                    design["difficulty"],
-                    int(sample_combo.currentText()),
-                    item=design.get("source_item"),
-                    rate_mode=mode_combo.currentData() or "target",
-                )
-            rates = self._enforce_target_rate_rules(rates, design["target"], int(sample_combo.currentText()))
-            preview = QTableWidgetItem(self._neis_rate_text(rates))
+            try:
+                design = self._neis_design_item_from_cells(table, row)
+                if design is None:
+                    return
+                prepared = self._prepare_neis_design_items(
+                    [design], int(sample_combo.currentText()), mode_combo.currentData() or "target",
+                )[0]
+                preview = QTableWidgetItem(self._neis_rate_text(prepared["rates"]))
+                if design.get("rates") is not None:
+                    preview.setToolTip("계산기에서 가져온 문항별 입력값입니다.")
+            except ValueError as exc:
+                preview = QTableWidgetItem("입력 오류")
+                preview.setToolTip(str(exc))
             preview.setTextAlignment(Qt.AlignCenter)
             preview.setFlags(preview.flags() & ~Qt.ItemIsEditable)
-            if from_calculator:
-                preview.setToolTip("계산기에서 가져온 현재 정답률입니다. 목표수준·문항구분·난이도를 바꾸면 새 제안값으로 다시 계산됩니다.")
             table.setItem(row, 5, preview)
 
         def update_all_rows():
             for r in range(table.rowCount()):
                 update_row(r)
+            update_summary()
 
         def combo_changed(combo: QComboBox):
-            update_row(row_for_widget(combo), clear_custom=True)
+            update_row(row_for_widget(combo))
+            update_summary()
 
         def delete_button_clicked(button: QPushButton):
             row = row_for_widget(button)
             if row >= 0:
                 table.removeRow(row)
+                update_summary()
 
         def set_row(row: int, design: dict):
             table.blockSignals(True)
@@ -10303,6 +10753,10 @@ codex login status</pre>
                 number_cell.setTextAlignment(Qt.AlignCenter)
                 number_cell.setData(Qt.UserRole, str(design.get("id") or key))
                 number_cell.setData(Qt.UserRole + 1, design.get("sampleSize"))
+                number_cell.setData(Qt.UserRole + 2, {
+                    "calculator_item": design.get("calculator_item"),
+                    "calculator_project": design.get("calculator_project"),
+                })
                 number_cell.setData(NEIS_SOURCE_KEY_ROLE, str(design.get("source_key") or key))
                 rates = self._normalize_neis_rates(design.get("rates"))
                 if rates is not None:
@@ -10319,7 +10773,7 @@ codex login status</pre>
                 difficulty_combo.setCurrentText(self._normalize_neis_difficulty(design.get("difficulty", "")))
                 table.setCellWidget(row, 2, difficulty_combo)
 
-                score_cell = QTableWidgetItem(str(round(float(design.get("points", 0) or 0), 2)))
+                score_cell = QTableWidgetItem(str(design.get("points", "")))
                 score_cell.setTextAlignment(Qt.AlignCenter)
                 table.setItem(row, 3, score_cell)
 
@@ -10357,7 +10811,10 @@ codex login status</pre>
             for r in range(table.rowCount()):
                 item = table.item(r, 0)
                 if item is not None:
-                    numbers.append(self._parse_neis_int(item.text(), r + 1))
+                    try:
+                        numbers.append(self._parse_neis_int(item.text(), r + 1))
+                    except ValueError:
+                        continue
             next_number = max(numbers or [0]) + 1
             set_row(table.rowCount(), {
                 "id": f"manual-{datetime.now().timestamp()}-{next_number}",
@@ -10368,6 +10825,7 @@ codex login status</pre>
                 "target": "C",
                 "standard": "",
             })
+            update_summary()
 
         def delete_selected_rows():
             rows = sorted({index.row() for index in table.selectionModel().selectedRows()}, reverse=True)
@@ -10375,16 +10833,29 @@ codex login status</pre>
                 return
             for row in rows:
                 table.removeRow(row)
+            update_summary()
 
         def on_item_changed(item: QTableWidgetItem):
-            if item.column() == 0:
-                update_row(item.row(), clear_custom=True)
-            elif item.column() in (3, 6):
+            if item.column() in (0, 3, 6):
                 update_row(item.row())
+                update_summary()
 
-        def load_current_calculator_project():
+        def load_current_calculator_project(automatic=False):
             def done(project):
-                designs = self._neis_design_items_from_spliter_project(project)
+                if not dialog.isVisible():
+                    return
+                if automatic and self._is_sample_calculator_project(project):
+                    # Keep the analysis-based table, but say so: rates alone may have been edited.
+                    note.setText(
+                        note.text() + " 계산기에는 기본 예시 문항만 있는 것으로 보여 계산기 값을 자동으로 불러오지 않았습니다."
+                        " 계산기 값을 쓰려면 '계산기 현재값 불러오기'를 누르세요."
+                    )
+                    return
+                try:
+                    designs = self._neis_design_items_from_spliter_project(project)
+                except ValueError as exc:
+                    QMessageBox.warning(self, "NEIS 입력값 오류", str(exc))
+                    return
                 if not designs:
                     QMessageBox.information(self, "NEIS 입력표", "계산기에서 가져올 문항 현재값이 없습니다.")
                     return
@@ -10397,19 +10868,24 @@ codex login status</pre>
         btn_add.clicked.connect(add_blank_row)
         btn_delete.clicked.connect(delete_selected_rows)
         btn_reload_analysis.clicked.connect(lambda: populate_table(self._default_neis_design_items()))
-        btn_load_calc.clicked.connect(load_current_calculator_project)
+        btn_load_calc.clicked.connect(lambda: load_current_calculator_project(False))
         btn_defaults.clicked.connect(
             lambda: self._open_target_rate_presets_dialog(
                 lambda apply_current=False: update_all_rows() if apply_current else None
             )
         )
         populate_table(self._default_neis_design_items())
+        if table.rowCount() == 0:
+            add_blank_row()
+        if self.spliter_view is not None and getattr(self, "_spliter_loaded", False):
+            QTimer.singleShot(0, lambda: load_current_calculator_project(True))
         sample_combo.currentTextChanged.connect(lambda _text: update_all_rows())
         mode_combo.currentIndexChanged.connect(lambda _idx: update_all_rows())
         table.horizontalHeader().setSectionResizeMode(6, QHeaderView.Stretch)
         for col, width in enumerate([62, 92, 78, 70, 92, 210, 260, 62]):
             table.setColumnWidth(col, self._px(width))
         layout.addWidget(table, 1)
+        layout.addWidget(summary_label)
 
         buttons = QHBoxLayout()
         btn_copy_excel = QPushButton("엑셀용 복사")
@@ -10432,9 +10908,594 @@ codex login status</pre>
         layout.addLayout(buttons)
         dialog.exec()
 
+    def import_exam_structure(self):
+        """시험지(HWP/HWPX/PDF)에서 문항 번호·유형·배점만 이 PC 안에서 읽어 계산기 문항 초안을 만든다."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "시험지 불러오기", str(Path.home() / "Desktop"),
+            "시험지 (*.hwp *.hwpx *.pdf *.txt);;모든 파일 (*.*)",
+        )
+        if not path:
+            return
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            text, how = extract_exam_text(path)
+        except (ExamReadError, OSError) as exc:
+            message = str(exc) if isinstance(exc, ExamReadError) else "파일을 열 수 없습니다. 권한이나 위치를 확인하세요."
+            QMessageBox.warning(self, "시험지 불러오기", message)
+            return
+        finally:
+            QApplication.restoreOverrideCursor()
+        result = parse_exam_structure(text)
+        rows, source = enrich_structure(result["items"], None)
+        for candidate in self._item_info_candidates():
+            rows, source = enrich_structure(result["items"], candidate)
+            if source == "문항정보표":
+                break
+        # 배점 read from the paper itself: enrich_structure may have filled gaps from the analysis.
+        paper_points = {(item["type"], item["number"]): item["points"] for item in result["items"]}
+        observed, analysis = self._observed_import_targets(rows, paper_points)
+        use_observed = bool(analysis) and self._paper_names_loaded_exam(text)
+        for row in rows:
+            row["rule_target"] = self._import_target_level(row)
+            row["observed_target"] = observed.get((row["type"], row["number"]))
+            row["target"] = row["observed_target"] if use_observed and row["observed_target"] else row["rule_target"]
+        result["items"] = rows
+        self._show_exam_structure_dialog(result, how, Path(path).name, source,
+                                         analysis=analysis, use_observed=use_observed)
+
+    def _paper_names_loaded_exam(self, text: str) -> bool:
+        """Whether the paper names the loaded analysis's subject, school year and semester.
+
+        NEIS subject names carry the credits ("공통수학1(4)"), the paper says "공통수학1"; the name must
+        stand on its own ("수학" does not match "공통수학1"). Two exams of the same semester (1차, 2차)
+        still look alike here, which the preview says next to the checkbox.
+        """
+        exam = self.exam
+        subject = re.sub(r"\s+|\(.*?\)", "", getattr(exam, "subject", "") or "")
+        year = re.search(r"(\d{4})\s*학년도", getattr(exam, "semester", "") or "")
+        term = re.search(r"([12])\s*학기", getattr(exam, "semester", "") or "")
+        if not (subject and year and term):
+            return False
+        word = r"0-9A-Za-z가-힣\u2160-\u217f"  # also Roman numerals: 공통수학1 is not 공통수학1Ⅱ
+        name = rf"(?<![{word}])" + r"\s*".join(map(re.escape, subject)) + rf"(?![{word}])"
+        return bool(re.search(name, text) and re.search(year.group(1) + r"\s*학년도", text)
+                    and re.search(r"(?<!\d)" + term.group(1) + r"\s*학기", text))
+
+    def _observed_import_targets(self, rows: list[dict], paper_points: dict | None = None) -> tuple[dict, str]:
+        """A~E targets from the loaded analysis when it has this paper's items (same numbers and 배점).
+
+        ``paper_points`` {(type, number): 배점 or None} as read from the paper (default: the rows').
+        Returns ({(type, number): target}, a short description of the analysis) or ({}, "").
+        Whether the analysis really is this exam is the teacher's call (a checkbox in the preview):
+        the layout of a paper often repeats from one exam to the next.
+        """
+        if self.exam is None or self.overall is None or getattr(self.overall, "levels_arr", None) is None:
+            return {}, ""
+        if not self.exam.students:
+            return {}, ""
+        if paper_points is None:
+            paper_points = {(row["type"], row["number"]): row["points"] for row in rows}
+        by_key = {(it.item_type, int(it.number)): it for it in self.exam.items}
+        scored = [(key, points) for key, points in paper_points.items() if points is not None]
+        agree = sum(1 for key, points in scored if key in by_key and abs(float(by_key[key].score or 0) - points) < 1e-6)
+        if not scored or agree / len(scored) < 0.8 or len(rows) != len(self.exam.items):
+            return {}, ""
+        designs = [
+            {"type": row["type"], "number": row["number"], "difficulty": row["difficulty"], "target": "",
+             "points": float(row["points"] if row["points"] is not None else by_key[(row["type"], row["number"])].score),
+             "rates": {level: 0.0 for level in LEVELS_AE}, "source_item": by_key[(row["type"], row["number"])]}
+            for row in rows if (row["type"], row["number"]) in by_key
+        ]
+        try:
+            report = build_calibration(designs, self.exam, list(self.overall.levels_arr), rates_for=self._target_level_rates)
+        except Exception:
+            return {}, ""
+        targets = observed_targets(report)
+        if not targets:
+            return {}, ""
+        label = " · ".join(part for part in (self.exam.subject, self.exam.semester) if part) or "불러온 시험"
+        return targets, f"{label} · {len(self.exam.students)}명"
+
+    def _item_info_candidates(self) -> list:
+        """문항정보표 items to try: the file chosen on the left, then the loaded analysis."""
+        candidates = []
+        path = self.fs_iteminfo.path() if hasattr(self, "fs_iteminfo") else ""
+        if path:
+            try:
+                candidates.append(load_item_info(path)[0])
+            except Exception:
+                pass
+        if self.exam is not None and self.exam.items:
+            candidates.append(self.exam.items)
+        return candidates
+
+    @staticmethod
+    def _import_target_level(row: dict) -> str:
+        """The app's difficulty rule (쉬움→E, 보통→C, 어려움→B). A loaded analysis may be an earlier
+        exam, so its per-number rates are not used for a new paper."""
+        return {"쉬움": "E", "어려움": "B"}.get(row.get("difficulty", "보통"), "C")
+
+    def _show_exam_structure_dialog(self, result: dict, how: str, file_name: str, source: str = "",
+                                    analysis: str = "", use_observed: bool = False):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("시험지에서 문항 가져오기")
+        dialog.resize(self._px(1000), self._px(620))
+        layout = QVBoxLayout(dialog)
+        items = result["items"]
+        counts = {kind: sum(1 for item in items if item["type"] == kind) for kind in ("선택형", "서답형")}
+        source_text = {
+            "문항정보표": "난이도·성취기준은 <b>문항정보표</b>에서 가져왔습니다.",
+            "배점 순서로 추정": "문항정보표가 없어 난이도를 <b>배점 순서로 추정</b>했습니다(배점이 높을수록 어려움). 왼쪽에서 문항정보표를 고르면 더 정확합니다.",
+            "문항정보표 불일치": "왼쪽 문항정보표의 배점이 이 시험지와 맞지 않아(다른 시험으로 보임) 쓰지 않고, 난이도를 <b>배점 순서로 추정</b>했습니다.",
+        }.get(source, "")
+        head = QLabel(
+            f"{file_name} · {how} · 선택형 {counts['선택형']}문항, 서답형 {counts['서답형']}문항 · 배점 합계 {result['total_points']:g}점<br>"
+            f"{source_text} "
+            "배점·난이도·목표는 표에서 고칠 수 있고, 빼려는 문항은 체크를 끄세요. 시험지 내용은 이 PC 안에서만 읽습니다."
+        )
+        head.setWordWrap(True)
+        layout.addWidget(head)
+        chk_observed = QCheckBox(
+            f"불러온 분석 결과({analysis})의 실제 응답으로 목표수준 정하기 — 이 시험지로 치른 시험일 때만 켜세요 "
+            "(같은 학기의 다른 차수 시험이면 끄세요)"
+        )
+        chk_observed.setToolTip(
+            "각 분할점수 근처 학생(경계 학생)이 실제로 맞힌 비율과 가장 가까운 기준표 줄(목표 설정)의 목표수준을 씁니다. "
+            "서답형은 문항별 응답이 없어 서답형 전체 결과로 정합니다."
+        )
+        chk_observed.setChecked(bool(analysis) and use_observed)
+        chk_observed.setVisible(bool(analysis))
+        layout.addWidget(chk_observed)
+        target_note = QLabel()
+        target_note.setWordWrap(True)
+        target_note.setProperty("role", "muted")
+        layout.addWidget(target_note)
+        if result["warnings"]:
+            warn = QLabel("\n".join("⚠ " + line for line in result["warnings"]))
+            warn.setWordWrap(True)
+            layout.addWidget(warn)
+        table = QTableWidget(len(items), 8)
+        table.setHorizontalHeaderLabels(["포함", "구분", "번호", "배점", "난이도", "목표", "보기 수", "확인할 점 · 첫 줄"])
+        table.verticalHeader().setVisible(False)
+        combos = []
+        edited: set[int] = set()
+        for r, item in enumerate(items):
+            include = QTableWidgetItem()
+            include.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+            include.setCheckState(Qt.Checked)
+            table.setItem(r, 0, include)
+            for c, value in ((1, item["type"]), (2, str(item["number"])), (6, str(item["choices"]))):
+                cell = _set_item(table, r, c, value)
+                cell.setFlags(cell.flags() & ~Qt.ItemIsEditable)
+            points = QTableWidgetItem("" if item["points"] is None else f"{item['points']:g}")
+            points.setTextAlignment(Qt.AlignCenter)
+            table.setItem(r, 3, points)
+            difficulty = QComboBox()
+            difficulty.addItems(list(DIFFICULTIES))
+            difficulty.setCurrentText(item.get("difficulty", "보통"))
+            target = QComboBox()
+            target.addItems(list(LEVELS_AE))
+            target.setCurrentText(item.get("target", "C"))
+            # A target the teacher picked stays: neither the checkbox nor a difficulty change replaces it.
+            target.activated.connect(lambda _index, index=r: edited.add(index))
+            difficulty.currentTextChanged.connect(
+                lambda text, row=item, box=target, index=r: None
+                if index in edited or (chk_observed.isChecked() and row.get("observed_target"))
+                else box.setCurrentText(self._import_target_level(dict(row, difficulty=text)))
+            )
+            table.setCellWidget(r, 4, difficulty)
+            table.setCellWidget(r, 5, target)
+            combos.append((difficulty, target))
+            note = _set_item(table, r, 7, " / ".join(item["flags"] + [item["preview"]]), align_left=True)
+            note.setFlags(note.flags() & ~Qt.ItemIsEditable)
+            if item["flags"]:
+                note.setBackground(QBrush(QColor(255, 225, 200)))
+                note.setForeground(QBrush(QColor(20, 20, 20)))
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setSectionResizeMode(7, QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        def apply_target_mode():
+            observed = chk_observed.isChecked()
+            for index, (item, (difficulty, target)) in enumerate(zip(items, combos)):
+                if index in edited:
+                    continue
+                use = item.get("observed_target") if observed else None
+                target.setCurrentText(use or self._import_target_level(dict(item, difficulty=difficulty.currentText())))
+            if observed:
+                missing = sum(1 for item in items if not item.get("observed_target"))
+                target_note.setText(
+                    "목표수준: 경계 학생의 실제 정답률과 가장 가까운 기준표 줄로 정했습니다. 서답형은 서답형 전체 결과로 정했습니다."
+                    + (f" 실측이 없는 {missing}문항은 난이도로 정했습니다." if missing else "")
+                )
+            else:
+                target_note.setText(
+                    "목표수준: 이 시험의 응답 자료가 없어 난이도로 임시로 정했습니다(쉬움→E, 보통→C, 어려움→B). "
+                    "문항마다 A~E 중 맞는 목표를 골라 주세요."
+                    + (" 불러온 분석이 이 시험지의 시험이면 위 확인란을 켜세요." if analysis else "")
+                )
+
+        chk_observed.toggled.connect(lambda _checked: apply_target_mode())
+        apply_target_mode()
+
+        def send():
+            rows = []
+            for r, item in enumerate(items):
+                if table.item(r, 0).checkState() != Qt.Checked:
+                    continue
+                raw = table.item(r, 3).text().strip()
+                try:
+                    points = float(raw) if raw else None
+                except ValueError:
+                    points = None
+                difficulty, target = combos[r]
+                rows.append({"type": item["type"], "number": item["number"], "points": points,
+                             "difficulty": difficulty.currentText(), "target": target.currentText(),
+                             "standard": item.get("standard", "")})
+            if not rows:
+                QMessageBox.information(dialog, "시험지에서 문항 가져오기", "보낼 문항을 하나 이상 고르세요.")
+                return
+            try:
+                designs = designs_from_structure(rows, lambda target, difficulty: self._target_level_rates(target, difficulty))
+                project = self._project_from_neis_targets(designs)
+            except ValueError as exc:
+                QMessageBox.warning(dialog, "시험지에서 문항 가져오기", str(exc))
+                return
+            answer = QMessageBox.question(
+                dialog, "시험지에서 문항 가져오기",
+                f"계산기의 현재 작업을 이 시험지의 {len(designs)}문항으로 바꿉니다. 지금 작업이 필요하면 먼저 '작업 저장'을 하세요. 계속할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+            self._spliter_pending_project_payload = project
+            # Keep the current analysis as evidence, like the NEIS flow: a calculator that is
+            # showing evidence crashes (React removeChild) when a project arrives without it.
+            if self.exam is not None and self.overall is not None:
+                self._spliter_pending_payload = self._build_spliter_evidence_payload()
+            self._activate_spliter_tab_for_pending_payloads()
+            self.statusBar().showMessage(f"시험지의 {len(designs)}문항을 예상정답률 계산기로 보냈습니다.", 8000)
+            dialog.accept()
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_send = QPushButton("계산기로 보내기")
+        btn_send.clicked.connect(send)
+        btn_cancel = QPushButton("취소")
+        btn_cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(btn_send)
+        buttons.addWidget(btn_cancel)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def show_calibration_report(self):
+        """시험 후: 계산기에 입력한 예상정답률과 실제 수준별 정답률을 비교한다."""
+        if self.exam is None or self.overall is None:
+            QMessageBox.information(self, "예측-실측 비교", "먼저 시험 후 정오표와 문항정보표로 분석을 실행해 주세요.")
+            return
+        self._fetch_spliter_project(self._on_calibration_project, title="예측-실측 비교")
+
+    def _on_calibration_project(self, project):
+        if self._is_sample_calculator_project(project):
+            answer = QMessageBox.question(
+                self, "예측-실측 비교",
+                "계산기에 불러온 작업이 없고 기본 예시 문항(1~18번)으로 보입니다. "
+                "시험 전에 저장한 작업을 '작업 불러오기'로 연 뒤 비교하는 것이 맞습니다. 그래도 지금 값으로 비교할까요?",
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            )
+            if answer != QMessageBox.Yes:
+                return
+        try:
+            designs = self._neis_design_items_from_spliter_project(project)
+        except ValueError as exc:
+            QMessageBox.warning(self, "예측-실측 비교", str(exc))
+            return
+        if not designs:
+            QMessageBox.information(
+                self, "예측-실측 비교",
+                "계산기에 예측값이 없습니다. 시험 전에 저장한 작업을 '작업 불러오기'로 연 뒤 다시 시도해 주세요.",
+            )
+            return
+        self._show_calibration_dialog(build_calibration(
+            designs, self.exam, list(self.overall.levels_arr), rates_for=self._target_level_rates,
+        ))
+
+    def _show_calibration_dialog(self, report: dict):
+        def pct(value):
+            return "-" if value is None else f"{value:.0f}"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle("예측-실측 비교")
+        dialog.resize(self._px(1100), self._px(700))
+        layout = QVBoxLayout(dialog)
+        counts = " · ".join(
+            f"{cut['boundary']} 경계 학생 {report['border_counts'][cut['level']]}명" for cut in report["cuts"]
+        )
+        # The conclusion first; the method and every note used to fill ten lines above the table.
+        headline = QLabel("<b>먼저 볼 것</b><br>" + "<br>".join(html.escape(line) for line in headline_lines(report)))
+        headline.setTextFormat(Qt.RichText)
+        headline.setWordWrap(True)
+        layout.addWidget(headline)
+        intro = QLabel(
+            "<b>용어</b> · 경계 학생: 각 분할점수 바로 위아래 점수의 학생(그 수준에 겨우 도달한 '최소능력자'에 가까운 학생). "
+            "실제: 경계 학생이 그 문항을 맞힌 비율. 상대차: 실제−예측에서 그 경계의 모든 문항 평균 차이를 뺀 값.<br>"
+            "분할점수 근처 학생은 평균적으로 그 분할점수만큼 득점하므로, 수준 전체의 높낮이는 적용한 분할점수에 묶여 확인할 수 없습니다. "
+            "그래서 이 비교는 <b>문항끼리의 상대차</b>로 어떤 문항·난이도를 높게 또는 낮게 예측했는지 봅니다.<br>" + counts
+        )
+        intro.setTextFormat(Qt.RichText)
+        intro.setWordWrap(True)
+        intro.setProperty("role", "muted")
+        notes = summary_lines(report) + cut_lines(report) + report["notes"]
+        if report["unmatched"]:
+            notes.append("분석 자료에서 찾지 못한 예측 문항: " + ", ".join(report["unmatched"]))
+        if report["not_designed"]:
+            notes.append("예측값이 없는 시험 문항: " + ", ".join(report["not_designed"]))
+        summary = QLabel("\n".join(notes))
+        summary.setWordWrap(True)
+        details = QWidget()
+        details_layout = QVBoxLayout(details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.addWidget(intro)
+        details_layout.addWidget(summary)
+        details.setVisible(False)
+        btn_details = QToolButton()
+        btn_details.setText("자세한 설명과 전체 요약 보기")
+        btn_details.setCheckable(True)
+        btn_details.toggled.connect(details.setVisible)
+        btn_details.toggled.connect(
+            lambda shown: btn_details.setText("설명 접기" if shown else "자세한 설명과 전체 요약 보기")
+        )
+        layout.addWidget(btn_details, 0, Qt.AlignLeft)
+        layout.addWidget(details)
+
+        cut_table = QTableWidget(3, len(report["cuts"]))
+        cut_table.setHorizontalHeaderLabels([c["boundary"] for c in report["cuts"]])
+        cut_table.setVerticalHeaderLabels(["검토안 분할점수", "적용 분할점수", "경계 학생 실측"])
+        for c, cut in enumerate(report["cuts"]):
+            for r, key in enumerate(("predicted_scaled", "applied", "actual_scaled")):
+                value = cut[key]
+                _set_item(cut_table, r, c, "-" if value is None else f"{value:.1f}")
+        cut_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        cut_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        cut_table.resizeRowsToContents()
+        cut_table.setFixedHeight(
+            cut_table.horizontalHeader().sizeHint().height()
+            + sum(cut_table.rowHeight(r) for r in range(3)) + 2 * cut_table.frameWidth()
+        )
+        cut_table.setFocusPolicy(Qt.NoFocus)
+        layout.addWidget(cut_table)
+
+        legend = QLabel(
+            "표 읽는 법: 각 칸은 '예측 → 실제 (상대차)'입니다. 상대차가 +이면 예측보다 더 맞혔고(낮게 예측), "
+            "−이면 덜 맞혔습니다(높게 예측). 색 칸은 다른 문항보다 15%p 이상 빗나간 곳, '실측 목표'의 색은 목표수준이 실제와 다른 문항입니다."
+        )
+        legend.setWordWrap(True)
+        legend.setProperty("role", "muted")
+        layout.addWidget(legend)
+        headers = ["구분", "번호", "난이도", "목표", "실측 목표", "배점", *[f"{lv} 예측→실제(상대차)" for lv in LEVELS_AE]]
+        observed_tip = "경계 학생의 실제 정답률과 가장 가까운 기준표 줄(목표 설정)의 목표수준입니다. 다르면 목표수준을 다시 보세요."
+        table = QTableWidget(len(report["rows"]), len(headers))
+        table.setHorizontalHeaderLabels(headers)
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        for r, row in enumerate(report["rows"]):
+            observed = row.get("observed_target") or "-"
+            values = (row["type"], row["number"], row["difficulty"], row["target"], observed, f"{row['points']:g}")
+            for c, value in enumerate(values):
+                item = _set_item(table, r, c, value, tooltip=observed_tip if c == 4 else None)
+                if c == 4 and row["type"] == "선택형" and row["target"] in LEVELS_AE and observed not in ("-", row["target"]):
+                    item.setBackground(QBrush(QColor(255, 225, 200)))
+                    item.setForeground(QBrush(QColor(20, 20, 20)))
+            for c, lv in enumerate(LEVELS_AE, start=6):
+                relative = row["relative"][lv]
+                text = f"{pct(row['predicted'][lv])}→{pct(row['border'][lv])}"
+                if relative is not None:
+                    text += f" ({relative:+.0f})"
+                tip = f"실측-예측 {pct(row['diff'][lv])}%p · 수준 전체 평균 {pct(row['all'][lv])}%"
+                item = _set_item(table, r, c, text, tooltip=tip)
+                if relative is not None and abs(relative) >= LARGE_GAP:
+                    item.setBackground(QBrush(QColor(255, 225, 200)))
+                    item.setForeground(QBrush(QColor(20, 20, 20)))
+        table.resizeColumnsToContents()
+        for column in range(6, len(headers)):
+            table.horizontalHeader().setSectionResizeMode(column, QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_presets = QPushButton("다음 시험 기준표 제안")
+        btn_presets.setToolTip("목표수준별로 이번 경계 학생의 실제 정답률을 평균해 기본 예상정답률 기준표를 제안합니다.")
+        btn_presets.clicked.connect(lambda: self._show_preset_suggestion_dialog(report))
+        btn_save = QPushButton("엑셀 저장")
+        btn_save.clicked.connect(lambda: self._save_calibration_xlsx(report))
+        btn_close = QPushButton("닫기")
+        btn_close.clicked.connect(dialog.accept)
+        for button in (btn_presets, btn_save, btn_close):
+            buttons.addWidget(button)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _show_preset_suggestion_dialog(self, report: dict):
+        current = self._load_target_rate_presets()
+        suggestion = suggest_presets(report, current)
+        for target, entry in suggestion.items():
+            if entry["suggested"]:  # 저장될 값과 같게: 규칙 정리를 더 바뀌지 않을 때까지 적용
+                entry["raw"] = entry["suggested"]
+                entry["suggested"] = self._settled_preset_row(target, entry["suggested"])
+        if not any(entry["suggested"] for entry in suggestion.values()):
+            QMessageBox.information(
+                self, "다음 시험 기준표 제안",
+                "목표수준마다 선택형 문항이 2개 이상 있어야 제안할 수 있습니다. 계산기에서 문항별 목표수준을 확인해 주세요.",
+            )
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle("다음 시험 기준표 제안")
+        dialog.resize(self._px(820), self._px(420))
+        layout = QVBoxLayout(dialog)
+        note = QLabel(
+            "같은 목표수준 문항들에서 이번 경계 학생이 실제로 맞힌 비율의 평균을, 기준표 규칙(A≥B≥C≥D≥E, 목표수준 학생 2/3 이상)으로 "
+            "정리한 값입니다. 기준표는 '보통' 문항 기준이라 문항 난이도 보정(쉬움 +10, 어려움 −10)을 뺀 뒤 평균했습니다. "
+            "규칙 때문에 바뀐 칸은 마우스를 올리면 원래 평균이 보입니다. 적용할 행만 고르세요. 이번 시험 작업 표는 바꾸지 않습니다. "
+            "한 번의 시험 결과이므로 교과협의를 거쳐 조정하세요."
+        )
+        note.setWordWrap(True)
+        note.setProperty("role", "muted")
+        layout.addWidget(note)
+        weak = [cut["boundary"] for cut in report["cuts"]
+                if report["border_counts"][cut["level"]] < 5 or cut["level"] in report.get("border_one_sided", [])]
+        if weak:
+            caution = QLabel("⚠ " + ", ".join(weak) + " 경계는 경계 학생이 적거나 한쪽에만 있어 그 열의 제안은 참고만 하세요.")
+            caution.setWordWrap(True)
+            layout.addWidget(caution)
+        table = QTableWidget(len(LEVELS_AE), len(LEVELS_AE) + 3)
+        table.setHorizontalHeaderLabels(["적용", "목표수준", "문항 수", *[f"{lv} 현재→제안" for lv in LEVELS_AE]])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        checks = {}
+        for r, target in enumerate(LEVELS_AE):
+            entry = suggestion[target]
+            check = QTableWidgetItem()
+            if entry["suggested"]:
+                check.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+                check.setCheckState(Qt.Checked)
+            else:
+                check.setFlags(Qt.NoItemFlags)
+                check.setToolTip("문항이 2개 미만이라 제안하지 않습니다.")
+            table.setItem(r, 0, check)
+            checks[target] = check
+            _set_item(table, r, 1, target)
+            _set_item(table, r, 2, str(entry["items"]))
+            for c, lv in enumerate(LEVELS_AE, start=3):
+                now = entry["current"][lv]
+                text = f"{now}" if not entry["suggested"] else f"{now}→{entry['suggested'][lv]}"
+                raw = entry.get("raw", {}).get(lv)
+                adjusted = entry["suggested"] and raw is not None and raw != entry["suggested"][lv]
+                item = _set_item(table, r, c, text + (" *" if adjusted else ""),
+                                 tooltip=f"실제 평균 {raw}% → 규칙으로 정리" if adjusted else None)
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+
+        def apply():
+            chosen = [t for t in LEVELS_AE if suggestion[t]["suggested"] and checks[t].checkState() == Qt.Checked]
+            if not chosen:
+                QMessageBox.information(dialog, "다음 시험 기준표 제안", "적용할 행을 하나 이상 골라 주세요.")
+                return
+            self._apply_preset_suggestion(suggestion, chosen)
+            dialog.accept()
+
+        buttons = QHBoxLayout()
+        buttons.addStretch(1)
+        btn_apply = QPushButton("고른 행을 기준표에 적용")
+        btn_apply.clicked.connect(apply)
+        btn_cancel = QPushButton("취소")
+        btn_cancel.clicked.connect(dialog.reject)
+        buttons.addWidget(btn_apply)
+        buttons.addWidget(btn_cancel)
+        layout.addLayout(buttons)
+        dialog.exec()
+
+    def _settled_preset_row(self, target: str, row: dict) -> dict:
+        for _ in range(10):
+            settled = self._normalize_target_rate_presets({target: row})[target]
+            if settled == row:
+                break
+            row = settled
+        return row
+
+    def _apply_preset_suggestion(self, suggestion: dict, chosen: list[str]):
+        """Replace only the chosen target rows; the current exam's table is left as is."""
+        merged = {target: dict(suggestion[target]["current"]) for target in LEVELS_AE}
+        for target in chosen:
+            if suggestion[target]["suggested"]:
+                merged[target] = self._settled_preset_row(target, dict(suggestion[target]["suggested"]))
+        self._save_target_rate_presets(merged)
+        self._send_spliter_teacher_presets(apply_current=False)
+        self.statusBar().showMessage(f"{TARGET_RATE_PRESET_TITLE}에 {', '.join(chosen)} 목표수준 제안을 적용했습니다.", 8000)
+
+    def _save_calibration_xlsx(self, report: dict):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "예측-실측 비교 저장", str(Path.home() / "Desktop" / "예측-실측_비교.xlsx"), "Excel 통합문서 (*.xlsx)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:
+            write_calibration_workbook(path, report)
+        except Exception as exc:
+            QMessageBox.critical(self, "예측-실측 비교", f"저장하지 못했습니다.\n{exc}")
+            return
+        self.statusBar().showMessage(f"예측-실측 비교를 저장했습니다 · {path}", 8000)
+
+    def show_pseudonym_mapping(self):
+        """가명과 실제 학생을 화면에만 보여 준다. 파일로 저장하지 않는다."""
+        if self.exam is None or not self.exam.students:
+            QMessageBox.information(self, "가명 ↔ 실명 확인", "먼저 분석을 실행해 주세요.")
+            return
+        rows = sorted(zip(self._student_pseudonyms(), self.exam.students), key=lambda pair: pair[0])
+        dialog = QDialog(self)
+        dialog.setWindowTitle("가명 ↔ 실명 확인")
+        layout = QVBoxLayout(dialog)
+        note = QLabel("현재 분석의 가명과 실제 학생입니다. 화면에만 표시하며 파일로 저장하지 않습니다. "
+                      "다른 사람이 볼 수 없는 곳에서 확인하세요. 열 제목을 누르면 정렬됩니다.")
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        table = QTableWidget(len(rows), 4)
+        table.setHorizontalHeaderLabels(["가명", "학급", "반/번호", "이름"])
+        table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        table.verticalHeader().setVisible(False)
+        def number_key(text) -> tuple:
+            parts = re.findall(r"\d+", str(text or ""))
+            return (0, tuple(int(part) for part in parts)) if parts else (1, str(text or ""))
+
+        for r, (pseudonym, st) in enumerate(rows):
+            _set_item(table, r, 0, pseudonym)
+            for c, value in ((1, st.grade_class), (2, st.class_no)):
+                item = NaturalItem(str(value or ""), number_key(value))  # "1/10" after "1/2"
+                item.setTextAlignment(Qt.AlignCenter)
+                table.setItem(r, c, item)
+            _set_item(table, r, 3, st.name, align_left=True)
+        table.setSortingEnabled(True)  # 열 제목을 누르면 오름차순·내림차순
+        table.sortByColumn(0, Qt.AscendingOrder)
+        table.horizontalHeader().setToolTip("열 제목을 누르면 오름차순·내림차순으로 정렬합니다.")
+        table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        layout.addWidget(table, 1)
+        btn_close = QPushButton("닫기")
+        btn_close.clicked.connect(dialog.accept)
+        layout.addWidget(btn_close, 0, Qt.AlignRight)
+        dialog.resize(520, 560)
+        dialog.exec()
+
+    def _confirm_real_identity_export(self, title: str) -> bool:
+        answer = QMessageBox.warning(
+            self, title, REAL_IDENTITY_WARNING,
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        return answer == QMessageBox.Yes
+
+    def _ask_evidence_identity_mode(self) -> bool | None:
+        """True=실명 포함, False=가명, None=취소."""
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle("예상정답률 근거 엑셀")
+        msg.setText("학생은 기본적으로 가명(학생 001, 학생 002…)으로 저장합니다.")
+        msg.setStandardButtons(QMessageBox.Save | QMessageBox.Cancel)
+        msg.setDefaultButton(QMessageBox.Save)
+        chk_real = QCheckBox(REAL_IDENTITY_CHECKBOX_TEXT)
+        msg.setCheckBox(chk_real)
+        if msg.exec() != QMessageBox.Save:
+            return None
+        if not chk_real.isChecked():
+            return False
+        return True if self._confirm_real_identity_export("예상정답률 근거 엑셀") else None
+
     def export_spliter_evidence(self):
         if self.exam is None or self.overall is None:
             QMessageBox.warning(self, "예상정답률 계산기", "먼저 분석을 실행해 주세요.")
+            return
+
+        include_identity = self._ask_evidence_identity_mode()
+        if include_identity is None:
             return
 
         safe_subject = "".join(
@@ -10452,7 +11513,7 @@ codex login status</pre>
         if not path.lower().endswith(".xlsx"):
             path += ".xlsx"
 
-        payload = self._build_spliter_evidence_payload()
+        payload = self._build_spliter_evidence_payload(include_identity=include_identity)
         students = payload["students"]
         evidence_items = payload["items"]
         select_count = len(self.exam.select_items)
@@ -10491,20 +11552,22 @@ codex login status</pre>
         msg.button(QMessageBox.Yes).setText("CSV + 그래프 PNG")
         msg.button(QMessageBox.No).setText("CSV만")
         msg.button(QMessageBox.Cancel).setText("취소")
+        chk_real = QCheckBox(REAL_IDENTITY_CHECKBOX_TEXT)
+        msg.setCheckBox(chk_real)
         ans = msg.exec()
         if ans == QMessageBox.Cancel:
             return
         with_graphs = (ans == QMessageBox.Yes)
+        include_identity = chk_real.isChecked()
+        if include_identity and not self._confirm_real_identity_export("내보내기"):
+            return
 
         out = Path(directory)
         ov = self.overall
         try:
-            self._write_csv(out / "학생결과.csv",
-                ["학번","반/번호","이름","학급","선택형","서답형","기타","지필총점","수행환산","환산점수","성취도"],
-                [[s.sid, s.class_no, s.name, s.grade_class, s.multi_score, s.serdap_score,
-                  s.etc_score, round(s.total,2), round(s.perform_score,2),
-                  round(s.final_score,2), ov.levels_arr[i]]
-                 for i, s in enumerate(self.exam.students)])
+            self._write_csv(out / "학생결과.csv", *student_result_table(
+                self.exam.students, ov.levels_arr, include_identity=include_identity,
+                pseudonyms=None if include_identity else self._student_pseudonyms()))
             self._write_csv(out / "문항분석.csv",
                 ["문항","예상난이도","정답률(%)","변별도",
                  "응답1(%)","응답2(%)","응답3(%)","응답4(%)","응답5(%)","무응답(%)",
@@ -10560,8 +11623,9 @@ codex login status</pre>
                 saved_pngs.append("07_성취기준별_정답률.png")
 
             extra = f"\n그래프 {len(saved_pngs)}장 → 그래프/ 폴더" if saved_pngs else ""
+            identity = "학생 실명 포함" if include_identity else "학생은 가명 ID로 저장"
             QMessageBox.information(self, "완료",
-                                    f"CSV 4개{extra}\n저장 위치: {out}")
+                                    f"CSV 4개{extra}\n{identity}\n저장 위치: {out}")
         except Exception as e:
             QMessageBox.critical(self, "오류", f"{e}")
 
@@ -10569,8 +11633,8 @@ codex login status</pre>
     def _write_csv(path: Path, headers, rows):
         with open(path, "w", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
-            w.writerow(headers)
-            w.writerows(rows)
+            w.writerow([csv_safe_cell(value) for value in headers])
+            w.writerows([csv_safe_cell(value) for value in row] for row in rows)
 
 
 def run():

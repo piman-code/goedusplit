@@ -50,6 +50,9 @@ a = Analysis(
     noarchive=False,
 )
 
+# Third-party demo datasets are not runtime assets for this application.
+a.datas = [entry for entry in a.datas if not entry[0].replace("\\", "/").startswith("matplotlib/mpl-data/sample_data/")]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
