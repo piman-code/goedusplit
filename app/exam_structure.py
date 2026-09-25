@@ -132,6 +132,19 @@ def _kill_process_tree(process: subprocess.Popen) -> None:
             process.kill()
 
 
+def _kordoc_env(kordoc: str) -> dict:
+    """kordoc is a Node script ("#!/usr/bin/env node"). An app opened from Finder gets a PATH without
+    Homebrew, so node was not found and every HWP failed in the installed app; add kordoc's own folder
+    (where npm put node's link) and the usual install folders."""
+    env = dict(os.environ)
+    if sys.platform.startswith("win"):
+        return env
+    extra = [str(Path(kordoc).parent), "/opt/homebrew/bin", "/usr/local/bin"]
+    current = [part for part in env.get("PATH", "").split(os.pathsep) if part]
+    env["PATH"] = os.pathsep.join(dict.fromkeys(extra + current))
+    return env
+
+
 def _read_with_kordoc(path: Path, kordoc: str) -> str:
     # On Windows kordoc.cmd runs through cmd.exe, which would interpret & | % and similar
     # characters in a file name. Hand it a copy under a fixed, safe name instead.
@@ -147,12 +160,12 @@ def _read_with_kordoc(path: Path, kordoc: str) -> str:
         try:
             process = subprocess.Popen(
                 [kordoc, str(safe), "--silent"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", errors="replace", **group,
+                text=True, encoding="utf-8", errors="replace", env=_kordoc_env(kordoc), **group,
             )
         except OSError as exc:
             raise ExamReadError("kordoc을 실행하지 못했습니다.") from exc
         try:
-            stdout, _ = process.communicate(timeout=KORDOC_TIMEOUT)
+            stdout, stderr = process.communicate(timeout=KORDOC_TIMEOUT)
         except subprocess.TimeoutExpired as exc:
             _kill_process_tree(process)
             try:
@@ -160,6 +173,8 @@ def _read_with_kordoc(path: Path, kordoc: str) -> str:
             except subprocess.TimeoutExpired:
                 pass
             raise ExamReadError("kordoc이 너무 오래 걸려 중단했습니다. HWPX나 PDF로 저장해 불러오세요.") from exc
+    if process.returncode != 0 and "node" in (stderr or "") and "No such file" in (stderr or ""):
+        raise ExamReadError("kordoc을 실행할 Node.js를 찾지 못했습니다. Node.js를 설치하거나 HWPX·PDF로 저장해 불러오세요.")
     if process.returncode != 0 or not (stdout or "").strip():
         raise ExamReadError("kordoc이 이 파일을 읽지 못했습니다.")
     return markdown_to_lines(stdout)

@@ -1,3 +1,5 @@
+import os
+import sys
 import unittest
 import zipfile
 from pathlib import Path
@@ -234,6 +236,20 @@ class ExamReadTests(unittest.TestCase):
         self.assertEqual(kwargs["encoding"], "utf-8")
         self.assertEqual(how, "kordoc(이 PC)")
         self.assertEqual(_summary(parse_exam_structure(text)), [("선택형", 1, 5.0, 1)])
+
+    @unittest.skipIf(sys.platform.startswith("win"), "PATH repair is for Finder-launched macOS apps")
+    def test_kordoc_finds_node_when_the_app_starts_with_a_minimal_path(self):
+        calls = []
+        with TemporaryDirectory() as directory:
+            hwp = Path(directory) / "paper.hwp"
+            hwp.write_bytes(b"hwp bytes")
+            with patch.dict("os.environ", {"PATH": "/usr/bin:/bin"}), \
+                 patch("app.exam_structure.find_kordoc", return_value="/opt/homebrew/bin/kordoc"), \
+                 patch("app.exam_structure.subprocess.Popen", self._fake_popen(calls)):
+                extract_exam_text(hwp)
+        path = calls[0][1]["env"]["PATH"].split(os.pathsep)
+        self.assertEqual(path[0], "/opt/homebrew/bin")      # where node's link lives next to kordoc
+        self.assertIn("/usr/bin", path)
 
     def test_kordoc_timeout_stops_the_whole_process_tree(self):
         calls = []
