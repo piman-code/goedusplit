@@ -315,6 +315,94 @@ class _MarginKeepingCanvas(FigureCanvas):
             fig.set_layout_engine(None)
 
 
+class FoldSection(QWidget):
+    """A large area (chart, table, explanation) with a header that folds it to one line.
+
+    Open by default. On a laptop screen a teacher can fold what they are not looking at; the
+    freed height goes to the other areas (also inside a QSplitter, through the maximum height),
+    and the choice is kept in the app settings under ``ui/fold/<key>``.
+    """
+    OPEN_MAX = 16777215
+
+    def __init__(self, title: str, body: QWidget, *, settings=None, key: str = "", parent=None):
+        super().__init__(parent)
+        self.body = body
+        self._settings = settings
+        self._key = f"ui/fold/{key}" if key else ""
+        self._last_open_height = 0
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        self.toggle = QToolButton()
+        self.toggle.setText(title)
+        self.toggle.setCheckable(True)
+        self.toggle.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        self.toggle.setProperty("role", "collapsebtn")
+        self.toggle.setToolTip("눌러서 이 영역을 접거나 펼칩니다. 접은 상태는 다음 실행 때도 유지됩니다.")
+        layout.addWidget(self.toggle, 0, Qt.AlignLeft)
+        layout.addWidget(body, 1)
+        opened = True
+        if settings is not None and self._key:
+            opened = str(settings.value(self._key, "1")) != "0"
+        self.toggle.setChecked(opened)
+        self._apply(opened, remember=False)
+        self.toggle.toggled.connect(self._apply)
+        if not opened:  # not in its splitter yet: hand the room over once the layout exists
+            QTimer.singleShot(0, lambda: self._fit_splitter(False))
+
+    def is_open(self) -> bool:
+        return self.toggle.isChecked()
+
+    def _apply(self, opened: bool, remember: bool = True):
+        if not opened and self.body.isVisible():
+            self._last_open_height = self.height()
+        self.body.setVisible(opened)
+        self.toggle.setArrowType(Qt.DownArrow if opened else Qt.RightArrow)
+        if opened:
+            self.setMaximumHeight(self.OPEN_MAX)
+            self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
+        else:
+            self.setMaximumHeight(self.toggle.sizeHint().height() + 4)
+            self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+        self._fit_splitter(opened)
+        if remember and self._settings is not None and self._key:
+            self._settings.setValue(self._key, "1" if opened else "0")
+
+    def _fit_splitter(self, opened: bool):
+        """A QSplitter neither gives a folded area's height to its neighbours nor gives it back on
+        unfolding (a blank gap stayed behind). Move that height to or from the largest open sibling."""
+        splitter = self.parentWidget()
+        if not isinstance(splitter, QSplitter) or splitter.orientation() != Qt.Vertical:
+            return
+        sizes = splitter.sizes()
+        index = splitter.indexOf(self)
+        if index < 0 or not sizes:
+            return
+
+        def is_open(j):
+            widget = splitter.widget(j)
+            return not isinstance(widget, FoldSection) or widget.is_open()
+
+        others = [j for j in range(len(sizes)) if j != index and is_open(j)]
+        if not others:
+            return
+        largest = max(others, key=lambda j: sizes[j])
+        if opened:
+            want = max(self._last_open_height, 160)
+            give = min(want - sizes[index], max(0, sizes[largest] - 120))
+            if give <= 0:
+                return
+            sizes[index] += give
+            sizes[largest] -= give
+        else:
+            extra = sizes[index] - self.maximumHeight()
+            if extra <= 0:
+                return
+            sizes[index] -= extra
+            sizes[largest] += extra
+        splitter.setSizes(sizes)
+
+
 class CanvasHolder(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -3466,7 +3554,9 @@ class MainWindow(QMainWindow):
         self.kpi_subject = self._kpi_card("과목", "-")
         self._kpis = [self.kpi_n, self.kpi_n_items, self.kpi_subject]
         self._relayout_kpis(cols=3)
-        layout.addLayout(self.kpi_grid)
+        kpi_box = QWidget()
+        kpi_box.setLayout(self.kpi_grid)
+        layout.addWidget(self._fold("data.summary", "요약", kpi_box))
 
         self.data_empty_state = QFrame()
         self.data_empty_state.setProperty("role", "card")
@@ -3597,13 +3687,13 @@ class MainWindow(QMainWindow):
         self.lbl_normal_note.setProperty("role", "muted"); self.lbl_normal_note.setWordWrap(True)
         normal_layout.addWidget(self.lbl_normal_note)
         self.score_chart_tabs.addTab(normal_page, "정규분포·점검")
-        data_split.addWidget(self.score_chart_tabs)
+        data_split.addWidget(self._fold("data.chart", "점수 분포 그래프", self.score_chart_tabs))
 
         self.table_data = QTableWidget(0, 0)
         _setup_table(self.table_data, word_wrap=False, horizontal_scroll=True)
         self.table_data.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.table_data.setSortingEnabled(True)  # 헤더 클릭으로 정렬
-        data_split.addWidget(self.table_data)
+        data_split.addWidget(self._fold("data.table", "학생별 결과 표", self.table_data))
 
         data_split.setStretchFactor(0, 1); data_split.setStretchFactor(1, 2)
         data_split.setSizes([240, 380])
@@ -3616,7 +3706,7 @@ class MainWindow(QMainWindow):
             "상담 모드(Ctrl+Shift+H)를 켜면 검색 학생 외 이름과 반/번호를 가립니다."
         )
         self.lbl_data_note.setProperty("role", "muted"); self.lbl_data_note.setWordWrap(True)
-        layout.addWidget(self.lbl_data_note)
+        layout.addWidget(self._fold("data.note", "표 읽는 법", self.lbl_data_note))
 
     # ---- 학생 포트폴리오 ----------------------------------------------
     def _init_tab_portfolio(self):
@@ -3678,6 +3768,9 @@ class MainWindow(QMainWindow):
         self.refresh_portfolio_tab()
 
     # ---- 모니터링 ------------------------------------------------------
+    def _fold(self, key: str, title: str, body: QWidget) -> FoldSection:
+        return FoldSection(title, body, settings=getattr(self, "settings", None), key=key)
+
     def _make_collapsible_panel(self, title: str, body: QWidget, *, opened: bool = True) -> QFrame:
         panel = QFrame()
         panel.setProperty("role", "card")
@@ -3796,7 +3889,7 @@ class MainWindow(QMainWindow):
         body = QSplitter(Qt.Vertical)
         self.canvas_monitor = CanvasHolder()
         self.canvas_monitor.setMinimumHeight(self._px(170))
-        body.addWidget(self.canvas_monitor)
+        body.addWidget(self._fold("monitor.chart", "기준 비교 그래프", self.canvas_monitor))
 
         flow_note = QLabel(
             "점검 흐름: 1단계 A 비율 변화 확인 → 2단계 대상교·학생 특성 확인 → "
@@ -3813,11 +3906,11 @@ class MainWindow(QMainWindow):
         _setup_table(self.table_monitor, word_wrap=True, horizontal_scroll=True, row_height=42)
         self.table_monitor.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         table_layout.addWidget(self.table_monitor, 1)
-        body.addWidget(table_wrap)
+        body.addWidget(self._fold("monitor.table", "점검 표", table_wrap))
         body.setStretchFactor(0, 1); body.setStretchFactor(1, 2)
         body.setSizes([260, 360])
         monitor_split = QSplitter(Qt.Vertical)
-        monitor_split.addWidget(top_area)
+        monitor_split.addWidget(self._fold("monitor.inputs", "현재 값과 비교 기준 입력", top_area))
         monitor_split.addWidget(body)
         monitor_split.setStretchFactor(0, 0)
         monitor_split.setStretchFactor(1, 1)
@@ -4070,17 +4163,17 @@ class MainWindow(QMainWindow):
         self.canvas_level_means = CanvasHolder()
         top_l.addWidget(self.canvas_level_stack, 1)
         top_l.addWidget(self.canvas_level_means, 1)
-        ov_split.addWidget(top_widget)
+        ov_split.addWidget(self._fold("overview.levels", "성취수준 비율·평균 그래프", top_widget))
 
         # 가운데: 성취수준 표
         self.table_level = QTableWidget(0, 5)
         self.table_level.setHorizontalHeaderLabels(["성취수준", "학생수", "비율(%)", "평균(원점수)", "표준편차"])
         _setup_table(self.table_level)
-        ov_split.addWidget(self.table_level)
+        ov_split.addWidget(self._fold("overview.table", "성취수준 표", self.table_level))
 
         # 아래: 학급별 평균
         self.canvas_class = CanvasHolder()
-        ov_split.addWidget(self.canvas_class)
+        ov_split.addWidget(self._fold("overview.classes", "학급별 평균 그래프", self.canvas_class))
 
         ov_split.setSizes([340, 200, 280])
         ov_split.setStretchFactor(0, 3); ov_split.setStretchFactor(1, 1); ov_split.setStretchFactor(2, 2)
@@ -4112,7 +4205,9 @@ class MainWindow(QMainWindow):
         }
         for i, card in enumerate(self.perform_cards.values()):
             grid.addWidget(card, 0, i)
-        layout.addLayout(grid)
+        perform_cards_box = QWidget()
+        perform_cards_box.setLayout(grid)
+        layout.addWidget(self._fold("perform.summary", "요약", perform_cards_box))
 
         split = QSplitter(Qt.Vertical)
 
@@ -4122,7 +4217,7 @@ class MainWindow(QMainWindow):
         self.canvas_perform_scatter = CanvasHolder()
         chart_layout.addWidget(self.canvas_perform_area, 1)
         chart_layout.addWidget(self.canvas_perform_scatter, 1)
-        split.addWidget(chart_row)
+        split.addWidget(self._fold("perform.charts", "영역별·지필-수행 그래프", chart_row))
 
         table_tabs = QTabWidget()
         self.perform_table_tabs = table_tabs
@@ -4210,7 +4305,7 @@ class MainWindow(QMainWindow):
         recalc_layout.addWidget(recalc_split, 1)
         table_tabs.addTab(recalc_page, "분할점수 재산정")
 
-        split.addWidget(table_tabs)
+        split.addWidget(self._fold("perform.tables", "수행평가 표", table_tabs))
         split.setStretchFactor(0, 1)
         split.setStretchFactor(1, 2)
         split.setSizes([300, 430])
@@ -4421,7 +4516,7 @@ class MainWindow(QMainWindow):
         )
         sub.setWordWrap(True)
         sub.setStyleSheet("color:#888;")
-        layout.addWidget(sub)
+        layout.addWidget(self._fold("items.terms", "용어 설명", sub))
 
         # 통합 문항분석 테이블 — 컬럼이 16개라 가로스크롤 허용
         headers = ["문항", "예상난이도", "정답률(%)", "변별도",
@@ -4461,17 +4556,18 @@ class MainWindow(QMainWindow):
         self._serdap_bar_delegate = ItemBarDelegate(self.table_serdap)
         self.table_serdap.setItemDelegateForColumn(5, self._serdap_bar_delegate)
         self.table_serdap.setItemDelegateForColumn(6, self._serdap_bar_delegate)
-        layout.addWidget(self.table_serdap)
+        sub2.setVisible(False)  # the fold header below carries this title
+        layout.addWidget(self._fold("items.serdap", "서답형 문항 분석 결과", self.table_serdap))
 
         # 표와 보조 차트 사이를 splitter로 감싸 비율 조절 가능
         body = QSplitter(Qt.Vertical)
-        body.addWidget(self.table_items)
+        body.addWidget(self._fold("items.table", "선다형 문항 표", self.table_items))
         chart_row = QWidget(); chr_l = QHBoxLayout(chart_row); chr_l.setContentsMargins(0,0,0,0)
         self.canvas_pvalue = CanvasHolder()
         self.canvas_discr = CanvasHolder()
         chr_l.addWidget(self.canvas_pvalue, 1)
         chr_l.addWidget(self.canvas_discr, 1)
-        body.addWidget(chart_row)
+        body.addWidget(self._fold("items.charts", "정답률·변별도 그래프", chart_row))
         body.setStretchFactor(0, 2); body.setStretchFactor(1, 1)
         body.setSizes([400, 280])
         layout.addWidget(body, 1)
@@ -4498,10 +4594,10 @@ class MainWindow(QMainWindow):
         self.table_choice.setHorizontalHeaderLabels(
             ["성취수준", "정답률(%)", "1", "2", "3", "4", "5", "무응답"])
         _setup_table(self.table_choice)
-        choice_split.addWidget(self.table_choice)
+        choice_split.addWidget(self._fold("choice.table", "성취수준별 응답 표", self.table_choice))
         # 답지반응분포 차트
         self.canvas_choice = CanvasHolder()
-        choice_split.addWidget(self.canvas_choice)
+        choice_split.addWidget(self._fold("choice.chart", "답지반응 그래프", self.canvas_choice))
         choice_split.setStretchFactor(0, 1); choice_split.setStretchFactor(1, 2)
         choice_split.setSizes([240, 360])
         layout.addWidget(choice_split, 1)
@@ -4528,11 +4624,11 @@ class MainWindow(QMainWindow):
         self.table_std.setItemDelegateForColumn(2, self._std_bar_delegate)
         # 표/차트를 splitter로 묶어서 사용자가 비율 조절 + 차트는 ScrollArea로 잘림 방지
         std_split = QSplitter(Qt.Vertical)
-        std_split.addWidget(self.table_std)
+        std_split.addWidget(self._fold("standard.table", "성취기준 표", self.table_std))
         self.canvas_std = CanvasHolder()
         std_chart_scroll = QScrollArea(); std_chart_scroll.setWidgetResizable(True)
         std_chart_scroll.setWidget(self.canvas_std)
-        std_split.addWidget(std_chart_scroll)
+        std_split.addWidget(self._fold("standard.chart", "성취기준 그래프", std_chart_scroll))
         std_split.setStretchFactor(0, 2); std_split.setStretchFactor(1, 3)
         std_split.setSizes([280, 420])
         layout.addWidget(std_split, 1)

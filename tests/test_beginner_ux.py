@@ -14,7 +14,7 @@ from PySide6.QtWidgets import QApplication, QScrollArea, QTableWidget
 
 from app import charts
 from app.calibration import headline_lines
-from app.main_window import MainWindow, _MarginKeepingCanvas, build_data_empty_state_html
+from app.main_window import FoldSection, MainWindow, _MarginKeepingCanvas, build_data_empty_state_html
 from app.widgets import NaturalItem, install_frozen_columns
 try:
     from test_calibration import _exam
@@ -174,6 +174,32 @@ class WindowTests(unittest.TestCase):
         note = self.window.lbl_portfolio_note
         self.assertNotIn("appdata", note.text())
         self.assertIn("appdata", note.toolTip())
+
+    def test_large_areas_fold_give_their_room_away_and_remember_it(self):
+        self.analyze()
+        self.window.tabs.setCurrentWidget(self.window.tab_data)
+        self.settle()
+        folds = {fold._key.split("/")[-1]: fold for fold in self.window.findChildren(FoldSection)}
+        for key in ("data.chart", "items.charts", "overview.levels", "monitor.inputs", "standard.chart", "choice.chart"):
+            self.assertTrue(folds[key].is_open(), key)                 # open by default
+        chart, table = folds["data.chart"], folds["data.table"]
+        before = table.height()
+        chart.toggle.click()
+        self.settle()
+        self.assertFalse(chart.body.isVisible())
+        self.assertLessEqual(chart.height(), chart.toggle.sizeHint().height() + 4)
+        self.assertGreater(table.height(), before + 50)                # the table got the chart's room
+        self.assertEqual(self.window.settings.value("ui/fold/data.chart"), "0")
+        chart.toggle.click()
+        self.settle()
+        self.assertTrue(chart.body.isVisible())
+        self.assertGreaterEqual(chart.height(), 150)                   # room taken back on unfolding
+        chart.toggle.click()
+        self.settle()
+        again = MainWindow()                                           # the next launch keeps it folded
+        self.addCleanup(again.close)
+        folded = next(f for f in again.findChildren(FoldSection) if f._key.endswith("data.chart"))
+        self.assertFalse(folded.is_open())
 
 
 if __name__ == "__main__":
