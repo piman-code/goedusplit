@@ -98,6 +98,11 @@ except Exception:
     QWebEngineView = None
 
 try:
+    from PySide6.QtQuickWidgets import QQuickWidget
+except Exception:
+    QQuickWidget = None
+
+try:
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineDownloadRequest
 except Exception:
     QWebEnginePage = None
@@ -8927,6 +8932,17 @@ codex login status</pre>
         right = QLabel(f"{APP_COPYRIGHT}   v{APP_VERSION}")
         right.setProperty("role", "muted")
         sb.addPermanentWidget(right)
+        # The calculator's web view draws through the GPU (Metal on macOS). When it first appeared,
+        # Qt destroyed and recreated the whole window's native surface to switch it to GPU drawing,
+        # which on a Mac looked like the app closing and starting again on the first click of the
+        # 예상정답률 tab. A 1x1 GPU widget present from the start makes the window GPU-drawn from the
+        # beginning, so nothing is recreated later.
+        if QWebEngineView is not None and QQuickWidget is not None:
+            self._gpu_surface_anchor = QQuickWidget()
+            self._gpu_surface_anchor.setFixedSize(1, 1)
+            self._gpu_surface_anchor.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self._gpu_surface_anchor.setFocusPolicy(Qt.NoFocus)
+            sb.addPermanentWidget(self._gpu_surface_anchor)
 
     def _on_theme_changed(self, eff: str):
         charts.set_theme(self.theme.colors)
@@ -9964,15 +9980,30 @@ codex login status</pre>
             return {level: float(stats.p_by_level.get(level, 0)) * 100 for level in LEVELS_AE}
         return self._serdap_analysis_rates()
 
+    def _analysis_observed_targets(self) -> dict:
+        """(type, number) -> A~E from this analysis' borderline students.
+
+        The same rule as the exam paper import and the comparison's '실측 목표': the preset row
+        closest to how the students nearest each cut did. It replaced "the lowest level whose
+        students answer half or more", so every place that proposes a target now agrees.
+        """
+        if self.exam is None or self.overall is None or getattr(self.overall, "levels_arr", None) is None:
+            return {}
+        if not self.exam.students:
+            return {}
+        designs = [
+            {"type": item.item_type, "number": int(item.number), "difficulty": item.difficulty or "보통", "target": "",
+             "points": float(item.score or 0) or 1.0, "rates": dict.fromkeys(LEVELS_AE, 0.0), "source_item": item}
+            for item in self.exam.items
+        ]
+        try:
+            report = build_calibration(designs, self.exam, list(self.overall.levels_arr), rates_for=self._target_level_rates)
+        except Exception:
+            return {}
+        return observed_targets(report)
+
     def _item_default_target_level(self, item) -> str:
-        item_type = self._normalize_neis_item_type(getattr(item, "item_type", ""))
-        if item_type == "선택형":
-            stats = self._item_stats_by_neis_key().get(self._neis_item_key(item))
-            if stats:
-                p_by_level = getattr(stats, "p_by_level", {}) or {}
-                for level in ["E", "D", "C", "B", "A"]:
-                    if p_by_level.get(level, -1) >= 0.5:
-                        return level
+        """Fallback when the data cannot tell (too few borderline students): the difficulty rule."""
         difficulty = (getattr(item, "difficulty", "") or "").strip()
         if difficulty == "쉬움":
             return "E"
@@ -10161,6 +10192,7 @@ codex login status</pre>
         return {self._neis_item_key(item): item for item in self.exam.items}
 
     def _default_neis_design_items(self) -> list[dict]:
+        observed = self._analysis_observed_targets()
         if self.exam is None:
             return []
         designs = []
@@ -10182,7 +10214,7 @@ codex login status</pre>
                 "type": item_type,
                 "difficulty": getattr(item, "difficulty", "") or "보통",
                 "points": round(float(getattr(item, "score", 0) or 0), 2),
-                "target": self._item_default_target_level(item),
+                "target": observed.get((item_type, int(getattr(item, "number", 0) or 0))) or self._item_default_target_level(item),
                 "standard": " ".join(
                     part for part in [getattr(item, "standard_code", ""), getattr(item, "standard", "")]
                     if part
@@ -10618,7 +10650,8 @@ codex login status</pre>
         layout.setSpacing(10)
         note = QLabel(
             "문항별 입력값은 그대로 보존합니다. NEIS 표는 문항구분·난이도별 배점가중평균을 구한 뒤 "
-            "A~E 모두 5% 단위로 반올림한 값입니다."
+            "A~E 모두 5% 단위로 반올림한 값입니다. 분석 자료로 채운 목표수준은 시험지 가져오기·예측-실측 비교의 "
+            "'실측 목표'와 같은 규칙(경계 학생의 실제 정답률에 가장 가까운 기준표 줄)이며, 경계 학생이 부족한 문항만 난이도로 정합니다."
         )
         note.setProperty("role", "muted")
         note.setWordWrap(True)

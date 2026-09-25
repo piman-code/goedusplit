@@ -315,6 +315,16 @@ class CalibrationWindowTests(unittest.TestCase):
         self.assertEqual(window._observed_import_targets(self._paper_rows((30.0, 50.0, 20.0))), ({}, ""))
         self.assertEqual(window._observed_import_targets(self._paper_rows()[:2]), ({}, ""))
 
+    def test_neis_table_defaults_use_the_same_observed_targets_as_the_import(self):
+        window = self._import_window()
+        designs = window._default_neis_design_items()
+        targets = {(d["type"], d["number"]): d["target"] for d in designs}
+        # the difficulty rule would give 쉬움→E, 어려움→B, 보통→C; the students say all three are target A
+        self.assertEqual(targets, {("선택형", 1): "A", ("선택형", 2): "A", ("서답형", 1): "A"})
+        self.assertEqual(targets, window._observed_import_targets(self._paper_rows())[0])
+        window.exam.students = []                       # no data: the difficulty rule
+        self.assertEqual([d["target"] for d in window._default_neis_design_items()], ["E", "B", "C"])
+
     def test_paper_must_name_subject_year_and_semester_of_the_analysis(self):
         window = self._import_window()
         window.exam.subject, window.exam.semester = "공통수학1(4)", "2026학년도 1학기"
