@@ -169,6 +169,23 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(status[0], "기준 입력 필요")
         self.assertEqual(self.window._monitor_z_status(27.0, 20.0, 5.0)[0], "Ⅱ 주의")
 
+    def test_portfolio_lists_classes_in_number_order(self):
+        def row(class_no, name):
+            return {"saved_at": "2026-09-25T10:00:00", "subject": "합성", "term": "2026학년도 1학기", "class_no": class_no,
+                    "name": name, "level": "C", "grade9": "5", "grade5": "3", "score": 70.0, "student_key": name}
+        rows = [row(c, f"합성{i}") for i, c in enumerate(["10/1", "2/1", "1/2", "11/1", "1/10", "1/1"])]
+        with patch.object(MainWindow, "_load_portfolio_rows", return_value=rows):
+            self.window.refresh_portfolio_tab()
+        expected = ["1/1", "1/2", "1/10", "2/1", "10/1", "11/1"]   # not 1/1, 1/10, 1/2, 10/1, 11/1, 2/1
+        table = self.window.table_portfolio
+        self.assertEqual([table.item(r, 3).text() for r in range(table.rowCount())], expected)
+        combo = self.window.combo_portfolio_student
+        labels = [combo.itemText(i) for i in range(1, combo.count())]
+        self.assertEqual([label.split("(")[1].split(")")[0] for label in labels], expected)
+
+    def test_search_example_uses_a_made_up_name(self):
+        self.assertIn("홍길동", self.window.le_search.placeholderText())
+
     def test_portfolio_note_leaves_the_folder_path_to_its_button(self):
         self.window.refresh_portfolio_tab()
         note = self.window.lbl_portfolio_note
