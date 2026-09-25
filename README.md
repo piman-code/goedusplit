@@ -3,24 +3,24 @@
 성취평가 결과 분석과 예상정답률 설계를 돕는 Windows/macOS 데스크톱 앱입니다.
 
 제작자: 이준서  
-버전: 1.0.4
+버전: 1.0.5
 © 2026 이준서. All rights reserved.
 
 Goedu-Split은 NEIS 정오표와 문항정보표를 선생님 PC에서 분석하는 로컬 실행형 도구입니다. 학생 성적 자료를 자동으로 서버에 올리지 않습니다.
 
 ## 선생님용 다운로드
 
-소스코드를 내려받을 필요 없이 완성된 배포 파일을 받으면 됩니다. 오른쪽 또는 상단의 **Releases**에서 최신 버전 `v1.0.4`를 엽니다.
+소스코드를 내려받을 필요 없이 완성된 배포 파일을 받으면 됩니다. 오른쪽 또는 상단의 **Releases**에서 최신 버전 `v1.0.5`를 엽니다.
 
 ### Windows
 
-1. **Assets**에서 `Goedu-Split-1.0.4-windows-setup.exe`(설치형) 또는 `Goedu-Split-1.0.4-windows.zip`(압축형)을 받습니다.
+1. **Assets**에서 `Goedu-Split-1.0.5-windows-setup.exe`(설치형) 또는 `Goedu-Split-1.0.5-windows.zip`(압축형)을 받습니다.
 2. 설치형은 더블클릭해 안내대로 설치합니다. 압축형은 zip을 우클릭해 **모두 압축 풀기** 후 폴더 안의 `Goedu-Split.exe`를 실행합니다. `Goedu-Split.exe`만 따로 꺼내지 말고 폴더 전체를 그대로 쓰세요.
 3. Windows 보안 안내가 뜨면 파일 출처를 확인한 뒤 **추가 정보 > 실행**을 선택합니다.
 
 ### macOS
 
-1. **Assets**에서 `Goedu-Split-1.0.4-mac.dmg`를 받아 엽니다.
+1. **Assets**에서 `Goedu-Split-1.0.5-mac.dmg`를 받아 엽니다.
 2. `Goedu-Split.app`을 옆의 `Applications` 폴더로 끌어다 놓습니다.
 3. 처음 실행할 때 '확인되지 않은 개발자' 안내가 뜨면 Finder의 응용 프로그램 폴더에서 앱을 **우클릭 > 열기**로 한 번 엽니다.
 4. HWP 시험지를 읽으려면 이 Mac에 Node.js와 kordoc이 설치되어 있어야 합니다(HWPX·PDF는 없어도 됩니다).
@@ -31,9 +31,9 @@ Goedu-Split은 NEIS 정오표와 문항정보표를 선생님 PC에서 분석하
 
 | 파일 | SHA256 |
 | --- | --- |
-| `Goedu-Split-1.0.4-windows-setup.exe` | `272E6903B77CB52E786D45D7D07C5B451B1CEF7EA2C37BCFF7AC824F460F3FF6` |
-| `Goedu-Split-1.0.4-windows.zip` | `DA8DF3A506EB887773F028374FD1FFEAE5B65002C0854F481AFEC7B3F21B62DB` |
-| `Goedu-Split-1.0.4-mac.dmg` | `842DA96F086D5F6CCFCA5B82B4E49345557A6D75A0BA5F96CA471FC7A3BDC6E1` |
+| `Goedu-Split-1.0.5-windows-setup.exe` | `E075124E609C2021A9E6F7AAE7DA97008E23ABC8B0EB12945230E08D813D024B` |
+| `Goedu-Split-1.0.5-windows.zip` | `45630DA4FB481123E3E6F7E351446872DF0E17489C9AB63A850A0CF2DC98E6E2` |
+| `Goedu-Split-1.0.5-mac.dmg` | `4EDC762E17CDEE5FDE71A3CDE21A299946195412CA8CEA6B21241DA4FE7875DE` |
 
 Windows PowerShell: `Get-FileHash -Algorithm SHA256 .\파일이름` · macOS 터미널: `shasum -a 256 파일이름`
 
@@ -110,7 +110,7 @@ python build_scripts\windows_release_audit.py --source .
 python -m PyInstaller --noconfirm --clean goedusplit.spec
 python build_scripts\slim_windows_dist.py dist\Goedu-Split
 python build_scripts\privacy_release_audit.py dist\Goedu-Split
-Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.4-windows.zip
+Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.5-windows.zip
 ```
 
 ## 라이선스와 사용 범위
