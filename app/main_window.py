@@ -1689,8 +1689,9 @@ class MainWindow(QMainWindow):
                 if row.get("subject"):
                     data["subjects"].add(row["subject"])
                 data["records"] += 1
+            # 반/번호 as numbers: as text "10/1" and "11/1" came between 1반 and 2반.
             ordered = sorted(grouped.items(), key=lambda item: (
-                str(item[1]["row"].get("class_no", "")),
+                _class_no_sort_value(str(item[1]["row"].get("class_no", ""))),
                 str(item[1]["row"].get("name", "")),
             ))
             self.combo_portfolio_student.blockSignals(True)
@@ -1728,12 +1729,18 @@ class MainWindow(QMainWindow):
                     item = NaturalItem(value, row["score"])
                     item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                     self.table_portfolio.setItem(r, c, item)
+                elif c == 3:
+                    item = NaturalItem(value, _class_no_sort_value(str(value)))
+                    item.setTextAlignment(Qt.AlignCenter)
+                    item.setData(PRIVACY_REAL_TEXT_ROLE, value)
+                    self.table_portfolio.setItem(r, c, item)
                 else:
                     item = _set_item(self.table_portfolio, r, c, value, align_left=c in (1, 2, 4))
                     if c in (3, 4):
                         item.setData(PRIVACY_REAL_TEXT_ROLE, value)
                 self.table_portfolio.item(r, c).setData(PORTFOLIO_STUDENT_KEY_ROLE, student_key)
         self.table_portfolio.setSortingEnabled(True)
+        self.table_portfolio.sortItems(3, Qt.AscendingOrder)  # 1반, 2반 … 10반 (Qt's default would sort by date, descending)
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
             # The full folder path was long and technical here; the '저장 위치' button shows and opens it.
@@ -3601,7 +3608,7 @@ class MainWindow(QMainWindow):
         search_row = QHBoxLayout()
         search_row.addWidget(QLabel("학생 검색:"))
         self.le_search = QLineEdit()
-        self.le_search.setPlaceholderText("이름 또는 반/번호 입력 · 여러 명은 쉼표로 구분 (예: 학생예시, 학생예시, 1/3)")
+        self.le_search.setPlaceholderText("이름 또는 반/번호 입력 · 여러 명은 쉼표로 구분 (예: 홍길동, 1/3)")
         self.le_search.setMinimumWidth(self._px(160))
         self.le_search.textChanged.connect(self._filter_data_table)
         search_row.addWidget(self.le_search, 1)
