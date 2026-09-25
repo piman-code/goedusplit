@@ -3,7 +3,7 @@
 어느 플랫폼(Codex, Claude Code, Kilo 등)이든 이 파일과 git 기록만으로 이어서 작업할 수 있게 유지한다.
 완료 조건 하나를 끝낼 때마다 **테스트 → 이 파일 갱신 → 로컬 커밋** 순서로 남긴다. 끝에 몰아서 쓰지 않는다.
 
-- 마지막 갱신: 2026-09-25 KST (초보자 관점 UI/UX 14개 항목)
+- 마지막 갱신: 2026-09-25 KST (노트북 접기, 1.0.4 앱 빌드·설치·릴리스)
 - 작업 브랜치: `work/1.0.3-hardening`
 - 마지막 체크포인트 커밋: 이 파일을 마지막으로 바꾼 커밋 (`git log -1 -- docs/HANDOFF.md`로 확인)
 
@@ -255,6 +255,19 @@ NEIS 정오표·문항정보표 기반 성취평가 분석과 **추정분할점�
   L1 '0/0 · 72%' 칸도 '직접' 표시. L2 모니터링 표 문구의 σ도 SD·'표준편차의 n배'로. L3 160% 배율에서 상단 줄 폭 → 실제로 들어가는지 재서
   안 들어가면 '화면 크기'·'기본'·'밝기' 글자만 뺌(입력 패널·상담 모드 글자는 유지). 측정: 100~160% × 1180~1440px 모두 들어감.
 - 미확인: 다크 모드, Windows, 실제 macOS 글꼴 렌더링. 계산기 '직접' 표시는 캡처로만 확인(자동 테스트 없음).
+
+## 노트북 화면 접기와 1.0.4 앱·릴리스 (2026-09-25)
+
+사용자 결정: 탭 안의 큰 영역 전부 접기(기본 펼침), GitHub는 main 병합 + 릴리스, 버전 1.0.4, 설치 위치 /Applications.
+- `FoldSection`: 각 탭의 요약·그래프·표·안내 영역 머리에 ▼ 제목. 접으면 그 높이를 펼쳐진 가장 큰 옆 영역에 넘기고(QSplitter는 스스로 안 넘김),
+  펼치면 되찾음. 상태는 설정 `ui/fold/<key>`에 저장. 테스트 `test_large_areas_fold_give_their_room_away_and_remember_it`.
+- **설치 앱에서 HWP가 안 되던 문제**(빌드 후 발견): kordoc은 `#!/usr/bin/env node` 스크립트라 Finder로 연 앱의 최소 PATH에서
+  `env: node: No such file`로 실패. kordoc 폴더·/opt/homebrew/bin·/usr/local/bin을 PATH에 더해 실행(`_kordoc_env`). 최소 PATH로 실제 HWP 20문항·100점 확인.
+- 빌드: `build_scripts/build_mac.sh`(테스트 164, Node 43, 개인정보 감사, ad-hoc 서명). 스크립트는 `dist/Goedu-Split.app`뿐 아니라 PyInstaller 중간
+  폴더 `dist/Goedu-Split`이 있어도 멈춘다 — 재빌드 전 둘 다 치울 것. `pack_mac.sh`는 `rm -rf`를 쓰므로 같은 과정을 임시 폴더에서 직접 수행(ditto + hdiutil).
+  최소 환경 실행 20초 이상 확인. 7월 1.0.1 빌드는 `dist.old.<시각>/`에 보관.
+- 설치: `/Applications/Goedu-Split.app` 1.0.4(서명 검증 통과). Windows 산출물은 CI run 36138580095(b43bab3)에서 받음.
+- SHA256은 README 표. 공개 저장소이므로 main 병합 전 전체 범위 gitleaks 검사.
 
 ## 기타 확인 (2026-09-24)
 
