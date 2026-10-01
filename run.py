@@ -28,7 +28,9 @@ def _configure_frozen_webengine() -> None:
 
 _configure_frozen_webengine()
 
-from app.main_window import run
-
 if __name__ == "__main__":
+    if "--synthetic-qa" in sys.argv:
+        from app.synthetic_qa import main
+        raise SystemExit(main())
+    from app.main_window import run
     run()

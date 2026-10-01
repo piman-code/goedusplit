@@ -171,6 +171,63 @@ class WindowsReleaseAuditTests(unittest.TestCase):
             self.assertIn("source symlink is not allowed: app/main_window.py", findings)
             self.assertIn("source symlink is not allowed: outside-dir", findings)
 
+    def test_mock_junction_is_rejected_before_descent_or_any_content_read(self):
+        junction = self.root / "assets/external-junction"
+        junction.mkdir()
+        (junction / "student.xlsx").write_bytes(b"synthetic external fixture")
+        real_scandir = os.scandir
+        def no_external_descent(path):
+            self.assertNotEqual(Path(path), junction)
+            self.assertNotIn(junction, Path(path).parents)
+            return real_scandir(path)
+        for method in (audit.audit_source, audit.audit_repository):
+            with self.subTest(mode=method.__name__), \
+                    patch.object(Path, "is_junction", lambda path: path == junction, create=True), \
+                    patch.object(audit.os, "scandir", side_effect=no_external_descent), \
+                    patch.object(audit, "_read_text", side_effect=AssertionError("no content read")), \
+                    patch.object(audit.subprocess, "run", side_effect=AssertionError("no Git inventory before link rejection")):
+                self.assertIn("source junction is not allowed: assets/external-junction", method(self.root))
+
+    def test_requested_root_and_ancestor_junctions_are_not_resolved_away(self):
+        for linked in (self.root, self.root.parent):
+            with self.subTest(linked=linked.name), \
+                    patch.object(Path, "is_junction", lambda path: path == linked, create=True), \
+                    patch.object(Path, "resolve", side_effect=AssertionError("do not resolve junction")), \
+                    patch.object(audit.os, "scandir", side_effect=AssertionError("do not enumerate linked root")), \
+                    patch.object(audit.subprocess, "run", side_effect=AssertionError("do not run Git in linked root")):
+                self.assertEqual(["source root junction is not allowed"], audit.audit_source(self.root))
+                self.assertEqual(["source root junction is not allowed"], audit.audit_repository(self.root))
+                with contextlib.redirect_stderr(io.StringIO()):
+                    self.assertEqual(1, audit.main(["--source", str(self.root), "--repository"]))
+
+    def test_packaged_cache_named_directories_do_not_hide_nested_junctions(self):
+        for location in ("assets/__pycache__/linked", "app/spliter_ox_web/__pycache__/linked"):
+            junction = self.root / location
+            junction.mkdir(parents=True)
+            with self.subTest(location=location), \
+                    patch.object(Path, "is_junction", lambda path: path == junction, create=True), \
+                    patch.object(audit, "_read_text", side_effect=AssertionError("no content read")), \
+                    patch.object(audit.subprocess, "run", side_effect=AssertionError("no Git inventory before link rejection")):
+                self.assertIn(f"source junction is not allowed: {location}", audit.audit_repository(self.root))
+
+    @unittest.skipUnless(os.name == "nt" and hasattr(Path, "is_junction"), "requires actual Windows junction support")
+    def test_real_windows_junction_is_rejected_without_external_descent(self):
+        self.repository()
+        with tempfile.TemporaryDirectory() as external:
+            junction = self.root / "assets/external-junction"
+            result = subprocess.run(["cmd", "/c", "mklink", "/J", str(junction), external], capture_output=True)
+            if result.returncode:
+                self.skipTest("Windows junction creation unavailable")
+            self.assertTrue(junction.is_junction())
+            real_scandir = os.scandir
+            def no_external_descent(path):
+                self.assertNotEqual(Path(path), junction)
+                return real_scandir(path)
+            with patch.object(audit.os, "scandir", side_effect=no_external_descent), \
+                    patch.object(audit, "_read_text", side_effect=AssertionError("no content read")):
+                self.assertIn("source junction is not allowed: assets/external-junction", audit.audit_source(self.root))
+                self.assertIn("source junction is not allowed: assets/external-junction", audit.audit_repository(self.root))
+
     def test_repository_requires_git_and_tracked_required_files(self):
         self.assertTrue(audit.audit_repository(self.root))
         self.repository()
@@ -216,7 +273,7 @@ class WindowsBuildSafetyTests(unittest.TestCase):
         self.assertIn('if exist .git set "audit_mode=--repository"', source)
         self.assertLess(source.index("if exist dist"), source.index('"%build_python%" --version'))
         for command in ("windows_release_audit.py --source . %audit_mode%",
-                        "build_scripts\\preflight.py",
+                        "build_scripts\\build_preflight.py",
                         "-m pip check", '"%build_python%" run_tests.py',
                         "node --test tests/test_expected_rate_web.cjs",
                         "-m pyinstaller --noconfirm goedusplit.spec",

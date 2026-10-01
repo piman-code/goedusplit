@@ -31,7 +31,7 @@ set "AUDIT_MODE="
 if exist .git set "AUDIT_MODE=--repository"
 "%BUILD_PYTHON%" build_scripts\windows_release_audit.py --source . %AUDIT_MODE%
 if errorlevel 1 exit /b 1
-"%BUILD_PYTHON%" build_scripts\preflight.py
+"%BUILD_PYTHON%" build_scripts\build_preflight.py
 if errorlevel 1 exit /b 1
 
 echo [2/8] 기존 의존성 확인 - 자동 설치 없음

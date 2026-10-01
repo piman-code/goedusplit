@@ -14,6 +14,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from build_scripts.build_identity import verify as verify_build
+from app.synthetic_qa import REQUIRED_CHECKS
 
 def validate_identity(version, commit):
     if not re.fullmatch(r'\d+\.\d+\.\d+', version) or not re.fullmatch(r'[0-9a-f]{40}', commit):
@@ -40,7 +41,7 @@ def filenames(version, target):
     raise ValueError('Unknown target')
 
 
-def collect(root, version, target, expected_commit, output):
+def collect(root, version, target, expected_commit, output, qa_report):
     validate_identity(version, expected_commit)
     validate_platform(target, platform.system(), platform.machine())
     commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=root, text=True).strip()
@@ -54,15 +55,17 @@ def collect(root, version, target, expected_commit, output):
         raise ValueError('Requested candidate version differs from app version')
     app = root / 'dist' / ('Goedu-Split.app' if target == 'macos' else 'Goedu-Split')
     identity = verify_build(root, app, target, version)
+    qa = json.loads(qa_report.read_text(encoding='utf-8'))
+    validate_qa(qa, version, identity)
     sources = [root / 'dist' / name for name in filenames(version, target)]
-    sources += [root / 'distribution' / 'USER_GUIDE.md']
+    sources += [root / 'distribution' / 'USER_GUIDE.md', qa_report]
     for path in sources:
         if path.is_symlink() or not path.is_file() or not path.stat().st_size:
             raise ValueError(f'Missing/empty/symlink required output: {path.name}')
     output.mkdir(parents=True, exist_ok=False)
     hashes = {}
     for source in sources:
-        name = f'USER_GUIDE-{target}.md' if source.name == 'USER_GUIDE.md' else source.name
+        name = f'QA-{target}.json' if source == qa_report else (f'USER_GUIDE-{target}.md' if source.name == 'USER_GUIDE.md' else source.name)
         shutil.copyfile(source, output / name)
         hashes[name] = digest(output / name)
     metadata = {'version':version, 'source_commit':commit, 'source_clean':True, 'target':target,
@@ -72,6 +75,12 @@ def collect(root, version, target, expected_commit, output):
                 'build_identity':identity, 'files':hashes, 'status':'build-candidate; real-PC and teacher validation pending'}
     (output / f'BUILD-{target}.json').write_text(json.dumps(metadata, indent=2, ensure_ascii=False)+'\n', encoding='utf-8')
     return metadata
+
+def validate_qa(qa, version, identity):
+    if (qa.get('status'), qa.get('frozen'), qa.get('version'), qa.get('executable_sha256')) != ('passed',True,version,identity['executable_sha256']):
+        raise ValueError('Frozen candidate QA identity or result mismatch')
+    if set(qa.get('checks',{})) != set(REQUIRED_CHECKS) or not all(value is True for value in qa['checks'].values()) or qa.get('errors'):
+        raise ValueError('Candidate QA has missing or failed checks')
 
 
 def verify_pair(folder, version, commit):
@@ -87,7 +96,7 @@ def verify_pair(folder, version, commit):
             raise ValueError('Executable source identity differs from platform provenance')
         if not re.fullmatch(r'[0-9a-f]{64}', identity.get('executable_sha256','')):
             raise ValueError('Missing executable checksum')
-        expected = set(filenames(version, target)) | {f'USER_GUIDE-{target}.md'}
+        expected = set(filenames(version, target)) | {f'USER_GUIDE-{target}.md',f'QA-{target}.json'}
         if set(manifest['files']) != expected:
             raise ValueError('Required platform output set differs')
         for name, expected_hash in manifest['files'].items():
@@ -96,6 +105,7 @@ def verify_pair(folder, version, commit):
                 raise ValueError(f'Candidate checksum mismatch: {name}')
             hashes[name] = expected_hash
         hashes[f'BUILD-{target}.json'] = digest(folder / f'BUILD-{target}.json')
+        validate_qa(json.loads((folder / f'QA-{target}.json').read_text(encoding='utf-8')),version,identity)
     if set(p.name for p in folder.iterdir()) != set(hashes):
         raise ValueError('Unexpected files in combined candidate payload')
     if hashes['USER_GUIDE-macos.md'] != hashes['USER_GUIDE-windows.md']:
@@ -113,11 +123,13 @@ if __name__ == '__main__':
     parser.add_argument('--target', choices=['macos','windows'])
     parser.add_argument('--output', type=Path, default=Path('artifacts'))
     parser.add_argument('--verify-pair', type=Path)
+    parser.add_argument('--qa-report', type=Path)
     args=parser.parse_args()
     if args.verify_pair:
         verify_pair(args.verify_pair, args.version, args.commit)
     elif args.target:
-        collect(ROOT,args.version,args.target,args.commit,args.output)
+        if not args.qa_report: parser.error('--qa-report is required for collection')
+        collect(ROOT,args.version,args.target,args.commit,args.output,args.qa_report)
     else:
         parser.error('--target or --verify-pair is required')
     print('Candidate provenance and required files verified; real-PC acceptance remains separate.')

@@ -21,9 +21,10 @@
 - `Goedu-Split-1.0.6-windows.zip`
 - `USER_GUIDE-macos.md`, `USER_GUIDE-windows.md`
 - `BUILD-macos.json`, `BUILD-windows.json`
+- `QA-macos.json`, `QA-windows.json` (각 frozen 후보의 합성 실행 보고서)
 - `SHA256SUMS`
 
-BUILD에는 동일 source SHA·clean 여부·버전, OS·아키텍처·Python·Node·패키지 버전과 배포 파일 hash를 남긴다. 실행 파일의 빌드 출처와 hash도 묶어 이전 앱을 새 소스 버전 이름으로 포장하는 것을 막는다. Mac은 앱 내부 plist 버전도 대조한다. 합성 검사·CI는 실제 학교 사용을 대체하지 않는다.
+BUILD에는 동일 source SHA·clean 여부·버전, OS·아키텍처·Python·Node·패키지 버전과 배포 파일 hash를 남긴다. 실행 파일의 빌드 출처와 hash도 묶어 이전 앱을 새 소스 버전 이름으로 포장하는 것을 막는다. 합성 QA 보고서의 frozen·버전·실행 파일 hash·필수 12개 결과도 대조한다. Mac은 앱 내부 plist 버전도 대조한다. 합성 검사·CI는 실제 학교 사용을 대체하지 않는다.
 
 Actions artifact 보관은 14일이다. 사용자용 영구 다운로드 주소로 안내하지 않는다. 승인된 전송·내려받기 후 별도 검증 보관 폴더에 보존한다. 공개 게시 전까지 파일명과 checksum은 준비안이며 기존 README 배포 값에 섞지 않는다.
 

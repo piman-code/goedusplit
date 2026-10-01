@@ -89,6 +89,26 @@ cmd /c build_scripts\pack_windows_installer.bat
 
 빌드 스크립트는 의존성·폰트를 자동 설치하거나 내려받지 않는다. 기존 `build`·`dist`가 있으면 중단한다. 학생 입력 등이 app/assets 포장 경로에 섞이면 내용을 열기 전에 거부한다. 기존 ZIP·DMG·setup을 덮어쓰지 않는다. 실패한 후보 폴더는 보존해 로그를 조사하고, 수정 후에는 새 후보 폴더를 사용한다.
 
+## 후보 자체의 격리 QA
+
+1.0.6 후보의 명시적 `--synthetic-qa` 실행은 새 폴더에 합성 JSON·설정·포트폴리오·캐시만 만들고 사용자 저장 위치·AI·외부 URL을 사용하지 않는다. 기존 폴더가 있으면 시작 전에 거부한다. 일반 앱 실행 경로에는 이 모드를 적용하지 않는다.
+
+Mac의 **새 후보**에서:
+
+```bash
+dist/Goedu-Split.app/Contents/MacOS/Goedu-Split --synthetic-qa out_test/new-candidate-qa
+```
+
+Windows의 **새 후보** 폴더에서 cmd 터미널:
+
+```bat
+start /wait "" dist\Goedu-Split\Goedu-Split.exe --synthetic-qa out_test\new-candidate-qa
+```
+
+`QA_REPORT.json`이 `status: passed`, `frozen: true`인지 확인한다. 보고서에는 후보 실행 파일 hash와 설정·포트폴리오 격리, WebEngine 표시, 소수 배점·0/100/63.25%·여러 검토안 JSON의 실제 불러오기→다운로드→재열기, 저장 취소·탭 전환·외부 요청 없음·화면 캡처의 12개 결과를 남긴다. 소스 실행의 `frozen: false` 보고서를 후보 실행 성공으로 사용하지 않는다.
+
+CI도 새 후보에서 이 검사를 통과해야 파일을 수집한다. 이는 실제 bundled runtime 검사이며 학교 PC·교사 확인·양쪽 JSON 왕복·전체 T01~T09를 대신하지 않는다. 새 후보 SHA가 바뀌면 다시 검사한다.
+
 ## 5. 다른 PC로 넘길 기록
 
 커밋 SHA, 브랜치, 제품 버전, 변경 범위, 실행한 검사·결과, 미검증, 다음 첫 작업을 `docs/GOAL_STATUS.md`와 새 세션 기록에 남긴다. Git 차이·후보 파일 구성을 감사한 뒤 승인된 브랜치로 push한다. 공유 기록에 개인 PC 절대경로·학생 행·실자료 화면을 넣지 않는다. 사용자 저장 JSON의 PC 간 이동은 T03에서 따로 확인한다. 포트폴리오 hash key는 PC별 설정이며 Git으로 동기화되지 않는다.

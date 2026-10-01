@@ -8,15 +8,25 @@ import plistlib
 import subprocess
 import os
 import sys
+import re
 import tempfile
 import unittest
-from build_scripts.release_manifest import digest, filenames, verify_pair, validate_platform
+from build_scripts.release_manifest import digest, filenames, verify_pair, validate_platform, validate_qa
+from app.synthetic_qa import REQUIRED_CHECKS
 from build_scripts.repair_qtwebengine_macos import repair
 from build_scripts.build_identity import record, verify
 from unittest.mock import patch
 
 
 class CandidateGates(unittest.TestCase):
+    def test_windows_batch_references_existing_python_helpers(self):
+        project=Path(__file__).resolve().parents[1]
+        for name in ('build_windows.bat','pack_windows.bat','pack_windows_installer.bat'):
+            scripts=re.findall(r'build_scripts\\([\w-]+\.py)',(project/'build_scripts'/name).read_text())
+            self.assertTrue(scripts)
+            for script in scripts:
+                self.assertTrue((project/'build_scripts'/script).is_file(),f'{name} references missing {script}')
+
     def setUp(self):
         self.scratch=tempfile.TemporaryDirectory()
         self.addCleanup(self.scratch.cleanup)
@@ -27,6 +37,9 @@ class CandidateGates(unittest.TestCase):
             for name in filenames('1.0.6',target)+[f'USER_GUIDE-{target}.md']:
                 p=self.root/name; p.write_bytes(b'synthetic candidate only')
                 hashes[name]=digest(p)
+            qa=self.root/f'QA-{target}.json'
+            qa.write_text(json.dumps({'version':'1.0.6','frozen':True,'status':'passed','executable_sha256':'c'*64,'checks':{name:True for name in REQUIRED_CHECKS},'errors':[]}))
+            hashes[qa.name]=digest(qa)
             m={'source_commit':self.commit,'version':'1.0.6','source_clean':True,'target':target,
                'os_system':os_name,'architecture':arch,'files':hashes}
             m['build_identity']={k:m[k] for k in ('source_commit','version','source_clean','target')}
@@ -64,6 +77,13 @@ class CandidateGates(unittest.TestCase):
     def test_platform_identity(self):
         with self.assertRaises(ValueError): validate_platform('macos','Darwin','x86_64')
         with self.assertRaises(ValueError): validate_platform('windows','Darwin','AMD64')
+
+    def test_source_qa_or_missing_check_is_not_a_frozen_candidate_pass(self):
+        qa={'version':'1.0.6','frozen':False,'status':'passed','executable_sha256':'c'*64,
+            'checks':{name:True for name in REQUIRED_CHECKS},'errors':[]}
+        with self.assertRaises(ValueError):validate_qa(qa,'1.0.6',{'executable_sha256':'c'*64})
+        qa['frozen']=True;qa['checks'].pop(REQUIRED_CHECKS[0])
+        with self.assertRaises(ValueError):validate_qa(qa,'1.0.6',{'executable_sha256':'c'*64})
 
     def test_missing_qtwebengine_is_an_error(self):
         with self.assertRaises(RuntimeError): repair(self.root/'dist'/'Goedu-Split.app')

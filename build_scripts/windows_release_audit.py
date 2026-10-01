@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import subprocess
 import sys
@@ -71,11 +72,73 @@ SECRET_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 USER_PATH_PATTERN = re.compile(r"(?:/Users/|[A-Za-z]:[\\/]+Users[\\/]+)([^\\/\s\"']+)")
 
 
-def _audit_file(root: Path, path: Path) -> list[str]:
-    rel = path.relative_to(root)
-    findings: list[str] = []
+def _link_kind(path: Path) -> str | None:
     if path.is_symlink():
-        return [f"source symlink is not allowed: {rel}"]
+        return "symlink"
+    if getattr(path, "is_junction", lambda: False)():
+        return "junction"
+    return None
+
+
+def _root_links(root: Path) -> list[str]:
+    """Reject a linked requested root before resolve() can hide that linkage."""
+    for path in [root, *root.parents]:
+        kind = _link_kind(path)
+        # macOS exposes its standard temporary locations through system aliases.
+        if (kind == "symlink" and sys.platform == "darwin"
+                and path in {Path("/var"), Path("/tmp"), Path("/etc")}
+                and path.resolve() == Path("/private") / path.name):
+            continue
+        if kind:
+            return [f"source root {kind} is not allowed"]
+    return []
+
+
+def _metadata_tree(root: Path, excluded_dirs=frozenset(), *, exclude_at_root_only=False):
+    """List ordinary entries only; never scandir a symlink or a junction."""
+    files, directories, findings = [], [], []
+    pending = [root]
+    while pending:
+        folder = pending.pop()
+        # Recheck immediately before descent rather than trusting a queued entry.
+        kind = _link_kind(folder)
+        if kind:
+            findings.append(f"source {kind} is not allowed: {folder.relative_to(root).as_posix()}")
+            continue
+        try:
+            with os.scandir(folder) as entries:
+                for entry in entries:
+                    path = Path(entry.path)
+                    kind = _link_kind(path)
+                    if kind:
+                        findings.append(f"source {kind} is not allowed: {path.relative_to(root).as_posix()}")
+                    elif entry.is_dir(follow_symlinks=False):
+                        directories.append(path)
+                        excluded = path.name in excluded_dirs and (not exclude_at_root_only or folder == root)
+                        if not excluded:
+                            pending.append(path)
+                    elif entry.is_file(follow_symlinks=False):
+                        files.append(path)
+        except OSError:
+            findings.append(f"source metadata cannot be listed: {folder.relative_to(root).as_posix()}")
+    return files, directories, findings
+
+
+def _path_link_kind(root: Path, path: Path) -> str | None:
+    for candidate in [path, *path.parents]:
+        if candidate == root:
+            break
+        kind = _link_kind(candidate)
+        if kind:
+            return kind
+    return None
+
+
+def _audit_file(root: Path, path: Path) -> list[str]:
+    rel = path.relative_to(root).as_posix()
+    findings: list[str] = []
+    if kind := _path_link_kind(root, path):
+        return [f"source {kind} is not allowed: {rel}"]
     if path.suffix.lower() in DATA_SUFFIXES:
         return [f"student/input data file is not allowed in source: {rel}"]
     if path.name.lower().startswith(".env") or path.suffix.lower() in SECRET_SUFFIXES:
@@ -104,7 +167,7 @@ def _audit_file(root: Path, path: Path) -> list[str]:
         if username.startswith("<"):
             continue
         # These existing privacy tests intentionally use fictional source paths.
-        if rel.as_posix() == "tests/test_export_privacy.py" and username in {"someone", "t"}:
+        if rel == "tests/test_export_privacy.py" and username in {"someone", "t"}:
             continue
         findings.append(f"local development path leaked: {rel}")
         break
@@ -115,6 +178,12 @@ def _audit_file(root: Path, path: Path) -> list[str]:
 
 def audit_repository(root: Path) -> list[str]:
     """Inspect only Git-tracked working files; never walk local student inputs."""
+    if findings := _root_links(root):
+        return findings
+    # Git's untracked inventory must also never descend an external junction.
+    _, _, findings = _metadata_tree(root, BLOCKED_DIR_NAMES, exclude_at_root_only=True)
+    if findings:
+        return findings
     try:
         top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"],
                              capture_output=True, check=True).stdout.decode().strip()
@@ -125,7 +194,7 @@ def audit_repository(root: Path) -> list[str]:
         local_names = b""
         for options in (("--others", "--exclude-standard"),
                         ("--others", "--ignored", "--exclude-standard")):
-            local_names += subprocess.run(["git", "-C", str(root), "ls-files", *options, "-z"],
+            local_names += subprocess.run(["git", "-C", str(root), "ls-files", *options, "-z", "--", "app", "assets"],
                                           capture_output=True, check=True).stdout
     except (OSError, subprocess.CalledProcessError, UnicodeError):
         return ["cannot list Git-tracked files; repository audit failed"]
@@ -141,20 +210,20 @@ def audit_repository(root: Path) -> list[str]:
         python_cache = (rel.parts[0] == "app" and "spliter_ox_web" not in rel.parts
                         and "__pycache__" in rel.parts and rel.suffix == ".pyc")
         if not python_cache:
-            findings.append(f"untracked/ignored packaged source file is not allowed: {rel}")
+            findings.append(f"untracked/ignored packaged source file is not allowed: {rel.as_posix()}")
     for name in names:
         rel = Path(name)
         path = root / rel
         if rel.is_absolute() or ".." in rel.parts:
             findings.append("unsafe tracked file path")
         elif set(rel.parts) & BLOCKED_DIR_NAMES:
-            findings.append(f"blocked tracked source directory: {rel}")
+            findings.append(f"blocked tracked source directory: {rel.as_posix()}")
+        elif kind := _path_link_kind(root, path):
+            findings.append(f"source {kind} is not allowed: {rel.as_posix()}")
         elif not path.exists():
-            findings.append(f"tracked file missing from working tree: {rel}")
-        elif any(parent.is_symlink() for parent in [path, *path.parents] if parent != root and root in parent.parents):
-            findings.append(f"source symlink is not allowed: {rel}")
+            findings.append(f"tracked file missing from working tree: {rel.as_posix()}")
         elif not path.is_file():
-            findings.append(f"tracked submodule/directory must not be packaged implicitly: {rel}")
+            findings.append(f"tracked submodule/directory must not be packaged implicitly: {rel.as_posix()}")
         else:
             findings.extend(_audit_file(root, path))
     return findings
@@ -164,21 +233,15 @@ def _read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="ignore")
 
 
-def _iter_files(root: Path):
-    for path in root.rglob("*"):
-        if path.is_file() and not path.is_symlink():
-            yield path
-
-
 def audit_source(root: Path) -> list[str]:
     findings: list[str] = []
+    if findings := _root_links(root):
+        return findings
     if not root.exists():
         return [f"source path does not exist: {root}"]
 
     # Check metadata before reading any required file or traversing content.
-    for path in root.rglob("*"):
-        if path.is_symlink():
-            findings.append(f"source symlink is not allowed: {path.relative_to(root)}")
+    files, directories, findings = _metadata_tree(root, BLOCKED_DIR_NAMES)
     if findings:
         return findings
 
@@ -186,9 +249,9 @@ def audit_source(root: Path) -> list[str]:
         if not (root / rel).exists():
             findings.append(f"required file missing: {rel}")
 
-    for path in root.rglob("*"):
-        if path.is_dir() and path.name in BLOCKED_DIR_NAMES:
-            findings.append(f"blocked source-kit directory included: {path.relative_to(root)}")
+    for path in directories:
+        if path.name in BLOCKED_DIR_NAMES:
+            findings.append(f"blocked source-kit directory included: {path.relative_to(root).as_posix()}")
 
     requirements = root / "requirements.txt"
     if requirements.exists():
@@ -212,7 +275,7 @@ def audit_source(root: Path) -> list[str]:
         if "if errorlevel 1 exit /b 1" not in text:
             findings.append("build_windows.bat must stop after failed critical commands")
 
-    for path in _iter_files(root):
+    for path in files:
         findings.extend(_audit_file(root, path))
 
     return findings
@@ -224,7 +287,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repository", action="store_true", help="audit only Git-tracked working files instead of a source kit")
     args = parser.parse_args(argv)
 
-    root = Path(args.source).resolve()
+    root = Path(args.source).absolute()
     findings = audit_repository(root) if args.repository else audit_source(root)
     label = "repository" if args.repository else "source-kit"
     if findings:

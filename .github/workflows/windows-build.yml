@@ -99,6 +99,11 @@ jobs:
       - name: Pack Mac candidate
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'macos'
         run: bash build_scripts/pack_mac.sh
+      - name: Run frozen Mac synthetic QA
+        if: needs.source.outputs.candidate == 'true' && matrix.target == 'macos'
+        timeout-minutes: 5
+        run: |
+          dist/Goedu-Split.app/Contents/MacOS/Goedu-Split --synthetic-qa "$RUNNER_TEMP/goedusplit-candidate-qa"
       - name: Build Windows candidate
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
         shell: cmd
@@ -107,6 +112,17 @@ jobs:
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
         shell: cmd
         run: build_scripts\pack_windows.bat
+      - name: Run frozen Windows synthetic QA
+        if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
+        timeout-minutes: 5
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          $qaRoot = Join-Path $env:RUNNER_TEMP 'goedusplit-candidate-qa'
+          $process = Start-Process -FilePath '.\dist\Goedu-Split\Goedu-Split.exe' -ArgumentList @('--synthetic-qa', ('"' + $qaRoot + '"')) -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Frozen candidate QA failed: $($process.ExitCode)" }
+          if (-not (Test-Path (Join-Path $qaRoot 'QA_REPORT.json'))) { throw 'Candidate QA report missing' }
       - name: Pack Windows setup (preinstalled Inno Setup required)
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
         shell: cmd
@@ -118,7 +134,7 @@ jobs:
           SOURCE_COMMIT: ${{ needs.source.outputs.commit }}
           TARGET: ${{ matrix.target }}
         shell: bash
-        run: python -B build_scripts/release_manifest.py --version "$CANDIDATE_VERSION" --commit "$SOURCE_COMMIT" --target "$TARGET" --output artifacts
+        run: python -B build_scripts/release_manifest.py --version "$CANDIDATE_VERSION" --commit "$SOURCE_COMMIT" --target "$TARGET" --qa-report "$RUNNER_TEMP/goedusplit-candidate-qa/QA_REPORT.json" --output artifacts
       - uses: actions/upload-artifact@v4
         if: needs.source.outputs.candidate == 'true'
         with:

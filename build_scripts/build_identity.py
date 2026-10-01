@@ -40,7 +40,7 @@ def source_identity(root):
         if path.is_absolute() or '..' in path.parts or (path.parts[0] not in allowed_roots and name not in allowed_files):
             raise ValueError('Invalid development kit source path')
         candidate=root/path
-        if any(p.is_symlink() for p in [candidate,*candidate.parents]) or not candidate.is_file():
+        if any(p.is_symlink() or getattr(p,'is_junction',lambda:False)() for p in [candidate,*candidate.parents]) or not candidate.is_file():
             raise ValueError('Missing or linked development kit source')
         if hash_file(candidate)!=expected:
             raise ValueError('Development kit source changed after snapshot')
@@ -53,7 +53,7 @@ def marker_path(app,target):
 
 def record(root,app,target):
     binary=executable(app,target)
-    if binary.is_symlink() or not binary.is_file() or not binary.stat().st_size:
+    if binary.is_symlink() or getattr(binary,'is_junction',lambda:False)() or not binary.is_file() or not binary.stat().st_size:
         raise ValueError('Required executable is missing or is a symlink')
     value={**source_identity(root),'version':__version__,'target':target,'executable_sha256':hash_file(binary)}
     with marker_path(app,target).open('x',encoding='utf-8') as stream:
