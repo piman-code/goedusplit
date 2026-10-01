@@ -20,6 +20,8 @@ GitHub `piman-code/goedusplit`은 2026-10-02 읽기 조회에서 공개 저장�
 | 합성 실기 키트 | XLSX 3개·한국어 TXT/HWPX/PDF·검토안 JSON·독립 수기 기대값/지문 생성과 6개 대조 통과 | minimal HWPX 파서 입력. native 한글앱 편집·HWP 바이너리·스캔 PDF 미검증 |
 | 시험지 가져오기 Mac 소스 UI | HWPX/PDF 실제 메뉴·미리보기·WebEngine 반영·취소·빈 PDF 실패 보존 8개 통과 | 실제 후보 양쪽/HWP/스캔 PDF 성공/교사 확인 아님 |
 | NEIS·예측–실측 Mac 소스 UI | 실제 WebEngine·자료 메뉴·modal 저장/취소, 엑셀3/2시트·독립 기대값·입력/출력 보존 25개 통과. 완료판정관이 XLSX/PNG 직접 대조 | 해당 추가 기능 frozen 후보·Windows Excel·학교/교사 확인 별도 |
+| Windows 소스 인계 ZIP | 고정 후보 9baded3의 코드118파일, ZIP manifest·각 지문·Gitless identity·압축 해제 후 소스 감사 통과 | GitHub 개발/CI를 대체하는 완료 증거가 아니며 Windows 앱 실행·학교 PC 미검증 |
+| 실기·복귀 기록 준비 | PC별 T01~T09·실제 JSON 왕복·교사 질문·설치/복귀 빈 양식과 플랫폼별 백업 대상/위치 작성 | 실제 사용자 백업·설정 복원·설치/복귀는 실행 안 함 |
 | Mac 실제 창 | GPU 창 생성·계산기 탭 전환 시 창 재생성 없음, 2항목 통과 | 학교 Windows와 설치 후보는 별도 |
 | Mac 작은 화면 | 밝음/어두움 × 1280×800/1080×720, 4개 합성 화면과 도구 배율 검사 통과 | 현재 소스의 offscreen WebEngine 검사. 실제 OS 배율·1366×768·교사 확인 대기 |
 | 의존성 기준 | 기존 Mac 패키지 버전 읽기, pip check·build_preflight 통과, 새 lock 작성 | 새 clone의 lock 설치·Windows 전용 패키지·CI 미검증 |
@@ -54,3 +56,5 @@ T01~T09는 **어느 항목도 전체 합격으로 표시하지 않는다**. 소�
 ## 다음 안전한 작업
 
 합성 실기 키트와 Mac 분석·내보내기 소스 검증을 완료했다. 안내는 [SYNTHETIC_VALIDATION](SYNTHETIC_VALIDATION.md)를 따른다. NEIS/예측–실측 저장과 시험지 가져오기 소스 UI도 통과했다. 다음은 승인된 원격 CI에서 같은 후보 SHA의 Windows 파일 확보와 양쪽 후보 실기다. GitHub 전송은 승인 답변 후 같은 브랜치의 검토·검사된 소스로 진행하며, 실제 Windows PC 확인을 기다리는 동안 로컬 작업을 계속한다. 설치 교체·main 병합·공개 Release는 현재 승인 범위에 포함하지 않는다.
+
+학교 실기 결과는 [PC_VALIDATION_RECORD](PC_VALIDATION_RECORD.md), 백업 대상과 복귀 경계는 [BACKUP_AND_ROLLBACK](BACKUP_AND_ROLLBACK.md)를 따른다. Windows 소스 ZIP은 로컬 fallback 자료이며 원격 push/CI 승인이 없는 상태에서 GitHub 기반 개발 완료로 취급하지 않는다.

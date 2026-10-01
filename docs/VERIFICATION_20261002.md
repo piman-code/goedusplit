@@ -80,6 +80,12 @@ QA_REPORT·입력·설정·PNG는 로컬 합성 증거 폴더에 보존한다. �
 
 `07ea42c2fc8e750be407aa1228a51a5a715e8b64`의 frozen Mac QA와 DMG도 통과했으며 원본을 보존했다. 해당 DMG SHA256은 `702b64b657c9537069b18dbe4635634f235a03117020df7e48283d8cbf1a304f`다. 현재 선택한 후보 소스는 위 `9baded3`이며 이전 파일을 새 SHA 후보로 재표시하지 않는다.
 
+## Windows 인계 ZIP·실기 기록 준비
+
+후보 소스 `9baded3`의 허용된 Git blob만 담은 `Goedu-Split-1.0.6-source.zip`을 새 후보 worktree의 dist에 생성했다. 파일118개·ZIP 파일 집합과 manifest·모든 파일 지문·Gitless source identity·압축 해제 후 개인정보 소스 감사가 통과했다. ZIP SHA256은 `9a65b5bffd3c5a237153ca6592d48fdfe9754f6c573cd6fe1fca19d3f63b0f37`, 증거는 `out_test/goal-20261002-windows-handoff/SOURCE_KIT_QA.json`이다. 기존 후보/설치/원자료를 덮어쓰거나 외부 폴더로 복사·전송하지 않았다. 이 ZIP은 코드 인계 자료이며 Windows 앱 빌드/실행 성공은 아니다. 기본 개발 방식은 GitHub의 별도 clone이다.
+
+[PC 실기 기록 양식](PC_VALIDATION_RECORD.md)은 T01~T09·실제 JSON 왕복·교사 질문·설치/복귀 항목을 모두 미실행/확인 대기로 둔다. [백업·복귀 안내](BACKUP_AND_ROLLBACK.md)는 현재 소스와 시작1.0.5의 동일 설정 키/저장 루트, Mac QSettings fileName 메타데이터 및 Qt/Microsoft 공식 규칙을 대조해 작성했다. 실제 사용자 설정 값·학생자료는 열지 않았고 백업·레지스트리 내보내기·복원·설치 교체도 실행하지 않았다. Windows 실제 경로/키 존재와 실제 양쪽 복귀는 실기 확인 대상이다.
+
 ## 아직 증명하지 않은 것
 
 동일 SHA의 Windows 후보·합동 SHA256SUMS·GitHub CI 성공, 학교 Windows OS/CPU·Excel·실제 네트워크 차단·배율/작은 화면·설치·복귀, Mac→Windows→Mac JSON 왕복, 기대값 키트의 양쪽 후보 실기 및 Windows 파일 입력/내보내기/문항 가져오기, 교사의 실제 유용성 확인이 남았다. Mac 정상 사용자 환경 첫 실행·실제 설치 교체도 이번 합성 QA로 대체하지 않는다.
