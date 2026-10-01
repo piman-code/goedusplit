@@ -9,6 +9,13 @@ looked like the app closing and starting again. The offscreen platform used by t
 no such surfaces, so this is checked here instead.
 """
 
+try:
+    from tests.runtime_isolation import ensure_isolated, secure_web_profile
+except ModuleNotFoundError:
+    from runtime_isolation import ensure_isolated, secure_web_profile
+ensure_isolated(offscreen=False)
+
+
 import argparse
 import os
 import sys
@@ -34,7 +41,7 @@ def _run(scratch: Path) -> int:
     from test_calibration import _exam
 
     app = QApplication([])
-    profile = QWebEngineProfile(app)
+    profile = secure_web_profile(QWebEngineProfile(app))
     destroyed = []
 
     class Watch(QObject):

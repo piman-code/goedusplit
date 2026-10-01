@@ -13,6 +13,13 @@ Checks, on the real embedded calculator:
 It never attaches to a running app and uses an off-the-record browser profile.
 """
 
+try:
+    from tests.runtime_isolation import ensure_isolated, secure_web_profile
+except ModuleNotFoundError:
+    from runtime_isolation import ensure_isolated, secure_web_profile
+ensure_isolated(offscreen=True)
+
+
 import argparse
 import json
 import os
@@ -61,7 +68,7 @@ def _run(scratch: Path) -> int:
     from test_calibration import _exam
 
     app = QApplication([])
-    profile = QWebEngineProfile(app)
+    profile = secure_web_profile(QWebEngineProfile(app))
     chosen, problems, dialogs = [str(saved_work_file(scratch))], [], []
 
     class Page(QWebEnginePage):

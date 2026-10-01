@@ -1,3 +1,6 @@
+from tests.runtime_isolation import ensure_isolated
+ensure_isolated()
+
 import unittest
 from copy import deepcopy
 from pathlib import Path

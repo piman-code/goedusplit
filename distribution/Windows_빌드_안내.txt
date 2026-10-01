@@ -1,106 +1,14 @@
-Goedu-Split  성취평가 결과 분석 — Windows 빌드 안내
-제작자: 이준서   버전: 1.0.1
-© 2026 이준서. All rights reserved.
-======================================================
+Goedu-Split 1.0.6 개발 후보 안내
+제작자: 이준서
 
-이 zip 파일은 "Windows PC에서 .exe를 빌드"하기 위한 소스 패키지입니다.
-Mac에서는 .exe 파일을 직접 만들 수 없기 때문에 이 절차가 필요합니다.
-용량을 줄이기 위해 소스 패키지에는 Git 기록, 가상환경, 기존 dist/build,
-샘플 자료, 캐시, macOS 전용 스크립트는 넣지 않았습니다.
-한글 번들 폰트는 포함되어 있으며, 빠져 있거나 손상된 경우 Windows 빌드 중 build_scripts\fetch_fonts.py가 자동으로 다시 확보합니다.
+기존 1.0.1 안내는 distribution/history에 보존했습니다.
+1.0.6은 검증 진행 중이며 공개 배포하지 않았습니다.
 
-준비물
-------
-  · Windows 10/11 PC (학교 PC, 동료 PC 모두 가능)
-  · 인터넷 (처음 한 번만 의존성 다운로드용)
+교사용 사용법: distribution/USER_GUIDE.md
+Mac·Windows 개발/환경/검사: docs/DEVELOPMENT.md
+같은 커밋의 두 플랫폼 후보·체크섬·복귀: docs/RELEASE_CANDIDATES.md
+학교 PC 확인: distribution/MANUAL_QA_CHECKLIST.md
+현재 증거와 미완료: docs/GOAL_STATUS.md
 
-
-[1단계] Python 설치 (한 번만)
------------------------------------
-  1) https://www.python.org/downloads/windows/ 접속
-  2) "Python 3.11" 다음의 "Windows installer (64-bit)" 다운로드
-  3) 설치 시 ★★★ "Add python.exe to PATH" 체크박스 반드시 켜기 ★★★
-  4) "Install Now" 클릭 → 설치 완료
-
-
-[2단계] zip 압축 풀기
------------------------------------
-  1) 받은 "Goedu-Split-1.0.1-source.zip" 파일에 우클릭
-  2) "압축 풀기" 또는 "Extract All..." 선택
-  3) 적당한 곳(예: 바탕 화면)에 풀기
-
-
-[3단계] 빌드 실행 (5~10분)
------------------------------------
-  1) 풀린 "Goedu-Split-1.0.1-source" 폴더로 이동
-  2) 폴더 안 빈 곳에서 "Shift + 마우스 우클릭" → "여기에 PowerShell 창 열기"
-     (또는 주소창에 "cmd" 입력 후 Enter)
-  3) 다음 명령어 복사 후 Enter:
-
-       build_scripts\build_windows.bat
-
-  4) "[0/9] Windows 소스 키트 보안/구성 감사" 부터 "[9/9] 배포 폴더 구성 확인" 까지 5~10분 대기
-  5) 마지막에 "[OK] 완료" 메시지가 나오면 성공
-
-  보안/구성 감사는 다음 항목을 확인합니다.
-    - 필수 파일 누락 여부
-    - .git, .venv, build, dist, __pycache__ 같은 배포 금지 폴더 포함 여부
-    - OPENAI_API_KEY, CODEX_API_KEY, sk- 형태 비밀값 패턴 포함 여부
-    - Windows에서 깨지는 /private/tmp 고정 경로 여부
-    - 아이콘 생성에 필요한 Pillow 의존성 포함 여부
-
-  빌드가 끝나면 dist\slim-windows-report.txt 파일도 생성됩니다.
-  이 파일은 Windows 배포 폴더에서 제거한 저위험 리소스 목록입니다.
-
-
-[4단계] 다른 분께 보낼 .zip 만들기
------------------------------------
-  같은 창에서 다음 명령:
-
-       build_scripts\pack_windows.bat
-
-  결과 파일:  dist\Goedu-Split-1.0.1-windows.zip
-
-  pack_windows.bat도 zip을 만들기 전에 개인정보/비밀값 감사를 다시 실행합니다.
-
-  설치파일(setup.exe)로 만들고 싶다면 Inno Setup 6 설치 후 다음 명령:
-
-       build_scripts\pack_windows_installer.bat
-
-  결과 파일:  dist\Goedu-Split-1.0.1-windows-setup.exe
-
-
-[5단계] 본인 PC에서 실행
------------------------------------
-  dist\Goedu-Split\ 폴더 안의 "Goedu-Split.exe" 더블클릭
-
-  ★ 처음 실행 시 파란 SmartScreen 경고가 뜨면:
-    "추가 정보" → "실행" 클릭 (한 번만 하면 다음부터 안 뜸)
-
-
-[자주 묻는 질문]
------------------------------------
-Q. "python을 찾을 수 없습니다" 라는 메시지가 떠요.
-  → [1단계]에서 "Add python.exe to PATH" 체크 안 된 채로 설치한 것입니다.
-    Python을 제거하고 다시 설치하면서 그 체크박스를 켜 주세요.
-
-Q. 의존성 설치 단계에서 멈춰요.
-  → 인터넷 연결 확인 / 방화벽이 pip를 막는지 확인.
-    학교 인터넷이라면 잠깐 다른 PC에서 시도해 보세요.
-
-Q. 빌드는 됐는데 더블클릭해도 안 켜져요.
-  → cmd 창에서 dist\Goedu-Split\Goedu-Split.exe 를 직접 실행하면
-    오류 메시지가 보입니다. 그 메시지를 캡처해 제작자에게 전달해 주세요.
-
-Q. AI 검토에서 Codex CLI를 못 찾는다고 떠요.
-  → Windows 터미널에서 where codex, codex --version, codex login status 를 차례로 확인하세요.
-    터미널에서는 되는데 앱에서만 실패하면 CODEX_CLI_PATH 환경변수에 codex.cmd 전체 경로를 지정한 뒤 앱을 다시 여세요.
-
-Q. 용량을 더 줄이고 싶어요.
-  → QtWebEngine 기반 예상정답률 계산기 때문에 실행 폴더가 어느 정도 커집니다.
-    현재 소스 키트는 폰트와 macOS 전용 파일까지 제외해 최소화했습니다.
-    build_scripts\slim_windows_dist.py 는 번역/sample/test/bytecode 같은 저위험 파일만 제거합니다.
-    QtWebEngine, Qt QML, plugins 폴더는 화면 흰 화면/실행 실패를 막기 위해 제거하지 않습니다.
-
-
-© 2026 이준서. All rights reserved.
+Windows portable은 ZIP 전체를 새 폴더에 풀고 Goedu-Split.exe를 실행합니다.
+개발·빌드는 각 PC의 별도 Git 복제본에서 진행합니다. 자동 설치·기존 환경 교체·덮어쓰기를 하지 않습니다.

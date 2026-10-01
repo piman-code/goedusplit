@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import shutil
-import subprocess
 import sys
 from pathlib import Path
 
@@ -42,18 +41,20 @@ def repair(app_path: Path = APP_PATH) -> bool:
         / "QtWebEngineCore.framework"
     )
     if not framework.exists():
-        print("[qtwebengine] QtWebEngineCore.framework 없음: 건너뜀")
-        return False
+        raise RuntimeError("필수 QtWebEngineCore.framework 없음")
 
     versions = framework / "Versions"
     misplaced = versions / "Resources"
     target_version = versions / "A"
-    if not misplaced.exists() or not target_version.exists():
-        print("[qtwebengine] 보정할 리소스 위치 없음: 건너뜀")
-        return False
-
-    _merge_tree(misplaced / "Resources", target_version / "Resources")
-    _merge_tree(misplaced / "Helpers", target_version / "Helpers")
+    if not target_version.is_dir():
+        raise RuntimeError("필수 QtWebEngine framework Versions/A 없음")
+    if misplaced.exists():
+        backup = app_path.resolve().parent.parent / "build" / "qtwebengine-resources-before-repair"
+        if backup.exists():
+            raise FileExistsError(f"기존 QtWebEngine 보존 위치가 있습니다: {backup}")
+        backup.parent.mkdir(parents=True, exist_ok=True)
+        _merge_tree(misplaced / "Resources", target_version / "Resources")
+        _merge_tree(misplaced / "Helpers", target_version / "Helpers")
 
     process = target_version / "Helpers" / "QtWebEngineProcess.app" / "Contents" / "MacOS" / "QtWebEngineProcess"
     resources = target_version / "Resources" / "qtwebengine_resources.pak"
@@ -63,9 +64,12 @@ def repair(app_path: Path = APP_PATH) -> bool:
             f"process={process.exists()} resources={resources.exists()}"
         )
 
-    subprocess.run(["/usr/bin/trash", str(misplaced)], check=True)
-    print("[qtwebengine] macOS QtWebEngine 리소스 위치 보정 완료")
-    return True
+    if misplaced.exists():
+        shutil.move(str(misplaced), str(backup))
+        print("[qtwebengine] macOS QtWebEngine 리소스 위치 보정 완료")
+        return True
+    print("[qtwebengine] 필수 process/resources 확인: 보정 불필요")
+    return False
 
 
 def main() -> int:

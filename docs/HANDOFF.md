@@ -1,3 +1,11 @@
+# 현재 Goal 인계 — 2026-10-02
+
+현재 실행 기준은 [DEVELOPMENT_PLAN](DEVELOPMENT_PLAN.md), 진행·검증은 [GOAL_STATUS](GOAL_STATUS.md), 개발 명령은 [DEVELOPMENT](DEVELOPMENT.md)이다. 개발 후보 버전은 1.0.6이며 기존 설치·배포 1.0.5는 보존한다.
+
+아래는 과거 인계 이력이다. 이전 단계의 1.0.1~1.0.5, 테스트 수, AI 검증, 브랜치 push·네트워크 금지 등은 해당 날짜의 기록이다. 현재 사용자 Goal은 같은 범위의 로컬 수정·검사·기록을 허용하고 새 설치·지속 설정·push·병합·공개 배포는 구체적인 결과 검토 후 승인하도록 정했다. 실제 학생자료·stash 전체 열람 권한은 없다.
+
+---
+
 # Goedu-Split 작업 인계 (HANDOFF)
 
 어느 플랫폼(Codex, Claude Code, Kilo 등)이든 이 파일과 git 기록만으로 이어서 작업할 수 있게 유지한다.

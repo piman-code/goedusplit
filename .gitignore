@@ -12,3 +12,6 @@ sample_data/
 .DS_Store
 app/__pycache__/
 build_scripts/__pycache__/
+
+# Local preserved planning draft; not part of a development handoff payload.
+/docs/DEVELOPMENT_PLAN.20261001-before-goal-review.md

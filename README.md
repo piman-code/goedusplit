@@ -3,14 +3,14 @@
 성취평가 결과 분석과 예상정답률 설계를 돕는 Windows/macOS 데스크톱 앱입니다.
 
 제작자: 이준서  
-버전: 1.0.5
+개발 후보 버전: 1.0.6 (검증 진행 중)
 © 2026 이준서. All rights reserved.
 
 Goedu-Split은 NEIS 정오표와 문항정보표를 선생님 PC에서 분석하는 로컬 실행형 도구입니다. 학생 성적 자료를 자동으로 서버에 올리지 않습니다.
 
 ## 선생님용 다운로드
 
-소스코드를 내려받을 필요 없이 완성된 배포 파일을 받으면 됩니다. 오른쪽 또는 상단의 **Releases**에서 최신 버전 `v1.0.5`를 엽니다.
+소스코드를 내려받을 필요 없이 완성된 배포 파일을 받으면 됩니다. 아래는 기존 `v1.0.5` 배포 안내입니다. 원격 최신 Release 여부는 이번 단계에서 다시 확인하지 않았습니다. 1.0.6은 아직 게시하지 않았습니다.
 
 ### Windows
 
@@ -90,28 +90,16 @@ NEIS 입력표를 만들기 전에는 다음을 확인해 주세요.
 
 보안 정책은 [SECURITY.md](SECURITY.md)를 참고하세요.
 
-## 개발자용 실행
+## Mac·Windows 개발과 검증
 
-```powershell
-py -3 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-python run.py
-```
+각 PC에 별도 Git 복제본·가상환경을 사용합니다. 환경을 자동 설치하거나 기존 앱을 교체하는 빌드 스크립트는 사용하지 않습니다.
 
-## Windows 배포 빌드
+- [두 컴퓨터 개발 안내](docs/DEVELOPMENT.md): 환경 준비, Git 인계, 격리 검사, 새 작업 폴더 빌드.
+- [개발 완료 계획](docs/DEVELOPMENT_PLAN.md): P0~P4와 T01~T09 필수 기준.
+- [현재 검증 상태](docs/GOAL_STATUS.md): 완료 증거와 실제 PC·교사 확인 대기.
+- [배포 후보 절차](docs/RELEASE_CANDIDATES.md): 같은 커밋의 두 플랫폼 후보·체크섬·복귀·게시 준비.
 
-```powershell
-python -m py_compile app\main_window.py app\ai_client.py app\data_loader.py
-python -m unittest discover -s tests -v
-node --test tests/test_expected_rate_web.cjs
-python build_scripts\windows_release_audit.py --source .
-python -m PyInstaller --noconfirm --clean goedusplit.spec
-python build_scripts\slim_windows_dist.py dist\Goedu-Split
-python build_scripts\privacy_release_audit.py dist\Goedu-Split
-Compress-Archive -LiteralPath dist\Goedu-Split -DestinationPath dist\Goedu-Split-1.0.5-windows.zip
-```
+현재 설치본과 기존 배포 파일은 1.0.5를 유지합니다. 개발 후보 1.0.6의 자동 검사·빌드 준비는 제품 전체 완료나 배포 준비 완료를 뜻하지 않습니다.
 
 ## 라이선스와 사용 범위
 

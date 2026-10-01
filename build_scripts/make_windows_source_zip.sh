@@ -1,77 +1,115 @@
 #!/usr/bin/env bash
-# Windows에서 .exe로 빌드할 수 있도록 소스 코드를 zip으로 묶는다.
-# 선택: GOEDU_WINDOWS_OUT_DIR 환경변수를 지정하면 해당 폴더에도 복사한다.
-#
-# 사용:  bash build_scripts/make_windows_source_zip.sh
-#
-# 결과:
-#   1) dist/Goedu-Split-<버전>-source.zip 생성
-#   2) GOEDU_WINDOWS_OUT_DIR이 지정된 경우 해당 폴더에도 복사
-
+# GitHub 복제본을 쓸 수 없을 때의 소스 키트 fallback.
+# clean Git 커밋의 허용된 추적 파일만 포함하며 기존 ZIP을 덮어쓰지 않는다.
+# 자동 설치/외부 공유 폴더 복사 없음.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
 PY="python3"
-if [ -x ".venv/bin/python" ]; then
-  PY=".venv/bin/python"
-fi
-VER="$("$PY" -c 'from app.main_window import APP_VERSION; print(APP_VERSION)' 2>/dev/null || echo "1.0.1")"
-ZIP_NAME="Goedu-Split-${VER}-source.zip"
-OUT_DIR="dist"
-mkdir -p "$OUT_DIR"
-ZIP_PATH="$OUT_DIR/$ZIP_NAME"
-rm -f "$ZIP_PATH"
+if [ -x ".venv/bin/python" ]; then PY=".venv/bin/python"; fi
+"$PY" - <<'PY'
+import ast
+import hashlib
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import tempfile
+import zipfile
 
-DEST_DIR="${GOEDU_WINDOWS_OUT_DIR:-}"
+root = Path.cwd()
 
-# zip 에 포함할 항목 — 빌드에 필요한 모든 것 (단, sample_data 는 개인정보 보호 차원에서 제외)
-INCLUDES=(
-  "app"
-  "assets"
-  "build_scripts"
-  "distribution"
-  "goedusplit.spec"
-  "requirements.txt"
-  "run.py"
-  "README.md"
-  ".gitignore"
-)
-EXCLUDES=(
-  "*/__pycache__/*" "*/.venv/*" "*/dist/*" "*/build/*"
-  "*.pyc" ".DS_Store"
-  "sample_data/*"     # 개인정보 보호
-  "out_test/*" "ppt_extract/*" "ppt_images/*"
-)
+def git(*args):
+    return subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True).stdout
 
-EXCLUDE_ARGS=()
-for p in "${EXCLUDES[@]}"; do
-  EXCLUDE_ARGS+=( -x "$p" )
-done
+def stop(message):
+    raise SystemExit("[X] " + message)
 
-echo "[1/3] zip 생성: $ZIP_PATH"
-zip -r -q "$ZIP_PATH" "${INCLUDES[@]}" "${EXCLUDE_ARGS[@]}"
-SIZE=$(du -h "$ZIP_PATH" | cut -f1)
-echo "  ✓ 크기: $SIZE"
+try:
+    if Path(git("rev-parse", "--show-toplevel").decode().strip()).resolve() != root:
+        stop("Run from the Git worktree root.")
+    head = git("rev-parse", "HEAD").decode().strip()
+    entries = {}
+    for entry in git("ls-tree", "-rz", "--full-tree", head).split(b"\0"):
+        if not entry:
+            continue
+        meta, raw_name = entry.split(b"\t", 1)
+        mode, kind, oid = meta.decode().split()
+        name = raw_name.decode("utf-8")
+        entries[name] = (mode, kind, oid)
+except (OSError, subprocess.CalledProcessError, UnicodeError):
+    stop("A committed Git repository is required; no version fallback.")
 
-echo "[2/3] 선택 복사"
-if [ -n "$DEST_DIR" ]; then
-  if [ -d "$DEST_DIR" ] || mkdir -p "$DEST_DIR" 2>/dev/null; then
-    cp -f "$ZIP_PATH" "$DEST_DIR/"
-    echo "  ✓ 복사 완료: $DEST_DIR/$ZIP_NAME"
-    if [ -f "distribution/Windows_빌드_안내.txt" ]; then
-      cp -f "distribution/Windows_빌드_안내.txt" "$DEST_DIR/"
-      echo "  ✓ Windows_빌드_안내.txt 도 복사"
-    fi
-  else
-    echo "  ⚠ 지정한 폴더에 쓸 수 없습니다. 수동으로 옮겨 주세요:"
-    echo "      $ZIP_PATH"
-    echo "    → $DEST_DIR/"
-  fi
-else
-  echo "  - 복사 대상 없음: 필요하면 GOEDU_WINDOWS_OUT_DIR을 지정하세요."
-fi
+folders = {"app", "assets", "build_scripts", "distribution", "tests", "docs"}
+files = {".gitignore", "README.md", "SECURITY.md", "requirements.txt",
+         "requirements-build-lock.txt", "run.py", "run_tests.py", "goedusplit.spec"}
+selected = {name: meta for name, meta in entries.items()
+            if name in files or Path(name).parts[0] in folders}
+required = files | {"app/__init__.py", "tests/runtime_isolation.py", "tests/__init__.py",
+                    "docs/DEVELOPMENT_PLAN.md", "build_scripts/windows_release_audit.py",
+                    "build_scripts/build_identity.py"}
+missing = sorted(required - selected.keys())
+if missing:
+    stop("Required committed files missing (untracked/staged code is not included): " + ", ".join(missing))
 
-echo "[3/3] 완료"
-echo
-echo "→ 학교 Windows PC에서 zip 풀고  build_scripts\\build_windows.bat  실행하면 .exe 가 만들어집니다."
-echo "→ 자세한 안내: distribution/Windows_빌드_안내.txt"
+blocked_parts = {".git", ".venv", "__pycache__", "build", "dist", "sample_data"}
+blocked_suffixes = {".xlsx", ".xls", ".xlsm", ".ods", ".csv", ".tsv", ".hwp", ".hwpx",
+                    ".pdf", ".doc", ".docx", ".zip", ".db", ".sqlite", ".sqlite3", ".pem", ".key", ".p12", ".pfx"}
+for name, (mode, kind, _) in selected.items():
+    path = Path(name)
+    if mode not in {"100644", "100755"} or kind != "blob":
+        stop("Symlink/submodule is not allowed in source kit: " + name)
+    if path.is_absolute() or ".." in path.parts or set(path.parts) & blocked_parts:
+        stop("Blocked tracked source path: " + name)
+    if path.suffix.lower() in blocked_suffixes or path.name.lower().startswith(".env"):
+        stop("Student/input or credential file must not enter source kit: " + name)
+
+# Name-only untracked inventory; no local student input is opened.
+for raw_name in git("ls-files", "--others", "--exclude-standard", "-z").split(b"\0"):
+    if not raw_name:
+        continue
+    name = raw_name.decode("utf-8")
+    path = Path(name)
+    if (name in files or path.parts[0] in folders) and path.suffix.lower() not in blocked_suffixes:
+        stop("Untracked source file must be committed before source-kit creation: " + name)
+try:
+    git("diff", "--quiet", head, "--", *selected.keys())
+except subprocess.CalledProcessError:
+    stop("Source-kit requires clean committed source; staged/dirty code cannot be omitted.")
+
+version_blob = git("cat-file", "blob", selected["app/__init__.py"][2]).decode("utf-8")
+version = None
+for node in ast.parse(version_blob).body:
+    if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "__version__" for t in node.targets):
+        version = ast.literal_eval(node.value)
+if not isinstance(version, str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version):
+    stop("A valid app.__version__ is required.")
+output = root / "dist" / f"Goedu-Split-{version}-source.zip"
+if output.exists() or output.is_symlink():
+    stop("Existing source ZIP preserved: " + output.name)
+
+with tempfile.TemporaryDirectory(prefix="goedusplit-source-kit-") as scratch:
+    stage = Path(scratch)
+    for name, (_, _, oid) in selected.items():
+        target = stage / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(git("cat-file", "blob", oid))
+    manifest = stage / "WINDOWS_DEV_KIT_MANIFEST.txt"
+    manifest.write_text(f"Goedu-Split Windows development kit\nversion: {version}\ncommit: {head}\n\ncontents:\n"
+                        + "\n".join(sorted(selected)) + "\n", encoding="utf-8")
+    source_names = [*sorted(selected), "WINDOWS_DEV_KIT_MANIFEST.txt"]
+    source_identity = {"version": version, "source_commit": head,
+                       "file_sha256": {name: hashlib.sha256((stage / name).read_bytes()).hexdigest()
+                                       for name in source_names}}
+    (stage / "WINDOWS_SOURCE_IDENTITY.json").write_text(
+        json.dumps(source_identity, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    subprocess.run([sys.executable, str(stage / "build_scripts/windows_release_audit.py"),
+                    "--source", str(stage)], check=True)
+    output.parent.mkdir(exist_ok=True)
+    # Exclusive creation prevents replacing a candidate, including concurrent writers.
+    with zipfile.ZipFile(output, "x", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name in [*source_names, "WINDOWS_SOURCE_IDENTITY.json"]:
+            archive.write(stage / name, name)
+print(f"[OK] {output.name} (commit {head})")
+print("Use a GitHub clone when available. No external-folder copy was performed.")
+PY

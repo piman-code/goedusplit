@@ -1,41 +1,32 @@
 #!/usr/bin/env bash
-# macOS app build script.
-# Usage: bash build_scripts/build_mac.sh
-# Result: dist/Goedu-Split.app
-
+# Build only in a fresh checkout/candidate directory with preinstalled dependencies.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-
-if ! command -v python3 >/dev/null 2>&1; then
-  echo "Python 3 is required."
+if [ -e build ] || [ -e dist ]; then
+  echo "Existing build or dist preserved. Use a fresh checkout/candidate directory." >&2
   exit 1
 fi
-
-if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+if [ -n "${GOEDUSPLIT_BUILD_PYTHON:-}" ]; then
+  PY="$GOEDUSPLIT_BUILD_PYTHON"
+elif [ -x .venv/bin/python ]; then
+  PY="$(pwd)/.venv/bin/python"
+else
+  PY=python3
 fi
-
-PY="$(pwd)/.venv/bin/python"
-
-"$PY" -m pip install -r requirements.txt
-
-"$PY" build_scripts/fetch_fonts.py
-"$PY" build_scripts/generate_app_icon.py
-
-if [ -e dist/Goedu-Split.app ] || [ -e dist/Goedu-Split ]; then
-  echo "Existing build found in dist. Move it to a backup location before building."
-  exit 1
+"$PY" build_scripts/build_preflight.py
+"$PY" -m pip check
+if [ -e .git ]; then
+  "$PY" build_scripts/windows_release_audit.py --source . --repository
+else
+  "$PY" build_scripts/windows_release_audit.py --source .
 fi
-"$PY" -m unittest discover -s tests -v
+"$PY" -B run_tests.py
 node --test tests/test_expected_rate_web.cjs
-"$PY" -m PyInstaller --noconfirm --clean goedusplit.spec
-
-if [ -f build_scripts/repair_qtwebengine_macos.py ]; then
-  "$PY" build_scripts/repair_qtwebengine_macos.py
-fi
-
+"$PY" -m PyInstaller --noconfirm goedusplit.spec
+"$PY" build_scripts/repair_qtwebengine_macos.py dist/Goedu-Split.app
 "$PY" build_scripts/privacy_release_audit.py dist/Goedu-Split.app
+test -x dist/Goedu-Split.app/Contents/MacOS/Goedu-Split
 codesign --force --deep --sign - dist/Goedu-Split.app
 codesign --verify --deep --strict dist/Goedu-Split.app
-
-echo "Done: $(pwd)/dist/Goedu-Split.app"
+"$PY" -B build_scripts/build_identity.py --target macos --app dist/Goedu-Split.app --write
+echo "Built candidate: $(pwd)/dist/Goedu-Split.app (ad-hoc signed)"

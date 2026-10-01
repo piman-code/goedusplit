@@ -1,3 +1,6 @@
+from tests.runtime_isolation import ensure_isolated
+ensure_isolated()
+
 import json
 import os
 import tempfile
@@ -19,6 +22,12 @@ from app.ai_client import (
 
 
 class CodexCliProviderTests(unittest.TestCase):
+    def setUp(self):
+        environment = patch.dict(os.environ, {}, clear=False)
+        environment.start()
+        self.addCleanup(environment.stop)
+        os.environ.pop("CODEX_CLI_PATH", None)
+
     def test_codex_cli_uses_oauth_path_without_api_key_env(self):
         seen = {}
 
@@ -58,7 +67,7 @@ class CodexCliProviderTests(unittest.TestCase):
             codex = Path(tmp) / ("codex.exe" if os.name == "nt" else "codex")
             codex.write_text("", encoding="utf-8")
             codex.chmod(0o755)
-            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "CODEX_API_KEY": "codex-test"}):
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "CODEX_API_KEY": "codex-test", "CODEX_CLI_PATH": str(codex)}):
                 with patch("app.ai_client._codex_cli_path_from_config", return_value=""):
                     with patch("app.ai_client.CODEX_CLI_EXTRA_PATHS", ()):
                         with patch("app.ai_client.shutil.which", return_value=str(codex)):
@@ -148,7 +157,7 @@ class CodexCliProviderTests(unittest.TestCase):
             codex = Path(tmp) / ("codex.exe" if os.name == "nt" else "codex")
             codex.write_text("", encoding="utf-8")
             codex.chmod(0o755)
-            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "CODEX_API_KEY": "codex-test"}):
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-test", "CODEX_API_KEY": "codex-test", "CODEX_CLI_PATH": str(codex)}):
                 with patch("app.ai_client._codex_cli_path_from_config", return_value=""):
                     with patch("app.ai_client.CODEX_CLI_EXTRA_PATHS", ()):
                         with patch("app.ai_client.shutil.which", return_value=str(codex)):

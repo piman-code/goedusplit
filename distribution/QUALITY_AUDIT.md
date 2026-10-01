@@ -1,37 +1,11 @@
-# Goedu-Split Windows Release Quality Audit
+# Goedu-Split 1.0.6 후보 품질 기준
 
-## Release Goal
+상태: 개발·검증 진행 중. 기존 문서는 [이력](history/QUALITY_AUDIT-before-20261002.md)에 보존했다. 과거 AI 검사는 현재 필수 기준이 아니다.
 
-Windows용 `dist\Goedu-Split\Goedu-Split.exe`, `dist\Goedu-Split-1.0.1-windows.zip`, 선택 설치파일이 교사용 성취평가 분석 도구로 배포 가능한 상태인지 확인한다. 소스 테스트만으로 완료하지 않고, 실제 앱 실행과 개인정보/AI 연결/예상정답률 UI를 함께 본다.
+필수 기준은 [DEVELOPMENT_PLAN T01~T09](../docs/DEVELOPMENT_PLAN.md), 현재 증거는 [GOAL_STATUS](../docs/GOAL_STATUS.md), 실제 PC 절차는 [수동 QA](MANUAL_QA_CHECKLIST.md)를 따른다.
 
-## Required Checks
+정식 후보는 동일 SHA·버전의 Mac arm64와 Windows x64 앱이다. 정확한 의존성·합성 검사·소스/번들 감사·필수 파일·실행 파일 출처·checksum을 확인한다. 기존 배포 파일을 새로운 성공 파일로 재사용하지 않는다. 두 플랫폼 중 한쪽 실패, 실제 PC 미검증, 교사 확인 대기는 배포 준비 완료가 아니다.
 
-- 분석 기능: 정오표, 문항정보표, 선택 자료를 넣고 분석 실행이 완료된다.
-- 예상정답률: 분석자료가 없어도 기본 또는 직접 입력 분할점수가 상단에 표시된다. 문항 표가 있으면 현재 표 전체 문항의 배점과 A/B/C/D/E 예상정답률을 합산한 전체 예상 분할점수가 우선 표시되고, 목표 성취수준 변경 즉시 다시 계산된다. 한 문항만 체크해도 상단 점수는 선택 문항이 아닌 전체 문항 기준임을 안내한다. 상단/요약 배너는 접고 펼칠 수 있으며, 목표 설정/표 헤더는 고정되고 문항 행만 스크롤된다.
-- AI 검토: 기본값은 외부 전송 없는 로컬 초안이다.
-- Ollama 로컬: Ollama 서버와 채팅 모델이 있을 때 `/api/chat` 경로로 짧은 JSON 응답이 온다. Ollama 0.30.x의 Apple Silicon MLX engine 최적화는 Goedu-Split의 별도 MLX 설정이 아니라 Ollama 런타임 내부 동작으로 안내한다.
-- Ollama server version이 0.30 미만이면, client만 업데이트된 상태일 수 있으므로 AI 설정 상태/진행 로그에서 Ollama 앱 또는 `ollama serve` 재시작을 안내한다.
-- Codex CLI 클라우드: API Key 없이 `codex login`의 ChatGPT OAuth 세션으로만 연결된다.
-- Codex CLI 탐색: Windows GUI 앱의 PATH가 짧아도 `codex.cmd`, npm/Node 경로, `~/.codex/config.toml`의 `CODEX_CLI_PATH`, 환경변수 `CODEX_CLI_PATH`를 확인한다. macOS 빌드에서는 Homebrew 경로도 확인한다.
-- 개인정보: AI 전송 전 학생 이름, 반/번호, 전화번호, 이메일 제거 옵션이 적용된다.
-- 번들: `sample_data`, `.git`, `.venv`, API key 형태 문자열, 로컬 개발 경로가 앱 번들에 포함되지 않는다.
-- 경량화: QtWebEngine, Qt QML, PySide6 필수 리소스는 보존하고 저위험 리소스만 제거한다.
+교사 사용의 핵심은 로컬 분석 → 예상정답률·NEIS 표 → JSON 저장·PC 왕복 → 예측–실측 비교다. 계산 계약·가명 기본값·취소 보존·문항 가져오기 실패 안내·작은 화면 접근성을 실제 후보에서 확인한다. HWP 성공/부재를 구분하고 빈 결과를 성공으로 기록하지 않는다.
 
-## Automated Gate
-
-```bash
-python -m py_compile app/main_window.py app/ai_client.py
-node --check app/spliter_ox_web/assets/index-DE5gZsFK.js
-python build_scripts/windows_release_audit.py --source .
-python -m unittest discover -s tests
-build_scripts\build_windows.bat
-python build_scripts\privacy_release_audit.py dist\Goedu-Split
-build_scripts\pack_windows.bat
-```
-
-## Release Notes
-
-- OpenAI Platform API Key provider는 Windows 제품 UI에서 제공하지 않는다.
-- 클라우드 AI는 `Codex CLI 클라우드 (OAuth)`만 사용한다.
-- `AI 검토` 첫 진입과 `AI 설정`의 `AI 연결 안내` 버튼은 Ollama/MLX 사용법, Windows 터미널의 Node.js/Codex CLI 설치 명령, Codex CLI OAuth 사용법, timeout 대응, API Key 미사용 경계를 교사용 문구로 설명한다.
-- Windows 공개 배포는 Windows 소스 키트 감사, dist 개인정보/비밀값 감사, 실제 실행 QA를 모두 통과한 뒤 진행한다.
+개발 완료·배포 준비·공개 배포를 별도로 기록한다. 공개 Release와 기존 설치 교체는 최종 파일·검증·복귀안을 제시하고 승인된 범위에서 진행한다.

@@ -8,6 +8,13 @@ specified by --output. This file is intentionally outside unittest discovery.
 QT_QPA_PLATFORM defaults to offscreen; it never attaches to a running app.
 """
 
+try:
+    from tests.runtime_isolation import ensure_isolated, secure_web_profile
+except ModuleNotFoundError:
+    from runtime_isolation import ensure_isolated, secure_web_profile
+ensure_isolated(offscreen=True)
+
+
 import argparse
 import copy
 import hashlib
@@ -432,7 +439,7 @@ def run(out):
 
             require(QApplication.instance() is None, "Run as a separate process, not inside another app")
             app = QApplication([])
-            profile = QWebEngineProfile(app)
+            profile = secure_web_profile(QWebEngineProfile(app))
             require(profile.isOffTheRecord(), "WebEngine profile must not persist browser state")
             profile.setCachePath(str(scratch / "web-cache"))
             profile.setPersistentStoragePath(str(scratch / "web-storage"))
