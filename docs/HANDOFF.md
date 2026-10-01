@@ -2,6 +2,9 @@
 
 현재 실행 기준은 [DEVELOPMENT_PLAN](DEVELOPMENT_PLAN.md), 진행·검증은 [GOAL_STATUS](GOAL_STATUS.md), 개발 명령은 [DEVELOPMENT](DEVELOPMENT.md)이다. 개발 후보 버전은 1.0.6이며 기존 설치·배포 1.0.5는 보존한다.
 
+
+최종 후보 소스는 `9baded3257d10c9d0e80f0782bea15f55efd180f`로 고정했다. 로컬 작업 브랜치는 `codex/desktop-candidates-1.0.6`이다. 후속 문서 기록 커밋은 후보 소스와 구분한다. 최신 Mac DMG·실제 내부 앱 QA는 통과했으며 Windows CI·학교/교사·설치/복귀는 대기다. 다음 원격 실행은 사용자의 push/CI 승인 이후 이 후보 SHA를 명시적으로 checkout한다. 최신 증거와 합성 실기 안내는 [검증 기록](VERIFICATION_20261002.md)·[합성 안내](SYNTHETIC_VALIDATION.md)를 따른다.
+
 아래는 과거 인계 이력이다. 이전 단계의 1.0.1~1.0.5, 테스트 수, AI 검증, 브랜치 push·네트워크 금지 등은 해당 날짜의 기록이다. 현재 사용자 Goal은 같은 범위의 로컬 수정·검사·기록을 허용하고 새 설치·지속 설정·push·병합·공개 배포는 구체적인 결과 검토 후 승인하도록 정했다. 실제 학생자료·stash 전체 열람 권한은 없다.
 
 ---
