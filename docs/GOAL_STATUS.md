@@ -1,14 +1,20 @@
 # Goal 현재 상태 — 2026-10-02
 
-**상태: Goal 차단 — 새 브랜치 push·CI 승인 대기 / 배포 준비 미완료 / 공개 배포 미실행.**
+**상태: 자율 개발 진행 중 / 사용자 인수 대기 / 공개 배포 미실행.**
+
+2026-10-02 사용자가 “새 브랜치 푸시 ci 승인. 그리고 이렇게 승인이 필요한 작업이 아닌 위주로 목표를 바꾸고 쭉 밀고나가서 프로젝트 완벽하게 달성해줘.”라고 지시했다. 이번 Goal은 [계획서 D01~D09](DEVELOPMENT_PLAN.md)의 자율 개발 완료로 변경한다. 학교 PC·Excel·실제 JSON 왕복·교사·설치복귀 T01~T09는 별도 인수 조건으로 보존한다. 새 범위도 양쪽 CI·frozen 실행·후보 파일·체크섬·독립 판정 전에는 완료하지 않는다.
+
+독립 전송 감사 후 `32f6702df8dc7a90eb745b6a6fab58f462fc6069`를 승인된 새 브랜치에 push했다. 초기 후보 소스 `9baded3257d10c9d0e80f0782bea15f55efd180f`·버전1.0.6을 입력해 [두 OS 후보 CI](https://github.com/piman-code/goedusplit/actions/runs/36948926765)를 실행했다. Mac 전체 검사·빌드·포장·frozen QA는 성공했으나 Windows Python 검사 실패로 pair는 실행하지 않았다. UTF-8 한글 파일 읽기와 Mac 전용 검사 플랫폼 범위를 수정하고 관련 검사21개를 Mac에서 실행해 OK(Windows junction1개 건너뜀)를 확인했다. Windows 기본cp1252를 재현한 해당 파일 읽기3개도 통과했다. 수정 커밋으로 같은 SHA의 양쪽 후보를 다시 검증한다. 같은 브랜치의 필요한 수정과 CI는 승인 범위 안에서 계속한다. main 병합·Release·설치 교체·지속 설정 변경·학생자료 전송은 승인하지 않았다.
+
+### 이전 차단 이력
 
 2026-10-02 09:01 KST 최종 대조: 같은 승인 경계가 사용자 요청 턴과 이후 두 자동 연속 턴에서 반복됐다. 그동안 독립적으로 가능한 Mac 후보 실행 검증·소스 인계 ZIP·실기 기록과 복귀 안내를 진행했다. 다음 필수 단계인 동일 SHA의 양쪽 CI 후보 확보는 승인 없이 실행할 수 없으므로 전체 완료로 표시하지 않는다. GitHub 읽기 조회에서 `codex/desktop-candidates-1.0.6` 브랜치는 없었다. 최근 CI 성공은 다른 소스 SHA의 과거 실행이며 후보 `9baded3`의 증거로 재사용하지 않는다. 이것은 자동 승인 심사 거절이나 GitHub 장애가 아니라 아직 인간 승인 답변이 없는 상태다.
 
-Goal은 [DEVELOPMENT_PLAN](DEVELOPMENT_PLAN.md)의 필수 조건과 T01~T09 전체를 유지한다. 실제 새 Mac frozen 후보 증거는 [VERIFICATION_20261002](VERIFICATION_20261002.md)에 기록했다. 현재 개발 후보는 1.0.6이며 기존 설치·배포 1.0.5는 보존한다.
+T01~T09는 사용자 인수 조건으로 유지한다. 실제 새 Mac frozen 후보 증거는 [VERIFICATION_20261002](VERIFICATION_20261002.md)에 기록했다. 현재 개발 후보는 1.0.6이며 기존 설치·배포 1.0.5는 보존한다.
 
 시작 기준은 `3b9dab6927f2d64379e3f9fbe4c6d4ee5ee84e95`다. 작업 브랜치는 `codex/desktop-candidates-1.0.6`, 실제 frozen QA를 통과한 최신 Mac 후보 소스는 `9baded3257d10c9d0e80f0782bea15f55efd180f`다. 이 후보의 DMG SHA256은 `3eefc2f5a73b76a34f7b73c17f15e834c2ee70b2994f2a641e045ae270598df9`다. 필수 12개 QA, 실행 파일·manifest 지문, codesign과 hdiutil 검증을 완료판정관이 독립 재확인했다. 읽기 전용 DMG 내부 앱을 직접 실행한 frozen QA도 통과했다. 이전 `adb89d5`·`07ea42c` 후보와 기존 설치는 보존한다.
 
-GitHub `piman-code/goedusplit`은 2026-10-02 읽기 조회에서 공개 저장소·기본 브랜치 main으로 확인했다. 새 브랜치 push와 CI 임시 환경 의존성 설치·후보 artifact 생성에 대한 구체적인 승인 질문이 대기 중이다. 원격 push·CI 실행은 아직 하지 않았다. 최종 두 플랫폼의 후보 소스는 `9baded3`로 고정하며, 후속 검증 기록은 별도 문서 커밋으로 보존한다. CI 실행 시 최신 기록 커밋 대신 명시적으로 후보 SHA를 checkout한다.
+GitHub `piman-code/goedusplit`은 2026-10-02 공개 저장소·기본 브랜치 main으로 확인했다. 현재 승인·push·CI 상태는 문서 첫머리를 따른다. 초기 두 플랫폼 후보 소스는 `9baded3`로 고정하고 후속 검증 기록은 별도 문서 커밋으로 보존한다. CI에서 결함 수정이 필요하면 새 후보 SHA를 명시하고 같은 SHA로 양쪽을 다시 검증한다.
 
 ## 현재 확보한 증거
 
@@ -55,8 +61,8 @@ T01~T09는 **어느 항목도 전체 합격으로 표시하지 않는다**. 소�
 - React 원본은 현재 추적 파일에 없다. 실제 학생자료를 포함한 stash 전체를 적용하지 않는다. 이번 변경은 기존 번들·계산 계약·저장 형식을 재작성하지 않았다.
 - Mac ad-hoc 서명은 Apple 공증이 아니다. Windows 코드 서명·학교 정책 확인도 대기다. Intel Mac/Windows ARM은 검증 전 지원표에 넣지 않는다.
 
-## 차단 해소 후 다음 작업
+## 다음 작업
 
-합성 실기 키트와 Mac 분석·내보내기 소스 검증을 완료했다. 안내는 [SYNTHETIC_VALIDATION](SYNTHETIC_VALIDATION.md)를 따른다. NEIS/예측–실측 저장과 시험지 가져오기 소스 UI도 통과했다. 다음은 승인된 원격 CI에서 같은 후보 SHA의 Windows 파일 확보와 양쪽 후보 실기다. 이미 제시한 새 브랜치 push·CI 승인에 답변을 받은 뒤 기존 Goal을 재개해 원격 실행과 pair 검증을 진행한다. 전체 범위를 다시 조사하거나 기존 검사를 이유 없이 반복하지 않는다. 설치 교체·main 병합·공개 Release는 현재 승인 범위에 포함하지 않는다.
+승인된 원격 CI를 따라 양쪽 개발 검사·frozen 후보 QA·필수 파일 pair·체크섬을 확인하고 실패는 관련 수정·검사 후 다시 실행한다. 이후 실제 artifact를 보존·독립 대조하고 D01~D09·개발/릴리스/인수 문서를 최종 판정한다. 전체 범위를 처음부터 조사하거나 기존 검사를 이유 없이 반복하지 않는다. 학교 PC·교사 인수는 별도이며 설치 교체·main 병합·공개 Release는 현재 승인 범위에 포함하지 않는다.
 
 학교 실기 결과는 [PC_VALIDATION_RECORD](PC_VALIDATION_RECORD.md), 백업 대상과 복귀 경계는 [BACKUP_AND_ROLLBACK](BACKUP_AND_ROLLBACK.md)를 따른다. Windows 소스 ZIP은 로컬 fallback 자료이며 원격 push/CI 승인이 없는 상태에서 GitHub 기반 개발 완료로 취급하지 않는다.

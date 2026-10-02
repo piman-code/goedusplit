@@ -91,3 +91,12 @@ QA_REPORT·입력·설정·PNG는 로컬 합성 증거 폴더에 보존한다. �
 동일 SHA의 Windows 후보·합동 SHA256SUMS·GitHub CI 성공, 학교 Windows OS/CPU·Excel·실제 네트워크 차단·배율/작은 화면·설치·복귀, Mac→Windows→Mac JSON 왕복, 기대값 키트의 양쪽 후보 실기 및 Windows 파일 입력/내보내기/문항 가져오기, 교사의 실제 유용성 확인이 남았다. Mac 정상 사용자 환경 첫 실행·실제 설치 교체도 이번 합성 QA로 대체하지 않는다.
 
 이 증거로 T01~T09 전체나 개발 Goal 완료를 선언하지 않는다. 새 후보 SHA/파일이 바뀌면 해당 후보로 관련 검증을 다시 한다. 다음 독립 작업은 합성 실기 키트·안내 준비이며 원격 push/CI는 사용자 승인 후 실행한다.
+
+
+## 승인 후 최초 두 OS CI와 Windows 검사 수정
+
+2026-10-02 사용자 승인으로 새 브랜치를 push하고 [후보 CI 36948926765](https://github.com/piman-code/goedusplit/actions/runs/36948926765)를 실행했다. workflow HEAD32f6702, 실제 checkout 후보9baded3/1.0.6이다. Mac job은 preflight·pip check·소스 감사·전체 검사·빌드·DMG·frozen QA·manifest/artifact까지 성공했다. Windows는 224검사 중 오류2·실패1·건너뜀9로 중단했다. pair는 건너뛰었으며 이 실행을 양쪽 후보 성공으로 표시하지 않는다.
+
+Windows 오류는 UTF-8 한글 bat/validation JSON을 기본cp1252로 읽는 테스트 두 곳, 실패는 Mac 포장 스크립트 검사에 Windows Bash를 사용한 부분이었다. 구축관은 테스트 두 파일에서 UTF-8 읽기3곳을 명시하고 Mac 빌드·포장 integration2개를 해당 Mac에서만 실행하도록 수정했다. 전역 UTF-8 강제·제품 코드·계산/저장/보안 정책 변경은 없다. Mac에서 관련21개 검사 OK(실제 Windows junction1개만 건너뜀), 기본cp1252를 재현한 파일 읽기3개도 통과했다. Mac 전용 검사2개는 실제 Mac에서 실행·통과했다. 수정 커밋으로 양쪽 후보 CI를 다시 실행해야 한다.
+
+이번 사용자는 자율 개발 중심으로 Goal을 변경했다. 최신 판정 기준은 DEVELOPMENT_PLAN의 D01~D09다. 기존 T01~T09는 별도 학교 사용자 인수이며 미실행 상태를 보존한다.

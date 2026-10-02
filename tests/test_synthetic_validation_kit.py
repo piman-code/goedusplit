@@ -37,7 +37,7 @@ class SyntheticValidationKitTests(unittest.TestCase):
         self.assertEqual(names - {"manifest.json"}, set(manifest["file_sha256"]))
         for name, value in manifest["file_sha256"].items():
             self.assertEqual(hashlib.sha256((self.output / name).read_bytes()).hexdigest(), value)
-        self.assertEqual("passed", json.loads((self.output / "validation.json").read_text())["status"])
+        self.assertEqual("passed", json.loads((self.output / "validation.json").read_text(encoding="utf-8"))["status"])
         self.assertFalse(any(path.is_dir() for path in self.output.iterdir()))
 
     def test_independent_constants_and_reading_formats_remain_stable(self):
@@ -117,7 +117,7 @@ class SyntheticValidationKitTests(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()):
                     self.assertEqual(1, kit.main(["--output", str(output)]))
             self.assertEqual(before, {key: os.environ.get(key) for key in before})
-            self.assertEqual("failed", json.loads((output / "validation.json").read_text())["status"])
+            self.assertEqual("failed", json.loads((output / "validation.json").read_text(encoding="utf-8"))["status"])
             self.assertFalse((output / "manifest.json").exists())
 
     def test_symlink_and_mock_junction_output_ancestors_are_refused(self):

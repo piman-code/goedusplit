@@ -22,7 +22,7 @@ class CandidateGates(unittest.TestCase):
     def test_windows_batch_references_existing_python_helpers(self):
         project=Path(__file__).resolve().parents[1]
         for name in ('build_windows.bat','pack_windows.bat','pack_windows_installer.bat'):
-            scripts=re.findall(r'build_scripts\\([\w-]+\.py)',(project/'build_scripts'/name).read_text())
+            scripts=re.findall(r'build_scripts\\([\w-]+\.py)',(project/'build_scripts'/name).read_text(encoding='utf-8'))
             self.assertTrue(scripts)
             for script in scripts:
                 self.assertTrue((project/'build_scripts'/script).is_file(),f'{name} references missing {script}')
@@ -88,6 +88,7 @@ class CandidateGates(unittest.TestCase):
     def test_missing_qtwebengine_is_an_error(self):
         with self.assertRaises(RuntimeError): repair(self.root/'dist'/'Goedu-Split.app')
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'requires native macOS build script execution')
     def test_build_mac_preserves_existing_outputs(self):
         if not shutil_available_bash(): self.skipTest('bash is unavailable')
         project=Path(__file__).resolve().parents[1]
@@ -99,6 +100,7 @@ class CandidateGates(unittest.TestCase):
         self.assertNotEqual(result.returncode,0)
         self.assertEqual(sentinel.read_bytes(),b'keep candidate')
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'requires native macOS pack script execution')
     def test_mac_pack_rejects_old_bundle_before_creating_dmg(self):
         if not shutil_available_bash(): self.skipTest('bash is unavailable')
         project=Path(__file__).resolve().parents[1]
