@@ -91,7 +91,12 @@ jobs:
           $output = Join-Path $parent $leaf
           $before = [Environment]::GetEnvironmentVariable('QT_QPA_PLATFORM', 'Process')
           & $legacy -NoProfile -File $helper -CandidateZip $zip -OutputRoot $output -Context CI
-          if ($LASTEXITCODE -ne 0) { throw 'Pinned frozen helper validation failed' }
+          $helperExit = $LASTEXITCODE
+          if ($helperExit -ne 0) {
+            $failed = Get-Content -LiteralPath (Join-Path $output 'SCHOOL_VALIDATION_REPORT.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+            Write-Host ('Helper failed: stage={0}; type={1}; line={2}' -f ($failed.errors -join ','), $failed.error_type, $failed.error_line)
+            throw 'Pinned frozen helper validation failed'
+          }
           if ([Environment]::GetEnvironmentVariable('QT_QPA_PLATFORM', 'Process') -cne $before) { throw 'Caller environment changed' }
           $report = Get-Content -LiteralPath (Join-Path $output 'SCHOOL_VALIDATION_REPORT.json') -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($report.status -ne 'passed-synthetic-only' -or $report.context -ne 'CI' -or

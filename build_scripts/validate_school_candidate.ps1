@@ -105,9 +105,13 @@ try {
     $zipStream.Position = 0
     $report.checks['pinned ZIP hash'] = $true
 
-    $stage = 'zip-entries'
+    $stage = 'zip-type-load'
+    # ZipArchive and ZipArchiveMode belong to this assembly in .NET Framework.
+    Add-Type -AssemblyName System.IO.Compression
     Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $stage = 'zip-archive-open'
     $archive = New-Object -TypeName System.IO.Compression.ZipArchive -ArgumentList @($zipStream, [IO.Compression.ZipArchiveMode]::Read, $true)
+    $stage = 'zip-entries'
     $names = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::OrdinalIgnoreCase)
     $entries = @{}
     foreach ($entry in $archive.Entries) {
@@ -212,6 +216,8 @@ try {
 } catch {
     # Deliberately exclude exception text, paths, account names and hostnames.
     $report.errors = @($stage)
+    $report['error_type'] = $_.Exception.GetType().Name
+    $report['error_line'] = $_.InvocationInfo.ScriptLineNumber
     $report.status = 'failed'
     $report.exit_code = 1
 } finally {
