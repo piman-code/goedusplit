@@ -1,13 +1,12 @@
 # 현재 Goal 인계 — 2026-10-02
 
-현재 실행 기준은 [DEVELOPMENT_PLAN](DEVELOPMENT_PLAN.md), 진행·검증은 [GOAL_STATUS](GOAL_STATUS.md), 개발 명령은 [DEVELOPMENT](DEVELOPMENT.md)이다. 개발 후보 버전은 1.0.6이며 기존 설치·배포 1.0.5는 보존한다.
+현재 실행 기준은 [DEVELOPMENT_PLAN D01~D09](DEVELOPMENT_PLAN.md), 최신 판정은 [AUTONOMOUS_COMPLETION](AUTONOMOUS_COMPLETION.md), 진행은 [GOAL_STATUS](GOAL_STATUS.md), 실행 명령은 [DEVELOPMENT](DEVELOPMENT.md)이다. 개발 후보1.0.6과 기존 설치·배포1.0.5를 구분한다.
 
-2026-10-02 최신 사용자 지시: 새 브랜치 push·CI 승인, 승인이나 학교 PC 조치를 기다리지 않는 개발 작업 중심으로 Goal 변경. [계획서 D01~D09](DEVELOPMENT_PLAN.md)의 자율 개발 완료를 이번 종료점으로 하고 학교 Windows·교사·설치/복귀 T01~T09는 별도 인수 조건으로 보존한다. Goal active 재개를 확인했다. 독립 감사한32f6702를 `codex/desktop-candidates-1.0.6`에 push했고 [후보 CI](https://github.com/piman-code/goedusplit/actions/runs/36948926765)를 실행했다. 현재 결과 확인 중. 과거 승인 대기로 다시 멈추지 않는다. 같은 브랜치의 필요한 수정·CI는 계속하며 main 병합·Release·기존 설치 교체는 별도다.
+사용자가 새 브랜치 push·CI와 승인 대기 없는 개발 범위로 목표 변경을 승인했다. `codex/desktop-candidates-1.0.6`에서 필요한 수정·검사·push·CI를 계속하며 과거 승인 대기로 멈추지 않는다. 학교 Windows·Excel·실제 JSON 왕복·교사·설치/복귀 T01~T09는 별도 인수 대기다.
 
+현재 후보1866f4e의 [CI36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)는 두 OS 개발 검사·빌드·포장·frozen QA 성공, 최종 안내 파일 pair 불일치로 전체 실패했다. 다음 작업은 줄바꿈 원인 확인·최소 수정·독립 감사·새 SHA의 양쪽 CI·다운로드/체크섬 재대조·D01~D09 최종 독립 판정이다. 후보 파일은 이전 파일과 별도 폴더에 보존한다. 공개 Release·main 병합·설치 교체·지속 설정·실제 학생자료 전송은 미실행이다.
 
-초기 후보 소스는 `9baded3257d10c9d0e80f0782bea15f55efd180f`다. 로컬 작업 브랜치는 `codex/desktop-candidates-1.0.6`이다. 후속 문서 기록 커밋은 후보 소스와 구분한다. 로컬 Mac DMG·실제 내부 앱 QA는 통과했으며, 승인된 범위에서 이 SHA의 두 OS CI를 실행했다. Windows 테스트 실패를 확인해 수정 중이다. 수정 후 새 후보 SHA를 명시해 양쪽 CI를 다시 실행하고 이전 후보는 보존한다. 학교/교사·설치/복귀는 인수 대기다. 최신 증거와 합성 실기 안내는 [검증 기록](VERIFICATION_20261002.md)·[합성 안내](SYNTHETIC_VALIDATION.md)를 따른다.
-
-아래는 과거 인계 이력이다. 이전 단계의 1.0.1~1.0.5, 테스트 수, AI 검증, 브랜치 push·네트워크 금지 등은 해당 날짜의 기록이다. 현재 사용자 Goal은 같은 범위의 로컬 수정·검사·기록을 허용하고 새 설치·지속 설정·push·병합·공개 배포는 구체적인 결과 검토 후 승인하도록 정했다. 실제 학생자료·stash 전체 열람 권한은 없다.
+아래는 과거 인계 이력이다. 이전 단계의 1.0.1~1.0.5, 테스트 수, AI 검증, 브랜치 push·네트워크 금지 등은 해당 날짜의 기록이다. 현재 사용자 Goal은 같은 브랜치의 push·CI를 포함한 개발 작업을 승인했다. 새 설치·지속 설정·main 병합·공개 배포는 별도 승인이다. 실제 학생자료·stash 전체 열람 권한은 없다.
 
 ---
 

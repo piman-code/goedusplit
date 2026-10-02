@@ -2,7 +2,7 @@
 
 상태: 개발·검증 진행 중. 기존 문서는 [이력](history/QUALITY_AUDIT-before-20261002.md)에 보존했다. 과거 AI 검사는 현재 필수 기준이 아니다.
 
-필수 기준은 [DEVELOPMENT_PLAN T01~T09](../docs/DEVELOPMENT_PLAN.md), 현재 증거는 [GOAL_STATUS](../docs/GOAL_STATUS.md), 실제 PC 절차는 [수동 QA](MANUAL_QA_CHECKLIST.md)를 따른다.
+자율 개발의 필수 기준은 [DEVELOPMENT_PLAN D01~D09](../docs/DEVELOPMENT_PLAN.md), 학교 사용자 인수 기준은 같은 문서의 T01~T09다. 현재 증거는 [완료 판정표](../docs/AUTONOMOUS_COMPLETION.md)·[GOAL_STATUS](../docs/GOAL_STATUS.md), 실제 PC 절차는 [수동 QA](MANUAL_QA_CHECKLIST.md)를 따른다.
 
 정식 후보는 동일 SHA·버전의 Mac arm64와 Windows x64 앱이다. 정확한 의존성·합성 검사·소스/번들 감사·필수 파일·실행 파일 출처·checksum을 확인한다. 기존 배포 파일을 새로운 성공 파일로 재사용하지 않는다. 두 플랫폼 중 한쪽 실패, 실제 PC 미검증, 교사 확인 대기는 배포 준비 완료가 아니다.
 

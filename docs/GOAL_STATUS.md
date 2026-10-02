@@ -2,6 +2,22 @@
 
 **상태: 자율 개발 진행 중 / 사용자 인수 대기 / 공개 배포 미실행.**
 
+사용자 최신 요청에 따라 이번 목표는 [D01~D09 자율 개발 완료](DEVELOPMENT_PLAN.md)다. 승인된 `codex/desktop-candidates-1.0.6`의 push·CI·필요한 수정은 재승인 없이 계속한다. T01~T09 학교 인수는 별도로 유지한다.
+
+현재 후보 소스는 `1866f4e2e288ac0763a3291d32ecb492419daa91`, 버전1.0.6이다. [후보 CI36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)의 Mac arm64와 Windows x64 개발 검사·빌드·포장·frozen 실행은 모두 성공했다. 최종 pair는 두 사용자 안내 파일 체크섬 불일치로 실패했다. 같은 내용을 OS별 줄바꿈으로 저장한 것인지 확인하고, 파일 동일성 검사를 유지하며 수정한다. 최종 동일 SHA의 pair·다운로드 파일·독립 판정 전에는 D01~D09 완료로 표시하지 않는다.
+
+최신 판정은 [AUTONOMOUS_COMPLETION](AUTONOMOUS_COMPLETION.md), 실행 기록은 [VERIFICATION_20261002](VERIFICATION_20261002.md), 학교 실기 빈 양식은 [PC_VALIDATION_RECORD](PC_VALIDATION_RECORD.md)을 따른다. 설치 앱과 원본 dist는1.0.5, `.venv`와 stash2개는 보존 확인했다. 공개 Release·main 병합·설치 교체·개인 설정 변경·학생자료 전송은 실행하지 않았다.
+
+## 이전 단계 기록
+
+아래 내용은 각 단계 당시의 상태다. 9baded3/e63a473의 파일·미실행·승인 대기 문장은 현재 후보의 상태를 뜻하지 않는다. 초기 증거와 경계 변경 이력을 보존한다.
+
+---
+
+# Goal 현재 상태 — 2026-10-02
+
+**상태: 자율 개발 진행 중 / 사용자 인수 대기 / 공개 배포 미실행.**
+
 2026-10-02 사용자가 “새 브랜치 푸시 ci 승인. 그리고 이렇게 승인이 필요한 작업이 아닌 위주로 목표를 바꾸고 쭉 밀고나가서 프로젝트 완벽하게 달성해줘.”라고 지시했다. 이번 Goal은 [계획서 D01~D09](DEVELOPMENT_PLAN.md)의 자율 개발 완료로 변경한다. 학교 PC·Excel·실제 JSON 왕복·교사·설치복귀 T01~T09는 별도 인수 조건으로 보존한다. 새 범위도 양쪽 CI·frozen 실행·후보 파일·체크섬·독립 판정 전에는 완료하지 않는다.
 
 독립 전송 감사 후 `32f6702df8dc7a90eb745b6a6fab58f462fc6069`를 승인된 새 브랜치에 push했다. 초기 후보 소스 `9baded3257d10c9d0e80f0782bea15f55efd180f`·버전1.0.6을 입력해 [두 OS 후보 CI](https://github.com/piman-code/goedusplit/actions/runs/36948926765)를 실행했다. Mac 전체 검사·빌드·포장·frozen QA는 성공했으나 Windows Python 검사 실패로 pair는 실행하지 않았다. UTF-8 한글 파일 읽기와 Mac 전용 검사 플랫폼 범위를 수정하고 관련 검사21개를 Mac에서 실행해 OK(Windows junction1개 건너뜀)를 확인했다. Windows 기본cp1252를 재현한 해당 파일 읽기3개도 통과했다. 수정 커밋으로 같은 SHA의 양쪽 후보를 다시 검증한다. 같은 브랜치의 필요한 수정과 CI는 승인 범위 안에서 계속한다. main 병합·Release·설치 교체·지속 설정 변경·학생자료 전송은 승인하지 않았다.

@@ -1,6 +1,12 @@
 # 1.0.6 두 플랫폼 배포 후보 준비
 
-현재는 로컬 구현·검증 진행 단계다. 이 문서의 절차가 존재하는 것과 실제 후보·CI·학교 PC 검증 성공은 구분한다. 기존 1.0.5 설치본과 배포 파일은 보존한다.
+현재는 **자율 개발 검증 진행 중 / 사용자 인수 대기 / 공개 배포 미실행**이다. 승인된 새 브랜치 push·CI를 진행했으며, 이 문서의 절차가 존재하는 것과 실제 후보·통합 CI·학교 PC 검증 성공은 구분한다. 기존 1.0.5 설치본과 배포 파일은 보존한다.
+
+## 현재 후보 확인 상태
+
+검증 SHA `1866f4e2e288ac0763a3291d32ecb492419daa91`의 [CI 36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)에서 Mac arm64·Windows x64의 개발 검사·앱 빌드·포장·frozen QA는 성공했다. 그러나 pair가 두 사용자 안내의 지문 불일치를 감지해 **전체 CI는 실패**했다. 현재 파일을 최종 통합 후보로 확정하거나 SHA256SUMS가 검증됐다고 안내하지 않는다. 수정한 새 SHA로 양쪽과 pair를 다시 실행한 뒤 최종 값과 CI URL을 기입한다.
+
+최종 후보 SHA·통합 성공 CI·pair artifact·세 배포 파일의 SHA256: **확정 대기**. [자율 개발 판정표](AUTONOMOUS_COMPLETION.md)가 D01~D09의 증거와 남은 일을 연결한다. 기존 로컬 `9baded3` DMG와 실패한 실행의 파일은 이력으로 보존하며 새 SHA로 재표시하지 않는다.
 
 ## 동일한 소스를 확정하는 절차
 
@@ -44,9 +50,11 @@ Get-FileHash -Algorithm SHA256 .\Goedu-Split-1.0.6-windows-setup.exe
 Get-FileHash -Algorithm SHA256 .\Goedu-Split-1.0.6-windows.zip
 ```
 
-Windows는 `SHA256SUMS`의 같은 파일 행과 값이 정확히 일치해야 한다. 후보 실행·설치 범위는 확인한 후 결정한다. 설치를 피해서 시험하려면 portable ZIP 전체를 **새 폴더**에 풀어 실행한다. 실제 설치본 검증은 T07·T09 필수이며 기존 설치를 교체하는 행위는 사용자 승인 후 진행한다. Mac도 새 후보 위치/별도 사용자로 실행하며 기존 `/Applications` 앱을 먼저 바꾸지 않는다.
+Windows는 `SHA256SUMS`의 같은 파일 행과 값이 정확히 일치해야 한다. 후보 실행·설치 범위는 확인한 후 결정한다. 설치를 피해서 시험하려면 portable ZIP 전체를 **새 폴더**에 풀어 실행한다. 실제 학교 사용을 위한 설치본 검증은 별도 사용자 인수 T07·T09의 필수 조건이며 기존 설치를 교체하는 행위는 사용자 승인 후 진행한다. Mac도 새 후보 위치/별도 사용자로 실행하며 기존 `/Applications` 앱을 먼저 바꾸지 않는다.
 
 두 PC에서 [수동 QA](../distribution/MANUAL_QA_CHECKLIST.md)를 실행하고 날짜·OS·CPU·배율·SHA·파일 지문·합성 입력·T01~T09 결과를 기록한다. T03은 Mac 저장 → Windows 저장 → Mac 재열기를 실제로 수행한다. T04는 Windows Excel 열기도 포함한다. T08은 교사가 결과의 의미를 확인해야 한다.
+
+D01~D09는 자동·합성 개발 검사, 양 OS frozen QA, 실제 Mac source/native 증거, 동일 SHA pair·파일 대조 및 독립 완료 판정을 요구한다. Windows runner의 offscreen 실행을 학교 PC 검증으로, portable 실행을 설치·복귀로, Mac 별도 후보 실행을 기존 설치 교체로 표시하지 않는다. D통과와 T01~T09 사용자 인수 대기는 함께 기록할 수 있으나, T증거 전에는 학교 사용을 위한 배포 준비 완료를 선언하지 않는다.
 
 ## 서명과 알려진 지원 제약
 

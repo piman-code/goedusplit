@@ -1,10 +1,20 @@
 # Mac·학교 Windows에서 개발 이어가기
 
-기준: 1.0.6 개발 후보 / Python 3.14.2 / Node 22.23.1. 기존 설치·배포 1.0.5는 보존한다. Mac 소스 실행·합성 검증은 진행 중이며 Windows 새 복제본 실행과 CI 설치는 아직 미검증이다. 학교 OS·아키텍처 확인 전 Windows x64는 예정 지원 대상이다.
+기준: 1.0.6 개발 후보 / Python 3.14.2 / Node 22.23.1. 기존 설치·배포 1.0.5는 보존한다. 두 OS의 새 CI 환경에서 lock 설치·개발 검사를 실행했고 Mac GitHub 새 clone의 실제 앱 QA도 통과했다. 학교 OS·아키텍처·로컬 환경은 사용자 인수 대상이며 Windows x64는 학교 실기 전 예정 지원 대상이다. 최신 후보·파일·CI 결과는 [완료 판정표](AUTONOMOUS_COMPLETION.md)를 따른다.
 
 ## 1. 각 컴퓨터에서 별도 저장소 사용
 
 GitHub `piman-code/goedusplit`의 자기 작업 브랜치를 각 PC의 로컬 폴더로 clone한다. 같은 공유 드라이브의 한 폴더를 Mac·Windows에서 함께 편집하지 않는다. 소스·문서는 Git으로 공유하지만 학생자료·앱 설정·포트폴리오는 Git에 넣지 않는다. 실제 학생자료는 저장소 바깥에서 관리한다.
+
+현재 개발 후보를 처음 받는 Mac 터미널 또는 Windows PowerShell에서, 새 프로젝트 폴더를 만들 부모 위치로 이동한 뒤 실행한다. 이미 같은 이름의 폴더가 있으면 다른 새 폴더명을 쓴다.
+
+```bash
+git clone --single-branch --branch codex/desktop-candidates-1.0.6 https://github.com/piman-code/goedusplit.git goedusplit-candidate
+cd goedusplit-candidate
+git rev-parse HEAD
+```
+
+브랜치의 최신 문서 기록 커밋과 고정 앱 후보 SHA는 다를 수 있다. 완료 판정표의 BUILD source_commit과 앱 후보 SHA를 대조한다. 후속 개발은 아래 방식대로 각 PC의 별도 작업 브랜치를 사용한다.
 
 기존 복제본에서는 먼저 아래 상태를 확인하고, 미커밋 변경을 보존한 후 fetch/pull한다. stash 전체 적용은 하지 않는다. 해당 프로젝트의 과거 stash에 실제 학생자료가 있어 내용 열람·외부 전송이 허용되지 않았다.
 
@@ -17,7 +27,7 @@ git fetch origin
 
 Mac·Windows가 동시에 작업하면 서로 다른 `codex/<작업명>` 브랜치를 사용한다. 다른 PC가 같은 작업을 이어갈 때는 먼저 이전 PC에서 검사·커밋·승인된 push를 완료한다. 새 PC는 `git pull --ff-only`로 해당 브랜치를 받고 커밋이 인계 기록과 같은지 확인한다. 충돌이 나면 강제 push/reset 대신 양쪽 변경을 읽어 합친다.
 
-현재 Goal에서 에이전트의 새 설치·지속 설정·push·병합·공개 배포에는 구체적 변경안 검토 후 사용자 승인이 필요하다. 아래 준비 명령은 사용자가 직접 환경을 준비할 때의 안내이며 에이전트가 이를 실행했다는 뜻이 아니다.
+현재 Goal에서는 `codex/desktop-candidates-1.0.6`의 push·CI를 승인받았다. 같은 범위의 필요한 수정·검사·기록은 이어간다. 로컬 새 설치·지속 설정·병합·공개 배포는 별도 승인이다. 아래 준비 명령은 각 사용자가 로컬 환경을 준비할 때의 안내이며 학교 PC에서 이미 수행됐다는 뜻은 아니다.
 
 ## 2. 개발 환경 준비
 
@@ -53,7 +63,7 @@ node --test tests/test_expected_rate_web.cjs
 
 PowerShell 실행 정책을 바꾸지 않아도 된다. activate 대신 `.venv`의 Python을 직접 실행한다. Windows setup 후보를 만들 때만 Inno Setup이 필요하다. 기존 설치를 감지하고, 없으면 자동 설치하지 않고 중단한다.
 
-`requirements.txt`는 허용 범위, `requirements-build-lock.txt`는 후보용 정확한 버전이다. lock은 2026-10-02 기존 Mac 환경의 읽기 결과로 작성하고 Windows 전용 의존성 2개에 platform marker를 붙였다. 새 환경의 lock 설치 성공은 CI 미실행으로 아직 증명되지 않았다. 변경할 때는 새 후보 환경에서 두 OS의 검사를 통과한 후 반영한다. Python·Node는 위 버전에 맞추고 OS·CPU·전체 패키지 버전은 BUILD manifest에 기록한다.
+`requirements.txt`는 허용 범위, `requirements-build-lock.txt`는 후보용 정확한 버전이다. lock은 2026-10-02 기존 Mac 환경의 읽기 결과로 작성하고 Windows 전용 의존성 2개에 platform marker를 붙였다. 새 Mac/Windows CI 환경의 lock 설치·pip check·개발 검사 성공을 확인했다. 실제 학교 PC의 설치·실행은 별도 인수 기록으로 확인한다. lock 변경은 새 후보 환경에서 두 OS의 검사를 통과한 후 반영한다. OS·CPU·전체 패키지 버전은 BUILD manifest에 기록한다.
 
 ## 3. 격리 검사와 실제 앱을 구분하기
 

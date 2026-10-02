@@ -1,3 +1,7 @@
+# 검증 기록 — 최신 실행 안내
+
+최신 후보 판정은 [AUTONOMOUS_COMPLETION](AUTONOMOUS_COMPLETION.md)과 [GOAL_STATUS](GOAL_STATUS.md)를 따른다. 아래 기록은 시간순 이력이며 처음의9baded3 후보·당시 미실행 상태는 현재 상태와 구분한다.
+
 # 2026-10-02 현재 검증 증거
 
 상태: **Mac 후보 빌드·격리 실행 부분 검증 / Windows CI·실기·교사 확인 대기.**
@@ -112,3 +116,13 @@ Windows skip11은 Mac/Finder 전용3·POSIX source-kit7·선택 real kordoc1이�
 
 
 포장 수정: `build_scripts/read_app_version.py`가 UI 없이 app 버전을 읽고 canonical 숫자3부 버전만 stdout에 출력한다. 두 packbat는 이 도구를 호출해 inline Python 괄호/인용구를 제거했다. helper stdlib(-S)/정확버전/부정확버전, sourcekit helper포함, 필요한 helper 존재, 가이드/원본 출력 보존의 Mac 관련22개 검사 OK(Windows CMD2개만 미적용). Windows 회귀 검사는 공백 저장소/공백 Python 경로, 버전 조회 뒤 identity guard 도달, invalid/missing helper 조기 중단, 기존 ZIP/setup 보존과 정확한 파일명 출력까지 확인하도록 보강했다. 실제 Windows CI 결과는 후속에서 확인한다.
+
+
+## 세 번째 CI: 양쪽 후보 성공·안내 파일 pair 중단
+
+후보 `1866f4e2e288ac0763a3291d32ecb492419daa91`의 [CI36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)에서 Mac arm64·Windows x64 작업은 모두 성공했다. Python226개(Mac7/Windows11개 플랫폼 전용 또는 선택 kordoc 건너뜀), Node43개와 빌드 전 재검사, PyInstaller·출처/개인정보 검사·포장·실제 frozen QA·명세·artifact 업로드가 통과했다. Windows CMD 공백 Python 경로·버전 오류·기존 파일 보존 회귀는 실제 Windows에서 실행했다. Inno Setup6.7.1로 설치 EXE를 생성했으며 실제 학교 설치 성공이라는 뜻은 아니다.
+
+최종 pair 작업110666231824는 각 플랫폼 출처·파일 해시·frozen QA 검증을 거친 후 `The two candidates contain different user guides`로 실패했다. 동일성 검사를 완화하지 않고 원인 수정 뒤 새 SHA의 두 플랫폼을 다시 검증한다. 양쪽 실행·pair 로그는 `out_test/goal-20261002-ci-36951043652/`에 보존한다. 전체 CI를 통합 성공으로 기록하지 않는다.
+
+
+수정 후 검증: `.gitattributes`는 `distribution/USER_GUIDE.md text eol=lf` 한 파일만 고정한다. 실제 Git scratch checkout에서 정책 부재의 autocrlf=true/false는 CRLF/LF로 달라지는 것을 재현했고 새 정책에서는 같은 LF bytes를 확인했다. 개별 manifest hash가 유효해도 안내 줄바꿈이 다르면 pair는 여전히 실패한다. source kit의 파일·출처 허용목록에는 `.gitattributes`만 추가했다. Mac 관련24개 검사 OK(Windows CMD2개만 건너뜀). 안내문 내용·제품 UI·계산·학생자료 접근·개인 설정은 바꾸지 않았다. 새 커밋으로 양쪽을 다시 빌드한다.

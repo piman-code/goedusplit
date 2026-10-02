@@ -34,7 +34,7 @@ def source_identity(root):
         raise ValueError('Missing development kit file identities')
     allowed_roots={'app','assets','build_scripts','distribution','docs','tests'}
     allowed_files={'run.py','run_tests.py','requirements.txt','requirements-build-lock.txt','goedusplit.spec',
-                   'README.md','SECURITY.md','.gitignore','WINDOWS_DEV_KIT_MANIFEST.txt'}
+                   'README.md','SECURITY.md','.gitignore','.gitattributes','WINDOWS_DEV_KIT_MANIFEST.txt'}
     for name,expected in files.items():
         path=Path(name)
         if path.is_absolute() or '..' in path.parts or (path.parts[0] not in allowed_roots and name not in allowed_files):

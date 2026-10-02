@@ -1,0 +1,2 @@
+# Package the same guide bytes on Mac and Windows, including autocrlf checkouts.
+distribution/USER_GUIDE.md text eol=lf

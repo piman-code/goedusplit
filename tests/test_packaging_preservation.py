@@ -19,6 +19,41 @@ SCRIPTS = ROOT / "build_scripts"
 SOURCE_SCRIPT = SCRIPTS / "make_windows_source_zip.sh"
 
 
+class GuideCheckoutTests(unittest.TestCase):
+    def test_packaged_guide_is_identical_with_windows_and_mac_checkout_settings(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            repo = root / "repo"
+            repo.mkdir()
+            def git(*args):
+                return subprocess.run(["git", "-C", str(repo), *args], check=True,
+                                      capture_output=True).stdout
+            git("init", "-q")
+            guide = repo / "distribution/USER_GUIDE.md"
+            guide.parent.mkdir()
+            expected = "합성 사용 안내\n같은 후보 안내서\n".encode("utf-8")
+            guide.write_bytes(expected)
+            # Establish that the test can reproduce the original cross-OS defect.
+            git("-c", "core.autocrlf=false", "add", ".")
+            outputs = []
+            for autocrlf in ("true", "false"):
+                folder = root / ("without-policy-" + autocrlf)
+                git("-c", "core.autocrlf=" + autocrlf, "checkout-index", "--all",
+                    "--prefix=" + folder.as_posix() + "/")
+                outputs.append((folder / guide.relative_to(repo)).read_bytes())
+            self.assertEqual(expected.replace(b"\n", b"\r\n"), outputs[0])
+            self.assertEqual(expected, outputs[1])
+            self.assertNotEqual(*outputs)
+            # Exercise the actual repository policy, rather than a duplicated rule.
+            (repo / ".gitattributes").write_bytes((ROOT / ".gitattributes").read_bytes())
+            git("-c", "core.autocrlf=false", "add", ".gitattributes")
+            for autocrlf in ("true", "false"):
+                folder = root / ("with-policy-" + autocrlf)
+                git("-c", "core.autocrlf=" + autocrlf, "checkout-index", "--all",
+                    "--prefix=" + folder.as_posix() + "/")
+                self.assertEqual(expected, (folder / guide.relative_to(repo)).read_bytes())
+
+
 @unittest.skipUnless(os.name != "nt" and shutil.which("bash"), "source-kit fallback requires POSIX bash")
 class SourceKitPreservationTests(unittest.TestCase):
     def setUp(self):
@@ -26,7 +61,7 @@ class SourceKitPreservationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         required = set(REQUIRED_FILES) | {
-            ".gitignore", "SECURITY.md", "requirements-build-lock.txt", "run_tests.py",
+            ".gitignore", ".gitattributes", "SECURITY.md", "requirements-build-lock.txt", "run_tests.py",
             "tests/__init__.py", "tests/runtime_isolation.py", "docs/DEVELOPMENT_PLAN.md",
             "app/__init__.py", "build_scripts/make_windows_source_zip.sh",
             "build_scripts/build_identity.py", "build_scripts/read_app_version.py",
@@ -39,6 +74,7 @@ class SourceKitPreservationTests(unittest.TestCase):
         (self.root / "app/__init__.py").write_text('__version__ = "1.0.5"\n')
         (self.root / "requirements.txt").write_text("Pillow>=10\n")
         (self.root / "app/ai_client.py").write_text("# codex.cmd\n")
+        shutil.copyfile(ROOT / ".gitattributes", self.root / ".gitattributes")
         for name in ("windows_release_audit.py", "make_windows_source_zip.sh", "build_windows.bat", "build_identity.py", "read_app_version.py"):
             shutil.copyfile(SCRIPTS / name, self.root / "build_scripts" / name)
         self.git("init", "-q")
@@ -75,7 +111,7 @@ class SourceKitPreservationTests(unittest.TestCase):
             names = archive.namelist()
             for name in ("run_tests.py", "tests/runtime_isolation.py", "docs/DEVELOPMENT_PLAN.md",
                          "SECURITY.md", "requirements-build-lock.txt", "distribution/한글 공백 안내.txt",
-                         "build_scripts/read_app_version.py"):
+                         "build_scripts/read_app_version.py", ".gitattributes"):
                 self.assertIn(name, names)
             self.assertNotIn(student.name, names)
             self.assertFalse(any(name.startswith(".git/") for name in names))

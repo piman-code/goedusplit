@@ -78,6 +78,18 @@ class CandidateGates(unittest.TestCase):
         with self.assertRaises(ValueError): validate_platform('macos','Darwin','x86_64')
         with self.assertRaises(ValueError): validate_platform('windows','Darwin','AMD64')
 
+    def test_pair_rejects_line_ending_difference_even_when_each_checksum_is_valid(self):
+        for target, content in [('macos', b'same guide\n'), ('windows', b'same guide\r\n')]:
+            guide = self.root / f'USER_GUIDE-{target}.md'
+            guide.write_bytes(content)
+            manifest = self.root / f'BUILD-{target}.json'
+            value = json.loads(manifest.read_text(encoding='utf-8'))
+            value['files'][guide.name] = digest(guide)
+            manifest.write_text(json.dumps(value), encoding='utf-8')
+        with self.assertRaisesRegex(ValueError, 'different user guides'):
+            verify_pair(self.root, '1.0.6', self.commit)
+        self.assertFalse((self.root / 'SHA256SUMS').exists())
+
     def test_source_qa_or_missing_check_is_not_a_frozen_candidate_pass(self):
         qa={'version':'1.0.6','frozen':False,'status':'passed','executable_sha256':'c'*64,
             'checks':{name:True for name in REQUIRED_CHECKS},'errors':[]}

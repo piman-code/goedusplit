@@ -41,7 +41,7 @@ except (OSError, subprocess.CalledProcessError, UnicodeError):
     stop("A committed Git repository is required; no version fallback.")
 
 folders = {"app", "assets", "build_scripts", "distribution", "tests", "docs"}
-files = {".gitignore", "README.md", "SECURITY.md", "requirements.txt",
+files = {".gitignore", ".gitattributes", "README.md", "SECURITY.md", "requirements.txt",
          "requirements-build-lock.txt", "run.py", "run_tests.py", "goedusplit.spec"}
 selected = {name: meta for name, meta in entries.items()
             if name in files or Path(name).parts[0] in folders}
