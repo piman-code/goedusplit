@@ -100,3 +100,15 @@ QA_REPORT·입력·설정·PNG는 로컬 합성 증거 폴더에 보존한다. �
 Windows 오류는 UTF-8 한글 bat/validation JSON을 기본cp1252로 읽는 테스트 두 곳, 실패는 Mac 포장 스크립트 검사에 Windows Bash를 사용한 부분이었다. 구축관은 테스트 두 파일에서 UTF-8 읽기3곳을 명시하고 Mac 빌드·포장 integration2개를 해당 Mac에서만 실행하도록 수정했다. 전역 UTF-8 강제·제품 코드·계산/저장/보안 정책 변경은 없다. Mac에서 관련21개 검사 OK(실제 Windows junction1개만 건너뜀), 기본cp1252를 재현한 파일 읽기3개도 통과했다. Mac 전용 검사2개는 실제 Mac에서 실행·통과했다. 수정 커밋으로 양쪽 후보 CI를 다시 실행해야 한다.
 
 이번 사용자는 자율 개발 중심으로 Goal을 변경했다. 최신 판정 기준은 DEVELOPMENT_PLAN의 D01~D09다. 기존 T01~T09는 별도 학교 사용자 인수이며 미실행 상태를 보존한다.
+
+
+## 두 번째 CI — Windows 앱 빌드 성공·portable 포장 오류
+
+[CI36949722429](https://github.com/piman-code/goedusplit/actions/runs/36949722429)의 checkout은e63a473/1.0.6이다. Mac job 전체는 성공했다. Windows 새 환경은 Python224개 OK/skip11, Node43개 통과, build_windows.bat 안의 재검사, PyInstaller, 경량화, 개인정보 감사, 실행 파일 build_identity까지 성공했다. portable 포장의 inline Python `for /f` 버전 조회에서 CMD 구문 오류255가 나서 frozen QA·setup·manifest·pair는 미실행이다. 성공한 Mac과 실패한 Windows를 합쳐 최종 pair로 소개하지 않는다.
+
+Windows skip11은 Mac/Finder 전용3·POSIX source-kit7·선택 real kordoc1이다. Windows cmd 보존/실패중단과 실제 junction2개는 수행했다. Mac skip6은 Windows 전용5·선택 real kordoc1이며 내장 HWPX/PDF 실제 읽기와 mock HWP 변환기 계약은 양쪽에서 별도로 수행했다. native 외부 HWP 성공은 아직 인수 대기다.
+
+또한 같은e63a473을 GitHub에서 실제 새 Mac clone으로 받아 repository 소스 감사와 실제 앱 source QA12개/errors0을 확인했다. report/PNG/로그는 `out_test/goal-20261002-github-clone-mac/`에 보존했다. 기존 Python 환경을 빌려 사용하고 새 설치/설정변경은 하지 않았다. 이는 frozen 후보나 Windows 학교 사용 결과가 아니다.
+
+
+포장 수정: `build_scripts/read_app_version.py`가 UI 없이 app 버전을 읽고 canonical 숫자3부 버전만 stdout에 출력한다. 두 packbat는 이 도구를 호출해 inline Python 괄호/인용구를 제거했다. helper stdlib(-S)/정확버전/부정확버전, sourcekit helper포함, 필요한 helper 존재, 가이드/원본 출력 보존의 Mac 관련22개 검사 OK(Windows CMD2개만 미적용). Windows 회귀 검사는 공백 저장소/공백 Python 경로, 버전 조회 뒤 identity guard 도달, invalid/missing helper 조기 중단, 기존 ZIP/setup 보존과 정확한 파일명 출력까지 확인하도록 보강했다. 실제 Windows CI 결과는 후속에서 확인한다.

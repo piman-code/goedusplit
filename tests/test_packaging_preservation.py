@@ -29,7 +29,7 @@ class SourceKitPreservationTests(unittest.TestCase):
             ".gitignore", "SECURITY.md", "requirements-build-lock.txt", "run_tests.py",
             "tests/__init__.py", "tests/runtime_isolation.py", "docs/DEVELOPMENT_PLAN.md",
             "app/__init__.py", "build_scripts/make_windows_source_zip.sh",
-            "build_scripts/build_identity.py",
+            "build_scripts/build_identity.py", "build_scripts/read_app_version.py",
             "distribution/한글 공백 안내.txt",
         }
         for name in required:
@@ -39,7 +39,7 @@ class SourceKitPreservationTests(unittest.TestCase):
         (self.root / "app/__init__.py").write_text('__version__ = "1.0.5"\n')
         (self.root / "requirements.txt").write_text("Pillow>=10\n")
         (self.root / "app/ai_client.py").write_text("# codex.cmd\n")
-        for name in ("windows_release_audit.py", "make_windows_source_zip.sh", "build_windows.bat", "build_identity.py"):
+        for name in ("windows_release_audit.py", "make_windows_source_zip.sh", "build_windows.bat", "build_identity.py", "read_app_version.py"):
             shutil.copyfile(SCRIPTS / name, self.root / "build_scripts" / name)
         self.git("init", "-q")
         self.commit()
@@ -74,7 +74,8 @@ class SourceKitPreservationTests(unittest.TestCase):
         with zipfile.ZipFile(self.output()) as archive:
             names = archive.namelist()
             for name in ("run_tests.py", "tests/runtime_isolation.py", "docs/DEVELOPMENT_PLAN.md",
-                         "SECURITY.md", "requirements-build-lock.txt", "distribution/한글 공백 안내.txt"):
+                         "SECURITY.md", "requirements-build-lock.txt", "distribution/한글 공백 안내.txt",
+                         "build_scripts/read_app_version.py"):
                 self.assertIn(name, names)
             self.assertNotIn(student.name, names)
             self.assertFalse(any(name.startswith(".git/") for name in names))
@@ -181,17 +182,44 @@ class SourceKitPreservationTests(unittest.TestCase):
             self.assertFalse(self.output().exists())
 
 
+class PackagingVersionTests(unittest.TestCase):
+    def test_helper_prints_only_canonical_version_using_stdlib_without_ui(self):
+        with tempfile.TemporaryDirectory(prefix="version path with spaces ") as tmp:
+            root = Path(tmp)
+            (root / "build_scripts").mkdir()
+            (root / "app").mkdir()
+            helper = root / "build_scripts/read_app_version.py"
+            shutil.copyfile(SCRIPTS / helper.name, helper)
+            for value in ("1.0.5", "0.0.0", "12.34.56", "1.0.5-rc1", "01.0.5", "1.0", None):
+                with self.subTest(value=value):
+                    (root / "app/__init__.py").write_text(
+                        f"__version__ = {value!r}\n", encoding="utf-8")
+                    result = subprocess.run([os.sys.executable, "-B", "-S", str(helper)],
+                                            cwd=root, capture_output=True)
+                    if value in ("1.0.5", "0.0.0", "12.34.56"):
+                        self.assertEqual(0, result.returncode, result.stderr)
+                        self.assertEqual((value + os.linesep).encode(), result.stdout)
+                        self.assertEqual(b"", result.stderr)
+                    else:
+                        self.assertNotEqual(0, result.returncode)
+                        self.assertEqual(b"", result.stdout)
+                        self.assertIn(b"Invalid app version", result.stderr)
+
+
 class WindowsPackagingSafetyTests(unittest.TestCase):
     def test_version_and_guide_python_commands_are_valid_and_preserve_existing_guide(self):
         for name in ("pack_windows.bat", "pack_windows_installer.bat"):
             with self.subTest(name=name):
                 source = (SCRIPTS / name).read_text(encoding="utf-8")
                 commands = re.findall(r'-c "([^"\n]+)"', source)
-                self.assertEqual(3, len(commands))
+                self.assertEqual(2, len(commands))
                 for command in commands:
                     compile(command, name, "exec")
                 self.assertNotIn("app.main_window", source)
-                self.assertIn("from app import __version__", source)
+                self.assertIn('"%PACK_PYTHON%" build_scripts\\read_app_version.py', source)
+                self.assertNotIn('-c "from app import __version__', source)
+                for helper in re.findall(r'build_scripts\\([\w-]+\.py)', source):
+                    self.assertTrue((SCRIPTS / helper).is_file(), f"missing helper: {helper}")
                 self.assertIn("if not defined VER", source)
                 for forbidden in ("copy /y", "del ", "rmdir ", "-Force", "pip install"):
                     self.assertNotIn(forbidden, source)
@@ -228,12 +256,57 @@ class WindowsPackagingSafetyTests(unittest.TestCase):
                 existing = root / "dist" / output
                 existing.write_bytes(b"old candidate")
                 shutil.copyfile(SCRIPTS / script, root / "build_scripts" / script)
+                shutil.copyfile(SCRIPTS / "read_app_version.py", root / "build_scripts/read_app_version.py")
                 (root / "build_scripts/privacy_release_audit.py").write_text("raise SystemExit(0)\n")
-                (root / "build_scripts/build_identity.py").write_text("raise SystemExit(0)\n")
+                (root / "build_scripts/build_identity.py").write_text(
+                    "from pathlib import Path\nPath('identity-reached').write_bytes(b'checked')\n", encoding="utf-8")
                 result = subprocess.run(["cmd", "/c", str(root / "build_scripts" / script)],
                                         cwd=root, capture_output=True)
                 self.assertNotEqual(0, result.returncode)
+                self.assertEqual(b"checked", (root / "identity-reached").read_bytes())
+                self.assertIn(output.encode(), result.stdout)
                 self.assertEqual(b"old candidate", existing.read_bytes())
+
+    @unittest.skipUnless(os.name == "nt", "requires Windows cmd.exe")
+    def test_version_lookup_with_spaced_python_path_reaches_identity_guard(self):
+        for script in ("pack_windows.bat", "pack_windows_installer.bat"):
+            with self.subTest(script=script), tempfile.TemporaryDirectory(prefix="pack path with spaces ") as tmp:
+                root = Path(tmp)
+                (root / "build_scripts").mkdir()
+                (root / "app").mkdir()
+                (root / "app/__init__.py").write_text('__version__ = "1.0.5"\n', encoding="utf-8")
+                shutil.copyfile(SCRIPTS / script, root / "build_scripts" / script)
+                shutil.copyfile(SCRIPTS / "read_app_version.py", root / "build_scripts/read_app_version.py")
+                (root / "build_scripts/build_identity.py").write_text(
+                    "from pathlib import Path\nimport sys\n"
+                    "Path('identity-reached').write_bytes(b'checked')\n"
+                    "print('PACK_IDENTITY_GUARD_REACHED', file=sys.stderr)\nraise SystemExit(42)\n", encoding="utf-8")
+                # A temporary interpreter copy and pyvenv.cfg exercise the existing
+                # .venv path choice; no packages or installed environments change.
+                scripts = root / ".venv/Scripts"
+                scripts.mkdir(parents=True)
+                shutil.copyfile(os.sys.executable, scripts / "python.exe")
+                (root / ".venv/pyvenv.cfg").write_text(
+                    f"home = {os.sys.base_prefix}\ninclude-system-site-packages = true\n", encoding="utf-8")
+                environment = {**os.environ, "PATH": os.sys.base_prefix + os.pathsep + os.environ["PATH"]}
+                result = subprocess.run(["cmd", "/c", str(root / "build_scripts" / script)],
+                                        cwd=root, env=environment, capture_output=True)
+                self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                self.assertIn(b"PACK_IDENTITY_GUARD_REACHED", result.stderr)
+                self.assertEqual(b"checked", (root / "identity-reached").read_bytes())
+                self.assertFalse((root / "dist").exists())
+                for value, keep_helper in (("1.0.5-rc1", True), ("1.0.5", False)):
+                    (root / "identity-reached").unlink(missing_ok=True)
+                    (root / "app/__init__.py").write_text(f"__version__ = {value!r}\n", encoding="utf-8")
+                    if not keep_helper:
+                        (root / "build_scripts/read_app_version.py").unlink()
+                    result = subprocess.run(["cmd", "/c", str(root / "build_scripts" / script)],
+                                            cwd=root, env=environment, capture_output=True)
+                    self.assertEqual(1, result.returncode, result.stdout + result.stderr)
+                    self.assertIn(b"Invalid app version" if keep_helper else b"read_app_version.py", result.stderr)
+                    self.assertNotIn(b"PACK_IDENTITY_GUARD_REACHED", result.stderr)
+                    self.assertFalse((root / "identity-reached").exists())
+                    self.assertFalse((root / "dist").exists())
 
 
 if __name__ == "__main__":

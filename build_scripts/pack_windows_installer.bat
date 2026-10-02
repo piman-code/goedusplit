@@ -12,7 +12,7 @@ if errorlevel 1 exit /b 1
 set "PACK_PYTHON=python"
 if exist ".venv\Scripts\python.exe" set "PACK_PYTHON=%CD%\.venv\Scripts\python.exe"
 set "VER="
-for /f "delims=" %%v in ('""%PACK_PYTHON%" -c "from app import __version__; import re; assert re.fullmatch(r'[0-9]+[.][0-9]+[.][0-9]+', __version__); print(__version__)""') do set "VER=%%v"
+for /f "delims=" %%v in ('""%PACK_PYTHON%" build_scripts\read_app_version.py"') do set "VER=%%v"
 if not defined VER (
   echo [X] app.__version__ 읽기 실패. 패키징을 중단합니다.
   exit /b 1
