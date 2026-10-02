@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "candidate_version": "1.0.6",
+  "candidate_source_commit": "a7f7d95b6a751606ac75d1f6958ed9686bd9884b",
+  "candidate_mac_executable_sha256": "2a6bee7078f88999a57c5073ac0e4f3adda188ab0b735c258a58f4e70731f21c",
+  "file": "T03-Mac-first.json",
+  "file_sha256": "19c6ee86b0ed5096a239eeaf49716d354ed99c8e6b98b2373011db554608aba5",
+  "bytes": 5408,
+  "origin": "actual immutable Mac candidate WebEngine save; byte-exact copy",
+  "original_download_sha256": "19c6ee86b0ed5096a239eeaf49716d354ed99c8e6b98b2373011db554608aba5",
+  "input_json_sha256": "d1d9812eddb12db9b6b2d4ba68cadbc568eadec2deef043d33312361c2874b65",
+  "business_projection_rule": "All top-level fields except exportedAt; all item/judgment fields and full targetRatePresets included; timestamps are checked separately.",
+  "business_sha256": "1495c4669ac27b58ff73e23c4df28edf1cef5f545c065042ec68254dae951863",
+  "business_values": {
+    "version": 1,
+    "judges": [
+      {
+        "id": "j1",
+        "name": "합성 검토안 1"
+      },
+      {
+        "id": "j2",
+        "name": "합성 검토안 2"
+      }
+    ],
+    "activeJudgeId": "j2",
+    "items": [
+      {
+        "id": "i1",
+        "number": 1,
+        "title": "합성 선택형 1번",
+        "standard": "합성 성취기준",
+        "points": 1.5,
+        "sampleSize": 3,
+        "type": "선택형",
+        "difficulty": "보통",
+        "targetLevel": "C",
+        "judgmentsByJudge": {
+          "j1": {
+            "A": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 100,
+              "overrideRate": 100
+            },
+            "B": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 82.5,
+              "overrideRate": 82.5
+            },
+            "C": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 63.25,
+              "overrideRate": 63.25
+            },
+            "D": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 40,
+              "overrideRate": 40
+            },
+            "E": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 0,
+              "overrideRate": 0
+            }
+          },
+          "j2": {
+            "A": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 100,
+              "overrideRate": 100
+            },
+            "B": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 82.5,
+              "overrideRate": 82.5
+            },
+            "C": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 63.25,
+              "overrideRate": 63.25
+            },
+            "D": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 40,
+              "overrideRate": 40
+            },
+            "E": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 0,
+              "overrideRate": 0
+            }
+          }
+        },
+        "evidence": [],
+        "note": "합성 QA 전용"
+      },
+      {
+        "id": "i2",
+        "number": 2,
+        "title": "합성 선택형 2번",
+        "standard": "합성 성취기준",
+        "points": 3.25,
+        "sampleSize": 3,
+        "type": "선택형",
+        "difficulty": "보통",
+        "targetLevel": "C",
+        "judgmentsByJudge": {
+          "j1": {
+            "A": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 100,
+              "overrideRate": 100
+            },
+            "B": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 80,
+              "overrideRate": 80
+            },
+            "C": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 60,
+              "overrideRate": 60
+            },
+            "D": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 40,
+              "overrideRate": 40
+            },
+            "E": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 20,
+              "overrideRate": 20
+            }
+          },
+          "j2": {
+            "A": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 100,
+              "overrideRate": 100
+            },
+            "B": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 80,
+              "overrideRate": 80
+            },
+            "C": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 60,
+              "overrideRate": 60
+            },
+            "D": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 40,
+              "overrideRate": 40
+            },
+            "E": {
+              "correct": [
+                true,
+                true,
+                false
+              ],
+              "targetRate": 20,
+              "overrideRate": 20
+            }
+          }
+        },
+        "evidence": [],
+        "note": "합성 QA 전용"
+      }
+    ],
+    "evidenceData": null,
+    "evidenceMode": "difficultyAverage",
+    "targetRatePresets": {
+      "A": {
+        "A": 70,
+        "B": 45,
+        "C": 25,
+        "D": 10,
+        "E": 0
+      },
+      "B": {
+        "A": 85,
+        "B": 70,
+        "C": 45,
+        "D": 25,
+        "E": 10
+      },
+      "C": {
+        "A": 90,
+        "B": 80,
+        "C": 70,
+        "D": 45,
+        "E": 25
+      },
+      "D": {
+        "A": 95,
+        "B": 90,
+        "C": 80,
+        "D": 70,
+        "E": 45
+      },
+      "E": {
+        "A": 95,
+        "B": 95,
+        "C": 90,
+        "D": 80,
+        "E": 70
+      }
+    }
+  },
+  "business_assertions": {
+    "item_count": 2,
+    "numbers": [
+      1,
+      2
+    ],
+    "types": [
+      "선택형",
+      "선택형"
+    ],
+    "points": [
+      1.5,
+      3.25
+    ],
+    "judges": [
+      {
+        "id": "j1",
+        "name": "합성 검토안 1"
+      },
+      {
+        "id": "j2",
+        "name": "합성 검토안 2"
+      }
+    ],
+    "activeJudgeId": "j2",
+    "override_rates_E_C_A": [
+      0,
+      63.25,
+      100
+    ],
+    "targetRatePresets": {
+      "A": {
+        "A": 70,
+        "B": 45,
+        "C": 25,
+        "D": 10,
+        "E": 0
+      },
+      "B": {
+        "A": 85,
+        "B": 70,
+        "C": 45,
+        "D": 25,
+        "E": 10
+      },
+      "C": {
+        "A": 90,
+        "B": 80,
+        "C": 70,
+        "D": 45,
+        "E": 25
+      },
+      "D": {
+        "A": 95,
+        "B": 90,
+        "C": 80,
+        "D": 70,
+        "E": 45
+      },
+      "E": {
+        "A": 95,
+        "B": 95,
+        "C": 90,
+        "D": 80,
+        "E": 70
+      }
+    },
+    "evidenceMode": "difficultyAverage",
+    "evidenceData": null
+  },
+  "first_save_normalization": "All original fields preserved; app adds its default targetRatePresets. This actual saved table is the roundtrip baseline.",
+  "stages": {
+    "Mac_first_save": "executed; QA locally reopened its actual download",
+    "Windows_import_and_resave": "not executed; no connected Windows",
+    "Mac_final_import_and_resave": "not executed; no returned Windows file"
+  },
+  "roundtrip_status": "incomplete",
+  "candidate_input_limitation": "a7 synthetic CLI accepts only new output folder, not existing JSON; regenerating fixture is not same-file roundtrip"
+}

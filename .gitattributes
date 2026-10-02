@@ -2,3 +2,6 @@
 distribution/USER_GUIDE.md text eol=lf
 # Keep the handoff runner identical to the script tested in Windows CI.
 build_scripts/validate_school_candidate.ps1 text eol=lf
+# Keep the actual Mac download and its handoff fingerprints identical on Windows.
+tests/fixtures/T03-20261002-Mac-first/* text eol=lf
+tests/fixtures/T03-20261002-Mac-first/T03-Mac-first.json -text

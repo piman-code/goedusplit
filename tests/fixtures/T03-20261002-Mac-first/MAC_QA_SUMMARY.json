@@ -1,0 +1,29 @@
+{
+  "source_commit": "a7f7d95b6a751606ac75d1f6958ed9686bd9884b",
+  "version": "1.0.6",
+  "executable_sha256": "2a6bee7078f88999a57c5073ac0e4f3adda188ab0b735c258a58f4e70731f21c",
+  "dmg_sha256": "2c9895bfb250ede8d072be2739cc76587a5aa981de1a9ae401040c230d094cf4",
+  "context": "Mac native Cocoa frozen synthetic only",
+  "status": "passed-synthetic-only",
+  "checks": {
+    "settings are explicit isolated INI": true,
+    "portfolio is isolated": true,
+    "WebEngine is off the record": true,
+    "bundled calculator renders": true,
+    "synthetic file loads and preserves fractional business values": true,
+    "real JSON download preserves business values": true,
+    "downloaded work reopens": true,
+    "cancelled save creates no extra JSON": true,
+    "tab switch retains loaded work": true,
+    "no JavaScript or native warnings": true,
+    "core flow attempted no network": true,
+    "native window capture exists": true
+  },
+  "errors": [],
+  "dmg_detached": true,
+  "parent_process_environment_unchanged": true,
+  "same_file_roundtrip": "incomplete",
+  "school_acceptance": "not completed",
+  "normal_launch_performed": false,
+  "original_qa_report_sha256": "64f7e57a4d5703f69ff7086ce6b8de7453db942cfc94133afc96fa24c6d91ad2"
+}

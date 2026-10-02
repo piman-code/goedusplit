@@ -1,0 +1,15 @@
+{
+  "evidence_basis": "reported by user in this Mac chat; original Windows reports not re-read here",
+  "ci_run": 36979736361,
+  "artifact_id": 11214639642,
+  "runner_status": "passed-synthetic-only",
+  "required_12_checks": true,
+  "qa_errors": 0,
+  "diagnostics": [
+    "PowerShell5.1 execution policy blocked one attempt",
+    "tool sandbox calculator loading failed in another attempt",
+    "process_environment_restored=false requires separate diagnosis"
+  ],
+  "school_acceptance": "not completed",
+  "same_file_windows_resave": "not executed in this Mac session"
+}

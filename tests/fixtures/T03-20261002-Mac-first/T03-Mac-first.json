@@ -1,0 +1,273 @@
+{
+  "version": 1,
+  "judges": [
+    {
+      "id": "j1",
+      "name": "합성 검토안 1"
+    },
+    {
+      "id": "j2",
+      "name": "합성 검토안 2"
+    }
+  ],
+  "activeJudgeId": "j2",
+  "items": [
+    {
+      "id": "i1",
+      "number": 1,
+      "title": "합성 선택형 1번",
+      "standard": "합성 성취기준",
+      "points": 1.5,
+      "sampleSize": 3,
+      "type": "선택형",
+      "difficulty": "보통",
+      "targetLevel": "C",
+      "judgmentsByJudge": {
+        "j1": {
+          "A": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 100,
+            "overrideRate": 100
+          },
+          "B": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 82.5,
+            "overrideRate": 82.5
+          },
+          "C": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 63.25,
+            "overrideRate": 63.25
+          },
+          "D": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 40,
+            "overrideRate": 40
+          },
+          "E": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 0,
+            "overrideRate": 0
+          }
+        },
+        "j2": {
+          "A": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 100,
+            "overrideRate": 100
+          },
+          "B": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 82.5,
+            "overrideRate": 82.5
+          },
+          "C": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 63.25,
+            "overrideRate": 63.25
+          },
+          "D": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 40,
+            "overrideRate": 40
+          },
+          "E": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 0,
+            "overrideRate": 0
+          }
+        }
+      },
+      "evidence": [],
+      "note": "합성 QA 전용"
+    },
+    {
+      "id": "i2",
+      "number": 2,
+      "title": "합성 선택형 2번",
+      "standard": "합성 성취기준",
+      "points": 3.25,
+      "sampleSize": 3,
+      "type": "선택형",
+      "difficulty": "보통",
+      "targetLevel": "C",
+      "judgmentsByJudge": {
+        "j1": {
+          "A": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 100,
+            "overrideRate": 100
+          },
+          "B": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 80,
+            "overrideRate": 80
+          },
+          "C": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 60,
+            "overrideRate": 60
+          },
+          "D": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 40,
+            "overrideRate": 40
+          },
+          "E": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 20,
+            "overrideRate": 20
+          }
+        },
+        "j2": {
+          "A": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 100,
+            "overrideRate": 100
+          },
+          "B": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 80,
+            "overrideRate": 80
+          },
+          "C": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 60,
+            "overrideRate": 60
+          },
+          "D": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 40,
+            "overrideRate": 40
+          },
+          "E": {
+            "correct": [
+              true,
+              true,
+              false
+            ],
+            "targetRate": 20,
+            "overrideRate": 20
+          }
+        }
+      },
+      "evidence": [],
+      "note": "합성 QA 전용"
+    }
+  ],
+  "evidenceData": null,
+  "evidenceMode": "difficultyAverage",
+  "targetRatePresets": {
+    "A": {
+      "A": 70,
+      "B": 45,
+      "C": 25,
+      "D": 10,
+      "E": 0
+    },
+    "B": {
+      "A": 85,
+      "B": 70,
+      "C": 45,
+      "D": 25,
+      "E": 10
+    },
+    "C": {
+      "A": 90,
+      "B": 80,
+      "C": 70,
+      "D": 45,
+      "E": 25
+    },
+    "D": {
+      "A": 95,
+      "B": 90,
+      "C": 80,
+      "D": 70,
+      "E": 45
+    },
+    "E": {
+      "A": 95,
+      "B": 95,
+      "C": 90,
+      "D": 80,
+      "E": 70
+    }
+  }
+}
