@@ -1,12 +1,14 @@
 # 1.0.6 두 플랫폼 배포 후보 준비
 
-현재는 **자율 개발 검증 진행 중 / 사용자 인수 대기 / 공개 배포 미실행**이다. 승인된 새 브랜치 push·CI를 진행했으며, 이 문서의 절차가 존재하는 것과 실제 후보·통합 CI·학교 PC 검증 성공은 구분한다. 기존 1.0.5 설치본과 배포 파일은 보존한다.
+현재는 **자율 개발 완료 / 사용자 인수 대기 / 공개 배포 미실행**이다. 승인된 새 브랜치 push·CI와 실제 후보·독립 D01~D09 판정을 완료했다. 학교 PC·교사·설치/복귀 인수는 별도로 남아 있으며 기존 1.0.5 설치본과 배포 파일은 보존한다. 최종 문서 커밋·전송 감사·원격 반영은 별도 실행 기록으로 확인한다.
 
 ## 현재 후보 확인 상태
 
-검증 SHA `1866f4e2e288ac0763a3291d32ecb492419daa91`의 [CI 36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)에서 Mac arm64·Windows x64의 개발 검사·앱 빌드·포장·frozen QA는 성공했다. 그러나 pair가 두 사용자 안내의 지문 불일치를 감지해 **전체 CI는 실패**했다. 현재 파일을 최종 통합 후보로 확정하거나 SHA256SUMS가 검증됐다고 안내하지 않는다. 수정한 새 SHA로 양쪽과 pair를 다시 실행한 뒤 최종 값과 CI URL을 기입한다.
+고정 후보 SHA는 `a7f7d95b6a751606ac75d1f6958ed9686bd9884b`이며 [후보 CI 36952967141](https://github.com/piman-code/goedusplit/actions/runs/36952967141)와 [push 검사 36952966860](https://github.com/piman-code/goedusplit/actions/runs/36952966860)가 성공했다. Mac arm64·Windows x64·pair가 모두 성공해 [pair artifact11204209837](https://github.com/piman-code/goedusplit/actions/runs/36952967141/artifacts/11204209837)를 생성했다. 양쪽 Python은 228개 실행으로 OK(Mac7/Windows11 skipped), Node43 및 빌드 재검사·frozen12개 QA가 통과했다. 내려받은 실제 9파일의 체크섬·내부 구성과 Mac DMG native 재실행도 통과했다. 독립 최종 검토는 D09를 포함한 D01~D09 모두 충족으로 판정했다.
 
-최종 후보 SHA·통합 성공 CI·pair artifact·세 배포 파일의 SHA256: **확정 대기**. [자율 개발 판정표](AUTONOMOUS_COMPLETION.md)가 D01~D09의 증거와 남은 일을 연결한다. 기존 로컬 `9baded3` DMG와 실패한 실행의 파일은 이력으로 보존하며 새 SHA로 재표시하지 않는다.
+이전 `1866f4e`의 [CI 36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)에서는 Mac arm64·Windows x64의 개발 검사·앱 빌드·포장·frozen QA가 성공했으나 pair가 두 사용자 안내의 지문 불일치를 감지해 **전체 CI는 실패**했다. 실제 artifact bytes와 Git blob을 대조해 Windows CRLF/Mac LF 차이만 있었음을 확인했다. 새 후보는 `.gitattributes` 및 소스 키트의 Git blob 처리 보완을 포함한다. 이전 파일을 고쳐 새 실행의 성공 증거로 사용하지 않는다.
+
+후보 SHA·성공 CI·pair artifact·세 배포 파일의 SHA256·내부 구성·Mac 실제 재실행은 확인했다. **독립 완료 판정은 D01~D09 모두 충족·critical 발견0**이다. [자율 개발 판정표](AUTONOMOUS_COMPLETION.md)가 실제 증거와 별도 사용자 인수를 연결한다. [로컬 독립 완료 보고서](../out_test/goal-20261002-final-a7/INDEPENDENT_COMPLETION.json)를 직접 재읽고 SHA256 `7ab1b358d4c3f517ad5be106d18810441b726fc489c84ea0e01730271f4a1b4e`를 확인했다. 보고서는 로컬 보존·Git 전송 제외다. 기존 로컬 `9baded3` DMG와 실패한 실행의 파일은 이력으로 보존하며 새 SHA로 재표시하지 않는다. 문서만 바꾸는 후속 커밋도 고정 후보의 빌드 SHA를 대체하지 않는다.
 
 ## 동일한 소스를 확정하는 절차
 
@@ -33,6 +35,23 @@
 BUILD에는 동일 source SHA·clean 여부·버전, OS·아키텍처·Python·Node·패키지 버전과 배포 파일 hash를 남긴다. 실행 파일의 빌드 출처와 hash도 묶어 이전 앱을 새 소스 버전 이름으로 포장하는 것을 막는다. 합성 QA 보고서의 frozen·버전·실행 파일 hash·필수 12개 결과도 대조한다. Mac은 앱 내부 plist 버전도 대조한다. 합성 검사·CI는 실제 학교 사용을 대체하지 않는다.
 
 Actions artifact 보관은 14일이다. 사용자용 영구 다운로드 주소로 안내하지 않는다. 승인된 전송·내려받기 후 별도 검증 보관 폴더에 보존한다. 공개 게시 전까지 파일명과 checksum은 준비안이며 기존 README 배포 값에 섞지 않는다.
+
+### 최종 지문 기록
+
+`a7f7d95`의 성공한 pair에서 내려받은 실제 bytes를 재대조했다. 아래 지문은 이 후보의 실제 값이며 이전 후보의 값이나 예상값이 아니다. 원본 SHA256SUMS와 `out_test/goal-20261002-final-a7/CHECKSUM_READBACK.json`을 함께 보존한다.
+
+| 파일·확인 항목 | SHA256·실제 결과 |
+| --- | --- |
+| Goedu-Split-1.0.6-mac.dmg | 2c9895bfb250ede8d072be2739cc76587a5aa981de1a9ae401040c230d094cf4 |
+| Goedu-Split-1.0.6-windows.zip | 446a5478fef905f60dee2e83269394c7a2f27f80e9feed7d8fdfad9057563069 |
+| Goedu-Split-1.0.6-windows-setup.exe | 8965b9e7116d7868bed3f39096524e0320578a12ffe168851066795063adfdc6 |
+| BUILD-macos / BUILD-windows의 전체 SHA·버전·아키텍처 | a7f7d95b6a751606ac75d1f6958ed9686bd9884b / 1.0.6 / arm64·AMD64 |
+| QA-macos / QA-windows의 frozen·실행 파일 지문·필수 결과 | 두 보고서 frozen true·passed·필수12개, 실제 내려받은 내부 실행 파일 지문·BUILD identity와 재대조 통과; Mac DMG native12개 재실행 통과 |
+| 두 USER_GUIDE bytes·manifest 지문 일치 | 둘 다 Git 소스와 bytes 일치, SHA2567539ac6d1f4b5863a7f73a44f6c151a1060207d78aa8e1c7dd5dd50e3c93143f |
+| SHA256SUMS와 모든 내려받은 파일 대조 | 수록 9개 지문 전부 실제 bytes 대조 통과; SHA256SUMS 자체를 포함해 파일10개 보존 |
+| artifact·로컬 보존 위치와 독립 재검증 | artifact11204209837 / artifacts/Goedu-Split-1.0.6-a7f7d95/; 내부 구성·실제 Mac 실행 통과, 독립 D01~D09 충족·critical 발견0 |
+
+실물 근거는 `out_test/goal-20261002-final-a7/`의 CHECKSUM/MAC_DOWNLOAD/WINDOWS_DOWNLOAD/WINDOWS_SOURCE_ASSETS_READBACK 보고서에 보존한다. Mac은 읽기 전용 DMG에서 native frozen QA12개를 확인했고 설치 앱을 교체하지 않았다. Windows는 ZIP3234개 CRC·runtime15개·AMD64 실행 파일 지문/identity·web/font/icon27개를 대조했다. 일부 텍스트는 Git LF와 Windows CRLF의 동일 내용이며 binary 지문은 일치한다. Windows 실행 자체는 CI frozen QA 증거이며 이 Mac에서 installer를 실행한 검증은 아니다.
 
 ## 파일 지문과 실행 확인
 

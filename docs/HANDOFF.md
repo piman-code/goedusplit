@@ -4,7 +4,7 @@
 
 사용자가 새 브랜치 push·CI와 승인 대기 없는 개발 범위로 목표 변경을 승인했다. `codex/desktop-candidates-1.0.6`에서 필요한 수정·검사·push·CI를 계속하며 과거 승인 대기로 멈추지 않는다. 학교 Windows·Excel·실제 JSON 왕복·교사·설치/복귀 T01~T09는 별도 인수 대기다.
 
-현재 후보1866f4e의 [CI36951043652](https://github.com/piman-code/goedusplit/actions/runs/36951043652)는 두 OS 개발 검사·빌드·포장·frozen QA 성공, 최종 안내 파일 pair 불일치로 전체 실패했다. 다음 작업은 줄바꿈 원인 확인·최소 수정·독립 감사·새 SHA의 양쪽 CI·다운로드/체크섬 재대조·D01~D09 최종 독립 판정이다. 후보 파일은 이전 파일과 별도 폴더에 보존한다. 공개 Release·main 병합·설치 교체·지속 설정·실제 학생자료 전송은 미실행이다.
+확정 후보는 `a7f7d95b6a751606ac75d1f6958ed9686bd9884b`, [CI36952967141](https://github.com/piman-code/goedusplit/actions/runs/36952967141)의 두 OS·pair와 push 검사는 성공했다. 후보10개 실제 파일·체크섬·BUILD/QA·동일 LF 안내, Mac DMG 읽기 전용 내부 native 실행12개와 Windows ZIP 구성/CRC/PE/출처를 재확인했다. 독립 완료판정관이 D01~D09 모두 충족·치명 문제0을 확인했으며, 최종 상태는 자율 개발 완료 / 사용자 인수 대기 / 공개 배포 미실행이다. 파일은 `artifacts/Goedu-Split-1.0.6-a7f7d95/`, 보고서는 `out_test/goal-20261002-final-a7/`다. 후보 앱 코드와 문서 기록 커밋을 구분한다. 사용자 인수 T01~T09·공개 Release·main 병합·설치 교체는 미실행이다.
 
 아래는 과거 인계 이력이다. 이전 단계의 1.0.1~1.0.5, 테스트 수, AI 검증, 브랜치 push·네트워크 금지 등은 해당 날짜의 기록이다. 현재 사용자 Goal은 같은 브랜치의 push·CI를 포함한 개발 작업을 승인했다. 새 설치·지속 설정·main 병합·공개 배포는 별도 승인이다. 실제 학생자료·stash 전체 열람 권한은 없다.
 

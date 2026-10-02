@@ -126,3 +126,49 @@ Windows skip11은 Mac/Finder 전용3·POSIX source-kit7·선택 real kordoc1이�
 
 
 수정 후 검증: `.gitattributes`는 `distribution/USER_GUIDE.md text eol=lf` 한 파일만 고정한다. 실제 Git scratch checkout에서 정책 부재의 autocrlf=true/false는 CRLF/LF로 달라지는 것을 재현했고 새 정책에서는 같은 LF bytes를 확인했다. 개별 manifest hash가 유효해도 안내 줄바꿈이 다르면 pair는 여전히 실패한다. source kit의 파일·출처 허용목록에는 `.gitattributes`만 추가했다. Mac 관련24개 검사 OK(Windows CMD2개만 건너뜀). 안내문 내용·제품 UI·계산·학생자료 접근·개인 설정은 바꾸지 않았다. 새 커밋으로 양쪽을 다시 빌드한다.
+
+
+## 최종 안내 줄바꿈 수정 후보
+
+실제 다운로드한1866 안내는 Mac16156bytes/LF139, Windows16295bytes/CRLF139였다. Windows의CRLF를LF로 바꾸면 Mac·Git blob과 bytes가 정확히 같고 각 원본 hash는 해당 BUILD와 일치했다. 원인 확인 기록은 `out_test/goal-20261002-ci-36951043652/GUIDE_READBACK.json`이다. 원본 파일은 보존했다.
+
+새 후보 `a7f7d95b6a751606ac75d1f6958ed9686bd9884b`는 독립24개 검사(WinCMD2개 미적용)·clean123추적 파일·13새 blob 감사·문서 링크38개 확인을 통과했다. 보고서는 `out_test/goal-20261002-approved-push-a7f7d95/`다. 승인된 새 브랜치에 push한 후 [후보 CI36952967141](https://github.com/piman-code/goedusplit/actions/runs/36952967141)와 [push 검사36952966860](https://github.com/piman-code/goedusplit/actions/runs/36952966860)를 실행했다. 결과·최종 체크섬은 아직 대기다.
+
+
+GitHub 새 복제본의 a7 소스 인계 키트123파일·모든 path/hash·LF 속성·버전 helper 포함·압축 해제 소스 감사·Gitless clean identity가 통과했다. 소스 ZIP SHA256은 `9b73d6768cd4cf1b9a4e26e0403558eb4e6c46f765710accbf491cfef7557db7`이며 `out_test/goal-20261002-windows-source-kit-a7/`에 보고서와 함께 보존했다. 이 ZIP의 실행 파일은 없고 실제 Windows 실행 검증을 대신하지 않는다.
+
+GitHub 최신 공개 Release의 읽기 전용 메타데이터는2026-10-02 `v1.0.5`, 게시 시각2026-09-25T15:22:56Z였으며3개 기존 배포 파일명·GitHub SHA256 digest가 README의1.0.5 값과 일치했다. 1.0.6 Release는 생성하지 않았다. 최신 메타데이터 대조이며1.0.5 파일을 새로 설치하거나 다운로드·실행한 증거는 아니다.
+
+
+## 최종 동일 SHA CI 통합 성공
+
+[a7 후보 CI36952967141](https://github.com/piman-code/goedusplit/actions/runs/36952967141)의 source·Mac arm64·Windows x64·pair가 모두 success로 종료했다. 같은 SHA의 push 검사36952966860도 success다. 양쪽 Python228개 OK(Mac7/Windows11개 플랫폼 전용·선택 kordoc 건너뜀), Node43개와 빌드 내 재검사도 통과했다. Windows에서 LF 체크아웃 회귀·안내 불일치 거부·공백 Python CMD·기존 파일 보존을 실제 실행했다. 두 frozen 후보12개 QA·오류0, PyInstaller·출처/개인정보 감사·DMG/ZIP/setup·BUILD/QA 수집·pair가 성공했다.
+
+최종 pair artifact ID는11204209837, 이름은 `desktop-candidates-1.0.6-a7f7d95b6a751606ac75d1f6958ed9686bd9884b`다. GitHub outer artifact ZIP digest는 `85d3790db44081d0ed1baedc7b3f3fb1a252838e7ca59349b82834ea169a4eb0`이고 실제 배포 DMG·ZIP·EXE의 지문과는 별개다. `artifacts/Goedu-Split-1.0.6-a7f7d95/`로 다운로드 중이며 실제 파일 재대조·Mac DMG 내부 native 실행·독립 D완료 판정은 후속 기록으로 확정한다. 원격 상태·artifact 메타데이터·양쪽 실행·pair 로그는 `out_test/goal-20261002-ci-36952967141/`에 보존한다.
+
+
+## 최종 내려받은 후보 지문·Mac DMG 실제 실행
+
+최종10개 파일을 `artifacts/Goedu-Split-1.0.6-a7f7d95/`에 보존했다. SHA256SUMS에 있는9개 파일의 실제 SHA256이 모두 일치하고, 두 사용자 안내는 Git 원본과 정확히 같은 LF bytes다. 양 BUILD의 버전1.0.6·전체a7 SHA·clean·OS/아키텍처·실행 파일 지문과 두 frozen QA의12개 true/errors0을 대조했다. 기록은 `out_test/goal-20261002-final-a7/CHECKSUM_READBACK.json`이다.
+
+| 실제 파일 | SHA256 |
+| --- | --- |
+| Goedu-Split-1.0.6-mac.dmg | 2c9895bfb250ede8d072be2739cc76587a5aa981de1a9ae401040c230d094cf4 |
+| Goedu-Split-1.0.6-windows.zip | 446a5478fef905f60dee2e83269394c7a2f27f80e9feed7d8fdfad9057563069 |
+| Goedu-Split-1.0.6-windows-setup.exe | 8965b9e7116d7868bed3f39096524e0320578a12ffe168851066795063adfdc6 |
+
+실제 받은 DMG의 hdiutil verify와 읽기 전용 mount, 내부 plist1.0.6·BUILD_SOURCE와 BUILD 동일·arm64 lipo·deep/strict codesign·실행 파일 hash를 확인했다. 내부 앱을 기존 설치로 복사하지 않고 직접 `--synthetic-qa` 실행해 frozen12개/errors0/exit0을 확보했다. QA 실행 파일 hash는 CI의 Mac QA/BUILD와 같다. native PNG에서1.0.6·한글 버튼·문항1.5/3.25·합성 검토안·직접 소수 정답률을 시각 확인했고 DMG를 정상 분리했다. 보고서·로그·PNG는 `out_test/goal-20261002-final-a7/MAC_DOWNLOAD_READBACK.json`과 `downloaded-mac-native-qa/`에 보존한다. Mac 공증·설치 교체·학교/교사 인수는 이 증거의 범위가 아니다.
+
+최종 보존 readback은 설치 앱·원래dist1.0.5, 원래가상환경 존재, stash2개 refs 동일, main SHA71d9b33 유지였다. 설정 값·실제 학생자료·stash 내용은 열지 않았다. `out_test/goal-20261002-final-a7/PRESERVATION_FINAL.json`과 `REMOTE_SOURCE_READBACK.txt`를 따른다.
+
+
+최종 Windows 다운로드 ZIP은3234개 항목 전체 CRC·중복/안전 경로·symlink 부재, 필수 Qt/WebEngine/웹/폰트15개·비어 있지 않음, 실제 EXE AMD64 PE와 지문·내장 BUILD_SOURCE를 독립 재대조했다. 실행 파일 SHA256은 `ca46662ff46611a8dc7716d356a102eb12acb7a240453f8bcac5ec398c22b965`로 CI QA/BUILD와 같다. setup EXE의 PE는 Inno 엔진 x86이며 앱 payload는AMD64다. 설치 파일 실제 실행은 하지 않았다. 내부/외부 안내16156bytes/LF139/CRLF0은 Git a7와 정확히 같고, app/assets27개 추적 자산은21개 byte-exact·6개 웹 텍스트의 Git Windows CRLF 변환만 있었다. 새 합성 검사와 Node 계약은 실제 Windows 체크아웃에서 실행/통과했다.
+
+보고서는 `out_test/goal-20261002-final-a7/WINDOWS_DOWNLOAD_READBACK.json`과 `WINDOWS_SOURCE_ASSETS_READBACK.json`이다. 원본 Windows5파일을 별도 검사 폴더에 hardlink해 읽기만 했고 원본 bytes·설치·압축 해제·로컬 Windows 실행·사용자 설정을 바꾸지 않았다. Windows 실제 frozen 실행은 별도 CI의 증거이며 학교 Windows/Excel/설치 인수와 구분한다.
+
+
+## 독립 자율 개발 완료 판정
+
+완료판정관이 원본10개 파일·9개 체크섬을 직접 계산하고 BUILD·정확12개 QA 이름·실행 파일 지문·canonical LF 안내·Windows ZIP의 AMD64/내장 출처/27자산, Mac DMG native12개·PNG·분리 로그를 직접 읽었다. 동일 앱 코드의 기존 source/native 증거까지 연결하여 D01~D09 모두 충족, 치명 문제0으로 판정했다. 보고서 `out_test/goal-20261002-final-a7/INDEPENDENT_COMPLETION.json` SHA256은 `7ab1b358d4c3f517ad5be106d18810441b726fc489c84ea0e01730271f4a1b4e`이며 실물 대조는 `INDEPENDENT_ARTIFACT_READBACK.json`에 보존한다.
+
+현재 완료 범위는 사용자의2026-10-02 명시 변경에 따른 **자율 개발 완료 / 사용자 인수 대기 / 공개 배포 미실행**이다. 문서 기록 커밋은 앱 후보 소스a7와 분리하고, 전송 직전 독립 감사를 마친 뒤 승인된 같은 브랜치에 push한다. 실제 학교 T01~T09와 Release·main 병합·설치/복귀는 실행하지 않았다.

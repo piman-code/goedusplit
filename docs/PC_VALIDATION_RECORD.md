@@ -4,6 +4,8 @@
 
 T01~T09는 **사용자 인수 기록**이며 [자율 개발 D01~D09](AUTONOMOUS_COMPLETION.md)와 구분합니다. D검사가 통과해도 이 양식은 실행한 PC의 실제 결과만 기록합니다. 사용자 인수 대기 자체를 자율 개발 실패로 바꾸거나, 자율 개발 통과로 학교 사용 검증을 대신하지 않습니다.
 
+자율 개발 D01~D09는 [로컬 독립 완료 보고서](../out_test/goal-20261002-final-a7/INDEPENDENT_COMPLETION.json)에서 모두 충족·critical 발견0으로 판정됐습니다. 직접 재확인한 보고서 SHA256은 `7ab1b358d4c3f517ad5be106d18810441b726fc489c84ea0e01730271f4a1b4e`입니다. 보고서는 로컬 보존·Git 전송 제외이며 **아래 학교 PC·교사·설치/복귀 T기록은 여전히 미실행**입니다.
+
 검사 방법은 [실기 체크리스트](../distribution/MANUAL_QA_CHECKLIST.md), 입력과 수기 기대값은 [합성 자료 안내](SYNTHETIC_VALIDATION.md)를 따릅니다. 입력은 합성 자료만 사용합니다. 학교 파일·실제 학생 이름·학번·개인 설정·원자료 화면을 기록하거나 첨부할 필요가 없습니다.
 
 ## 후보와 PC 확인
@@ -15,15 +17,23 @@ T01~T09는 **사용자 인수 기록**이며 [자율 개발 D01~D09](AUTONOMOUS_
 | OS 버전·CPU 아키텍처 | 미기록 |
 | 화면 해상도·OS 배율·앱 확대율·밝음/어두움 | 미기록 |
 | 앱 버전 | 미확인 — 기대값 1.0.6 |
-| BUILD의 source_commit | 미확인 — 최종 pair가 성공한 전체 후보 SHA를 실제 BUILD에서 확인 후 기록 |
+| BUILD의 source_commit | 이 PC에서 미확인 — 기대값 a7f7d95b6a751606ac75d1f6958ed9686bd9884b |
 | 사용한 DMG / portable ZIP / setup 파일명 | 미기록 |
 | 내려받은 파일 SHA256·SHA256SUMS 대조 | 미실행 |
-| 동일 SHA 양쪽 CI URL·pair artifact | 미확보 |
+| 동일 SHA 양쪽 CI URL·pair artifact | 이 PC에서 미확인 — 참조 CI36952967141 / artifact11204209837 |
 | 합성 키트 manifest SHA256 | 미기록 |
 | 기존 앱·설정·원본 JSON 백업 위치 | 로컬에서만 기록 |
 | 후보 실행·설치/교체에 대한 승인 범위 | 미확인 |
 
-현재 최종 인수 후보의 SHA·DMG/ZIP/setup 지문은 **확정 대기**입니다. 실제 받아 사용할 후보의 BUILD와 SHA256SUMS를 대조하고 위 표를 채웁니다. 이전 로컬 Mac 후보 `9baded3`의 파일·지문은 [과거 검증 기록](VERIFICATION_20261002.md)에 보존하며 새 후보의 기대값으로 쓰지 않습니다. `1866f4e`의 양쪽 플랫폼 작업은 성공했으나 pair가 실패했으므로 최종 인수 후보로 확정하지 않았습니다. 파일이나 SHA가 바뀌면 새 값으로 기록하고 필요한 실기를 다시 합니다.
+고정 후보 SHA는 `a7f7d95b6a751606ac75d1f6958ed9686bd9884b`이며 [CI 36952967141](https://github.com/piman-code/goedusplit/actions/runs/36952967141)의 양 OS·pair가 성공해 [artifact11204209837](https://github.com/piman-code/goedusplit/actions/runs/36952967141/artifacts/11204209837)를 생성했습니다. 개발 검증에서는 실제 내려받은 9개 파일의 지문·내부 구성 및 Mac DMG native 재실행을 확인했습니다. **학교 PC와 교사의 인수 결과는 아직 미실행**입니다. 실제 받아 사용할 후보의 BUILD와 SHA256SUMS를 대조하고 위 표를 채웁니다. 이전 로컬 Mac 후보 `9baded3`의 파일·지문은 [과거 검증 기록](VERIFICATION_20261002.md)에 보존하며 새 후보의 기대값으로 쓰지 않습니다. 안내 지문 차이로 pair가 실패한 `1866f4e`도 이전 실행입니다. 파일이나 SHA가 바뀌면 새 값으로 기록하고 필요한 실기를 다시 합니다.
+
+다음은 확정된 후보의 **기대 지문**입니다. 이 표가 채워져 있어도 위 PC 실제 대조 결과와 아래 T상태는 수행 전까지 미실행입니다.
+
+| 사용할 후보 파일 | 기대 SHA256 |
+| --- | --- |
+| Goedu-Split-1.0.6-mac.dmg | 2c9895bfb250ede8d072be2739cc76587a5aa981de1a9ae401040c230d094cf4 |
+| Goedu-Split-1.0.6-windows.zip | 446a5478fef905f60dee2e83269394c7a2f27f80e9feed7d8fdfad9057563069 |
+| Goedu-Split-1.0.6-windows-setup.exe | 8965b9e7116d7868bed3f39096524e0320578a12ffe168851066795063adfdc6 |
 
 ## T01~T09 실행 결과
 

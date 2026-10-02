@@ -1,6 +1,6 @@
 # Goedu-Split 1.0.6 후보 품질 기준
 
-상태: 개발·검증 진행 중. 기존 문서는 [이력](history/QUALITY_AUDIT-before-20261002.md)에 보존했다. 과거 AI 검사는 현재 필수 기준이 아니다.
+상태: 자율 개발 D01~D09 완료 / 학교 사용자 인수 T01~T09 대기 / 공개 배포 미실행. 기존 문서는 [이력](history/QUALITY_AUDIT-before-20261002.md)에 보존했다. 과거 AI 검사는 현재 필수 기준이 아니다.
 
 자율 개발의 필수 기준은 [DEVELOPMENT_PLAN D01~D09](../docs/DEVELOPMENT_PLAN.md), 학교 사용자 인수 기준은 같은 문서의 T01~T09다. 현재 증거는 [완료 판정표](../docs/AUTONOMOUS_COMPLETION.md)·[GOAL_STATUS](../docs/GOAL_STATUS.md), 실제 PC 절차는 [수동 QA](MANUAL_QA_CHECKLIST.md)를 따른다.
 
