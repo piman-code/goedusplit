@@ -1,6 +1,8 @@
 # Goal 현재 상태 — 2026-10-02
 
-**상태: 개발 진행 중 / 배포 준비 미완료 / 공개 배포 미실행.**
+**상태: Goal 차단 — 새 브랜치 push·CI 승인 대기 / 배포 준비 미완료 / 공개 배포 미실행.**
+
+2026-10-02 09:01 KST 최종 대조: 같은 승인 경계가 사용자 요청 턴과 이후 두 자동 연속 턴에서 반복됐다. 그동안 독립적으로 가능한 Mac 후보 실행 검증·소스 인계 ZIP·실기 기록과 복귀 안내를 진행했다. 다음 필수 단계인 동일 SHA의 양쪽 CI 후보 확보는 승인 없이 실행할 수 없으므로 전체 완료로 표시하지 않는다. GitHub 읽기 조회에서 `codex/desktop-candidates-1.0.6` 브랜치는 없었다. 최근 CI 성공은 다른 소스 SHA의 과거 실행이며 후보 `9baded3`의 증거로 재사용하지 않는다. 이것은 자동 승인 심사 거절이나 GitHub 장애가 아니라 아직 인간 승인 답변이 없는 상태다.
 
 Goal은 [DEVELOPMENT_PLAN](DEVELOPMENT_PLAN.md)의 필수 조건과 T01~T09 전체를 유지한다. 실제 새 Mac frozen 후보 증거는 [VERIFICATION_20261002](VERIFICATION_20261002.md)에 기록했다. 현재 개발 후보는 1.0.6이며 기존 설치·배포 1.0.5는 보존한다.
 
@@ -16,7 +18,7 @@ GitHub `piman-code/goedusplit`은 2026-10-02 읽기 조회에서 공개 저장�
 | Python 격리 검사 | 224개 실행, OK / 5개 Windows 전용 검사 건너뜀(배치 3·실제 junction 2). PYTHONPATH 없이 호스트 CODEX_CLI_PATH를 가짜값으로 넣어도 통과 | 건너뜀은 Windows 실행 통과가 아님 |
 | 웹 계산기 계약 | Node 43개 통과 | 실제 Windows WebEngine 전체 검증 아님 |
 | Mac 합성 계산기 흐름 | 6항목 통과: 예제 판단, 저장 작업 재열기, 비교, 문항/OX 변경 계산, 오류 없음 | 개발 소스 실행이며 배포 후보 아님 |
-| Mac 합성 분석·내보내기 | 실제 MainWindow 파일 선택/분석 버튼·수행 60/40·CSV 4개·근거 XLSX·취소·실명 거절·수식 보호·격리 snapshot·키트 원본 보존, 13개 통과 | 개발 소스 실행. 예측–실측 XLSX·NEIS XLSX·Windows Excel·교사 확인 대기 |
+| Mac 합성 분석·내보내기 | 실제 MainWindow 파일 선택/분석 버튼·수행 60/40·CSV 4개·근거 XLSX·취소·실명 거절·수식 보호·격리 snapshot·키트 원본 보존, 13개 통과 | 개발 소스 실행. NEIS·예측–실측 소스 UI는 아래 별도 증거. Windows Excel·교사 확인 대기 |
 | 합성 실기 키트 | XLSX 3개·한국어 TXT/HWPX/PDF·검토안 JSON·독립 수기 기대값/지문 생성과 6개 대조 통과 | minimal HWPX 파서 입력. native 한글앱 편집·HWP 바이너리·스캔 PDF 미검증 |
 | 시험지 가져오기 Mac 소스 UI | HWPX/PDF 실제 메뉴·미리보기·WebEngine 반영·취소·빈 PDF 실패 보존 8개 통과 | 실제 후보 양쪽/HWP/스캔 PDF 성공/교사 확인 아님 |
 | NEIS·예측–실측 Mac 소스 UI | 실제 WebEngine·자료 메뉴·modal 저장/취소, 엑셀3/2시트·독립 기대값·입력/출력 보존 25개 통과. 완료판정관이 XLSX/PNG 직접 대조 | 해당 추가 기능 frozen 후보·Windows Excel·학교/교사 확인 별도 |
@@ -53,8 +55,8 @@ T01~T09는 **어느 항목도 전체 합격으로 표시하지 않는다**. 소�
 - React 원본은 현재 추적 파일에 없다. 실제 학생자료를 포함한 stash 전체를 적용하지 않는다. 이번 변경은 기존 번들·계산 계약·저장 형식을 재작성하지 않았다.
 - Mac ad-hoc 서명은 Apple 공증이 아니다. Windows 코드 서명·학교 정책 확인도 대기다. Intel Mac/Windows ARM은 검증 전 지원표에 넣지 않는다.
 
-## 다음 안전한 작업
+## 차단 해소 후 다음 작업
 
-합성 실기 키트와 Mac 분석·내보내기 소스 검증을 완료했다. 안내는 [SYNTHETIC_VALIDATION](SYNTHETIC_VALIDATION.md)를 따른다. NEIS/예측–실측 저장과 시험지 가져오기 소스 UI도 통과했다. 다음은 승인된 원격 CI에서 같은 후보 SHA의 Windows 파일 확보와 양쪽 후보 실기다. GitHub 전송은 승인 답변 후 같은 브랜치의 검토·검사된 소스로 진행하며, 실제 Windows PC 확인을 기다리는 동안 로컬 작업을 계속한다. 설치 교체·main 병합·공개 Release는 현재 승인 범위에 포함하지 않는다.
+합성 실기 키트와 Mac 분석·내보내기 소스 검증을 완료했다. 안내는 [SYNTHETIC_VALIDATION](SYNTHETIC_VALIDATION.md)를 따른다. NEIS/예측–실측 저장과 시험지 가져오기 소스 UI도 통과했다. 다음은 승인된 원격 CI에서 같은 후보 SHA의 Windows 파일 확보와 양쪽 후보 실기다. 이미 제시한 새 브랜치 push·CI 승인에 답변을 받은 뒤 기존 Goal을 재개해 원격 실행과 pair 검증을 진행한다. 전체 범위를 다시 조사하거나 기존 검사를 이유 없이 반복하지 않는다. 설치 교체·main 병합·공개 Release는 현재 승인 범위에 포함하지 않는다.
 
 학교 실기 결과는 [PC_VALIDATION_RECORD](PC_VALIDATION_RECORD.md), 백업 대상과 복귀 경계는 [BACKUP_AND_ROLLBACK](BACKUP_AND_ROLLBACK.md)를 따른다. Windows 소스 ZIP은 로컬 fallback 자료이며 원격 push/CI 승인이 없는 상태에서 GitHub 기반 개발 완료로 취급하지 않는다.
