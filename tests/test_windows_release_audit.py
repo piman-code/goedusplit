@@ -106,6 +106,17 @@ class WindowsReleaseAuditTests(unittest.TestCase):
         self.assertIn("secret-like token pattern: config.json", findings)
         self.assertNotIn(secret, "\n".join(findings))
 
+    def test_powershell_scripts_are_scanned_by_both_transfer_auditors(self):
+        from build_scripts import privacy_release_audit as release_audit
+        self.repository()
+        secret = "sk-" + "q" * 30
+        script = self.track("build_scripts/school-check.ps1", "$token = '" + secret + "'\n")
+        self.assertIn("secret-like token pattern: build_scripts/school-check.ps1",
+                      audit.audit_repository(self.root))
+        findings = release_audit.audit_path(script)
+        self.assertTrue(any("secret-like token pattern" in finding for finding in findings))
+        self.assertNotIn(secret, "\n".join(findings))
+
     def test_student_json_payload_is_rejected_but_configuration_is_allowed(self):
         self.repository()
         self.track("settings.json", '{"theme":"light"}')

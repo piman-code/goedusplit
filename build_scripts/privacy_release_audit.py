@@ -34,6 +34,7 @@ TEXT_SUFFIXES = {
     ".log",
     ".md",
     ".plist",
+    ".ps1",
     ".py",
     ".qss",
     ".txt",

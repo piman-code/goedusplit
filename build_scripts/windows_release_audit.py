@@ -59,6 +59,7 @@ TEXT_SUFFIXES = {
     ".log",
     ".md",
     ".py",
+    ".ps1",
     ".spec",
     ".txt",
     ".xml",

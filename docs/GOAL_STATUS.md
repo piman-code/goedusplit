@@ -2,7 +2,7 @@
 
 **상태: 자율 개발 완료 / 사용자 인수 대기 / 공개 배포 미실행.**
 
-사용자 최신 요청에 따라 이번 목표는 [D01~D09 자율 개발 완료](DEVELOPMENT_PLAN.md)다. 승인된 `codex/desktop-candidates-1.0.6` push·CI·필요한 수정·검증·기록을 수행했다. 최초 Goal 도구의 objective에는 학교 인수 T조건이 남아 있지만, 이번 판정은 사용자의 명시적인 범위 변경을 따른다. T01~T09를 통과로 바꾸거나 새 Goal을 중복 생성하지 않는다.
+앞선 사용자 범위 변경에 따라 완료한 Goal은 [D01~D09 자율 개발 완료](DEVELOPMENT_PLAN.md)다. 승인된 `codex/desktop-candidates-1.0.6` push·CI·필요한 수정·검증·기록을 수행했다. 최초 Goal 도구의 objective에는 학교 인수 T조건이 남아 있지만, 그 판정은 사용자의 명시적인 범위 변경을 따른다. 이후 남은 작업 재개는 아래 학교 Windows 지원에 기록하며 T01~T09를 통과로 바꾸거나 새 Goal을 자동 생성하지 않는다.
 
 ## 확정 후보와 증거
 
@@ -22,6 +22,12 @@
 [PC 기록 양식](PC_VALIDATION_RECORD.md)의 T01~T09는 미실행이다. 학교 Windows·Excel 실제 열기·Mac→Windows→Mac JSON 왕복·학교 배율/오프라인·교사·실제 HWP 의존성·설치/복귀는 별도 사용자 인수다. [개발 안내](DEVELOPMENT.md), [릴리스 준비](RELEASE_CANDIDATES.md), [백업/복귀](BACKUP_AND_ROLLBACK.md)를 따른다. main 병합·공개 Release·설치 교체는 실행하지 않았다.
 
 알려진 제약: 기본 전부 펼침의 작은 분석 창은 높이가 부족할 수 있으며 기존 접기 버튼으로 그래프 축/제목·학생4행 접근을 검증했다. 실제 학교 배율·교사 시각 검토는 대기다. native HWP 외부변환기는 선택 의존성, 스캔 PDF OCR은 범위 밖이다. Mac ad-hoc 서명은 Apple 공증이 아니고 Windows 유료 서명은 도입하지 않았다. Intel Mac·Windows ARM은 지원 검증 대상에 포함하지 않았다.
+
+## 학교 Windows 검증 지원
+
+후속 요청에서 사용자가 학교 Windows에서도 작업 가능하다고 확인했다. 현재 채팅의 연결 실행 호스트는 Mac local뿐이므로 학교 실제 실행은 그 PC에서 이어간다. [학교 Windows 안내](WINDOWS_SCHOOL_QA.md)와 전달 묶음 생성기·PowerShell 검사기를 추가했다. 고정 a7 후보를 새 격리 출력에서 검사하며 Python·개발 도구 설치가 필요 없다.
+
+실행기 자체의 Windows CI 결과와 실제 학교 PC 결과는 구분한다. 실행 장소 `School`은 사용자 지정이며 자동 확인이 아니다. 전달 묶음 생성·CI 통과·필수12개 자동 QA만으로 T01~T09 또는 Excel·실제 파일 왕복·교사·설치/복귀를 완료 처리하지 않는다. 후보 앱의 버전·빌드 SHA는 변경하지 않았다.
 
 ## 진행 이력
 

@@ -1,0 +1,138 @@
+name: Validate Install-Free School Candidate Helper
+
+on:
+  push:
+    branches: ['codex/**']
+    paths:
+      - build_scripts/validate_school_candidate.ps1
+      - build_scripts/make_school_validation_bundle.py
+      - .github/workflows/school-candidate-validation.yml
+      - .gitattributes
+      - docs/WINDOWS_SCHOOL_QA.md
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  frozen-helper:
+    runs-on: windows-2022
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify immutable candidate artifact identity
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {data: a} = await github.rest.actions.getArtifact({
+              owner: context.repo.owner, repo: context.repo.repo,
+              artifact_id: 11204209837
+            });
+            if (a.expired || a.id !== 11204209837 ||
+                a.name !== 'desktop-candidates-1.0.6-a7f7d95b6a751606ac75d1f6958ed9686bd9884b' ||
+                a.workflow_run.id !== 36952967141 ||
+                a.workflow_run.head_sha !== 'a7f7d95b6a751606ac75d1f6958ed9686bd9884b' ||
+                a.digest !== 'sha256:85d3790db44081d0ed1baedc7b3f3fb1a252838e7ca59349b82834ea169a4eb0') {
+              throw new Error('Immutable candidate artifact identity mismatch');
+            }
+            core.info('Confirmed existing candidate artifact and source SHA. No rebuild or installation.');
+      - uses: actions/download-artifact@v4
+        with:
+          artifact-ids: '11204209837'
+          merge-multiple: true
+          run-id: '36952967141'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/school candidate input
+      - name: PowerShell 5.1 bad ZIP and existing output preservation
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Windows PowerShell 5.1 is required' }
+          $legacy = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'build_scripts\validate_school_candidate.ps1'
+          $negative = Join-Path $env:RUNNER_TEMP 'school candidate negative'
+          $null = New-Item -ItemType Directory -Path $negative
+          $badZip = Join-Path $negative 'synthetic-bad.zip'
+          [IO.File]::WriteAllBytes($badZip, [Text.Encoding]::UTF8.GetBytes('synthetic invalid ZIP'))
+          $badOutput = Join-Path $negative 'bad-hash-output'
+          & $legacy -NoProfile -File $helper -CandidateZip $badZip -OutputRoot $badOutput -Context CI
+          if ($LASTEXITCODE -ne 1) { throw 'Bad ZIP was not refused' }
+          $badReport = Get-Content -LiteralPath (Join-Path $badOutput 'SCHOOL_VALIDATION_REPORT.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($badReport.status -ne 'failed' -or $badReport.errors.Count -ne 1 -or $badReport.errors[0] -ne 'zip-hash') { throw 'Unexpected hash rejection' }
+          if (Test-Path (Join-Path $badOutput 'candidate')) { throw 'Unapproved ZIP was extracted' }
+          $existing = Join-Path $negative 'existing-output'
+          $null = New-Item -ItemType Directory -Path $existing
+          $marker = Join-Path $existing 'keep.txt'
+          $priorReport = Join-Path $existing 'SCHOOL_VALIDATION_REPORT.json'
+          [IO.File]::WriteAllBytes($marker, [Text.Encoding]::UTF8.GetBytes('preserve sentinel'))
+          [IO.File]::WriteAllBytes($priorReport, [Text.Encoding]::UTF8.GetBytes('preserve prior report'))
+          $markerHash = (Get-FileHash $marker -Algorithm SHA256).Hash
+          $reportHash = (Get-FileHash $priorReport -Algorithm SHA256).Hash
+          & $legacy -NoProfile -File $helper -CandidateZip $badZip -OutputRoot $existing -Context CI
+          if ($LASTEXITCODE -ne 1) { throw 'Existing output was not refused' }
+          if ((Get-FileHash $marker -Algorithm SHA256).Hash -ne $markerHash -or
+              (Get-FileHash $priorReport -Algorithm SHA256).Hash -ne $reportHash -or
+              @(Get-ChildItem -LiteralPath $existing -Force).Count -ne 2) { throw 'Existing output changed' }
+          'Bad hash, no extraction, existing bytes and prior report preserved.'
+          exit 0
+      - name: PowerShell 5.1 pinned frozen candidate in spaced Unicode path
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ($PSVersionTable.PSVersion.Major -ne 5) { throw 'Windows PowerShell 5.1 is required' }
+          $legacy = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+          $helper = Join-Path $env:GITHUB_WORKSPACE 'build_scripts\validate_school_candidate.ps1'
+          $zip = Join-Path $env:RUNNER_TEMP 'school candidate input\Goedu-Split-1.0.6-windows.zip'
+          $parent = Join-Path $env:RUNNER_TEMP 'school candidate positive'
+          $null = New-Item -ItemType Directory -Path $parent
+          # ASCII script source constructs actual Hangul even in PowerShell 5.1.
+          $leaf = [string][char]0xD55C + [char]0xAE00 + ' spaced candidate'
+          $output = Join-Path $parent $leaf
+          $before = [Environment]::GetEnvironmentVariable('QT_QPA_PLATFORM', 'Process')
+          & $legacy -NoProfile -File $helper -CandidateZip $zip -OutputRoot $output -Context CI
+          if ($LASTEXITCODE -ne 0) { throw 'Pinned frozen helper validation failed' }
+          if ([Environment]::GetEnvironmentVariable('QT_QPA_PLATFORM', 'Process') -cne $before) { throw 'Caller environment changed' }
+          $report = Get-Content -LiteralPath (Join-Path $output 'SCHOOL_VALIDATION_REPORT.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($report.status -ne 'passed-synthetic-only' -or $report.context -ne 'CI' -or
+              $report.source_commit -ne 'a7f7d95b6a751606ac75d1f6958ed9686bd9884b' -or
+              $report.errors.Count -ne 0 -or -not $report.process_environment_restored) { throw 'Wrapper report failed' }
+          if ($report.school_acceptance -ne 'not evaluated; no T01-T09 completion is inferred') { throw 'Acceptance scope changed' }
+          'Immutable frozen candidate, PS5.1, Unicode/spaced path and synthetic checks passed.'
+          exit 0
+      - name: Prepare disposable runner Python for handoff generation
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.14.2'
+          architecture: x64
+      - name: Install pinned handoff dependencies in disposable CI only
+        shell: powershell
+        run: |
+          python -m pip install --only-binary=:all: -r requirements-build-lock.txt
+      - name: Generate the school handoff without changing the candidate
+        shell: powershell
+        env:
+          PYTHONDONTWRITEBYTECODE: '1'
+        run: |
+          python -B build_scripts/make_school_validation_bundle.py --candidate-dir "$env:RUNNER_TEMP/school candidate input" --output artifacts/Goedu-Split-1.0.6-school-check
+      - name: Upload install-free school handoff
+        uses: actions/upload-artifact@v4
+        with:
+          name: school-handoff-1.0.6-${{ github.sha }}
+          path: |
+            artifacts/Goedu-Split-1.0.6-school-check.zip
+            artifacts/Goedu-Split-1.0.6-school-check/HANDOFF_MANIFEST.json
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload only synthetic reports and capture
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: school-helper-synthetic-validation-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/school candidate positive/**/SCHOOL_VALIDATION_REPORT.json
+            ${{ runner.temp }}/school candidate positive/**/QA_REPORT.json
+            ${{ runner.temp }}/school candidate positive/**/candidate-window.png
+            ${{ runner.temp }}/school candidate negative/bad-hash-output/SCHOOL_VALIDATION_REPORT.json
+          if-no-files-found: error
+          retention-days: 14
