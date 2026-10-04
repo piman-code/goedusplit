@@ -16,9 +16,34 @@ import sys
 import tempfile
 import xml.etree.ElementTree as ET
 import zipfile
+from xml.parsers import expat
 from pathlib import Path
 
 SUPPORTED_SUFFIXES = (".hwp", ".hwpx", ".pdf", ".txt", ".md")
+MAX_XML_MEMBER_BYTES = 64 * 1024 * 1024
+
+
+def parse_document_xml(archive: zipfile.ZipFile, name: str) -> ET.Element:
+    """Parse one XML member of a DOCX/HWPX package; teacher-supplied files are untrusted input.
+
+    Refuses oversized members (zip bombs) and DTD/entity declarations (entity expansion).
+    """
+    if archive.getinfo(name).file_size > MAX_XML_MEMBER_BYTES:
+        raise ValueError("문서 내부 XML이 너무 커서 읽지 않았습니다.")
+    def refuse_dtd(*_args):
+        raise ValueError("DTD/엔티티 선언이 있는 문서는 읽지 않습니다.")
+
+    data = archive.read(name)
+    scanner = expat.ParserCreate()  # parser-level scan, so any encoding (UTF-16 too) is covered
+    scanner.StartDoctypeDeclHandler = refuse_dtd
+    scanner.EntityDeclHandler = refuse_dtd
+    try:
+        scanner.Parse(data, True)
+    except expat.ExpatError:
+        pass  # malformed XML: ET.fromstring below reports it as ET.ParseError
+    return ET.fromstring(data)
+
+
 CHOICE_MARKS = "①②③④⑤⑥"
 _WINDOWS_SHELL_CHARS = set('&|<>^%!"')
 
@@ -98,13 +123,13 @@ def _read_hwpx(path: Path) -> str:
             )
             lines = []
             for name in sections:
-                root = ET.fromstring(archive.read(name))
+                root = parse_document_xml(archive, name)
                 for para in root.iter():
                     if _xml_name(para.tag) == "p":
                         text = _paragraph_text(para).strip()
                         if text:
                             lines.append(text)
-    except (zipfile.BadZipFile, ET.ParseError, KeyError, OSError) as exc:
+    except (zipfile.BadZipFile, ET.ParseError, KeyError, OSError, ValueError) as exc:
         raise ExamReadError("HWPX 파일 구조를 읽지 못했습니다.") from exc
     return "\n".join(lines)
 

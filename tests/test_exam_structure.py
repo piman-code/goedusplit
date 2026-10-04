@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 from app.exam_structure import (
     ExamReadError, designs_from_structure, enrich_structure, extract_exam_text, find_kordoc, markdown_to_lines,
-    parse_exam_structure,
+    parse_document_xml, parse_exam_structure,
 )
 from types import SimpleNamespace
 
@@ -175,6 +175,28 @@ class ExamReadTests(unittest.TestCase):
         self.assertEqual(text.split("\n"), ["표 앞 글", "1. 첫 문항", "① 가 ② 나", "2. 둘째 문항 [4점]", "① 가", "줄", "바꿈"])
         items = parse_exam_structure(text)["items"]
         self.assertEqual([(i["number"], i["points"]) for i in items], [(1, None), (2, 4.0)])  # 2번 배점이 1번으로 가지 않는다
+
+    def test_hwpx_with_entity_declaration_is_refused(self):
+        bomb = '<?xml version="1.0"?><!DOCTYPE s [<!ENTITY a "aaaa"><!ENTITY b "&a;&a;&a;&a;">]><s><p>&b;</p></s>'
+        with TemporaryDirectory() as directory:
+            hwpx = Path(directory) / "bomb.hwpx"
+            with zipfile.ZipFile(hwpx, "w") as archive:
+                archive.writestr("Contents/section0.xml", bomb)
+            with self.assertRaises(ExamReadError):
+                extract_exam_text(hwpx)
+
+    def test_document_xml_refuses_dtd_in_any_encoding_but_allows_plain_text(self):
+        bomb = '<?xml version="1.0" encoding="UTF-16"?><!DOCTYPE s [<!ENTITY a "aaaa">]><s><p>&a;</p></s>'
+        plain = '<s><p><![CDATA[<!DOCTYPE 는 글자일 뿐]]></p></s>'
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / "x.zip"
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("utf16.xml", bomb.encode("utf-16"))
+                archive.writestr("plain.xml", plain.encode("utf-8"))
+            with zipfile.ZipFile(path) as archive:
+                with self.assertRaisesRegex(ValueError, "DTD"):
+                    parse_document_xml(archive, "utf16.xml")
+                self.assertEqual(parse_document_xml(archive, "plain.xml").find("p").text, "<!DOCTYPE 는 글자일 뿐")
 
     def test_pdf_with_korean_text(self):
         import matplotlib

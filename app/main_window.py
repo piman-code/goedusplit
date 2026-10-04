@@ -24,6 +24,7 @@ import sys
 import tempfile
 import threading
 import traceback
+import warnings
 import zipfile
 from datetime import datetime
 from pathlib import Path
@@ -55,7 +56,8 @@ from .expected_rates import (
     write_estimation_workbook,
 )
 from .exam_structure import (
-    DIFFICULTIES, ExamReadError, designs_from_structure, enrich_structure, extract_exam_text, parse_exam_structure,
+    DIFFICULTIES, ExamReadError, designs_from_structure, enrich_structure, extract_exam_text, parse_document_xml,
+    parse_exam_structure,
 )
 from .export_privacy import (
     REAL_IDENTITY_CHECKBOX_TEXT, REAL_IDENTITY_WARNING, csv_safe_cell, new_student_hash_key,
@@ -314,7 +316,9 @@ class _MarginKeepingCanvas(FigureCanvas):
         fig.subplots_adjust(**self._design_pars)
         if w < w0 - 0.05 or h < h0 - 0.05:
             try:
-                fig.tight_layout(pad=0.5)
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", UserWarning)  # "Tight layout not applied" on very small panes
+                    fig.tight_layout(pad=0.5)
             except Exception:
                 fig.subplots_adjust(**self._design_pars)
             fig.set_layout_engine(None)
@@ -6339,7 +6343,7 @@ codex login status</pre>
                 names = [name for name in zf.namelist() if name == "word/document.xml"]
                 if not names:
                     raise ValueError("DOCX 본문 XML을 찾지 못했습니다.")
-                root = ET.fromstring(zf.read(names[0]))
+                root = parse_document_xml(zf, names[0])
         except zipfile.BadZipFile as exc:
             raise ValueError("DOCX 파일 구조를 읽지 못했습니다.") from exc
         paragraphs = []
@@ -6378,7 +6382,7 @@ codex login status</pre>
                 parts = []
                 for name in section_names:
                     try:
-                        root = ET.fromstring(zf.read(name))
+                        root = parse_document_xml(zf, name)
                     except Exception:
                         continue
                     parts.extend(self._extract_text_from_hwpx_xml_root(root))
