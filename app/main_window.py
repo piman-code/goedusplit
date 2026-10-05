@@ -68,6 +68,7 @@ from .calibration import (
     write_calibration_workbook,
 )
 from .perform_loader import load_perform, load_perform_many
+from . import rounds as round_history
 from . import fonts as font_pack
 from .grade_cut_calculator import (
     GRADE5_CUMULATIVE,
@@ -1104,12 +1105,27 @@ class MainWindow(QMainWindow):
         cuts_help = QLabel("※ 추정분할점수 파일을 지정하면 아래 분할점수가 자동 입력됩니다.")
         cuts_help.setProperty("role", "muted"); cuts_help.setWordWrap(True)
         ff.addWidget(cuts_help)
+        self.cmb_round = QComboBox()
+        self.cmb_round.setEditable(True)
+        self.cmb_round.addItems(["", "1학기 1차", "1학기 2차", "2학기 1차", "2학기 2차"])
+        self.cmb_round.setCurrentIndex(0)
+        self.cmb_round.lineEdit().setPlaceholderText("자동 인식 (파일 이름의 학기·차수)")
+        self.cmb_round.setToolTip("분석 결과를 어느 시험으로 기록할지 정합니다. 비워 두면 파일 이름의 '1학기', '2차' 같은 글자로 알아냅니다.")
+        self.lbl_round_hint = QLabel("")
+        self.lbl_round_hint.setProperty("role", "muted"); self.lbl_round_hint.setWordWrap(True)
+        ff.addWidget(QLabel("시험 구분 (회차 비교에 쓰는 이름)"))
+        ff.addWidget(self.cmb_round)
+        ff.addWidget(self.lbl_round_hint)
+        self.cmb_round.currentTextChanged.connect(self._update_round_hint)
+        self.fs_response.path_edit.textChanged.connect(self._update_round_hint)
+        self.fs_cuts.path_edit.textChanged.connect(self._update_round_hint)
         v.addWidget(self._make_collapsible_panel("입력 파일", files_body))
 
         # 2022 개정 5등급 컷 계산
         grade5_body = QWidget()
         gf = QVBoxLayout(grade5_body); gf.setContentsMargins(0, 0, 0, 0); gf.setSpacing(8)
         self.fs_grade5_report = FileSelector("교과목별 일람표")
+        self.fs_grade5_report.path_edit.textChanged.connect(self._update_round_hint)
         gf.addWidget(self.fs_grade5_report)
         self.lbl_grade5_cut_info = QLabel(
             "정기시험 교과목별 일람표의 실제 숫자 점수만 기준으로 계산합니다. 인정결·질병결·자퇴·전출 등 비점수 값은 제외합니다."
@@ -1130,6 +1146,7 @@ class MainWindow(QMainWindow):
         self.fs_perform = FileSelector("수행평가 결과 (.xlsx, 반별 파일 여러 개 가능)", multiple=True)
         self.fs_perform.setEnabled(False)
         self.fs_perform.path_edit.textChanged.connect(self._on_perform_path_changed)
+        self.fs_perform.path_edit.textChanged.connect(self._update_round_hint)
         self.lbl_perform_info = QLabel("(미설정)")
         self.lbl_perform_info.setProperty("role", "muted"); self.lbl_perform_info.setWordWrap(True)
         pf.addWidget(self.chk_perform); pf.addWidget(self.fs_perform); pf.addWidget(self.lbl_perform_info)
@@ -2142,6 +2159,25 @@ class MainWindow(QMainWindow):
             else:
                 chosen[cat] = p; used.add(p)
 
+        # 정오표가 가리키는 학기·차수와 같은 이름의 분할점수·일람표·수행평가를 먼저 고른다.
+        # (1차 정오표에 2차 일람표가 붙지 않게. 이름에 표기가 없으면 따지지 않는다.)
+        if "response" in chosen:
+            resp_tag = round_history.tag_of(chosen["response"].name)
+
+            def fit(path: Path) -> int:
+                tag = round_history.tag_of(path.name)
+                if round_history.tags_conflict(resp_tag, tag):
+                    return 0
+                return 2 if any(t is not None and t == r for t, r in zip(tag, resp_tag)) else 1
+            for cat in ("cuts", "grade5_report", "perform"):
+                if cat not in chosen:
+                    continue
+                taken = used - {chosen[cat]}
+                options = [(fit(p), sc, mt, p) for sc, mt, p in cands[cat] if p not in taken]
+                if options:
+                    best = max(options, key=lambda o: o[:3])[3]
+                    used.discard(chosen[cat]); chosen[cat] = best; used.add(best)
+
         # 반별로 나뉜 정오표·수행평가 파일("…(1-1)", "…(1-2)")은 같은 시험의 한 묶음으로 함께 채운다.
         # 이름에서 반 표기만 빼고 같으면 한 묶음이라 1차/2차는 섞이지 않는다.
         def group_key(path: Path) -> str:
@@ -2189,6 +2225,9 @@ class MainWindow(QMainWindow):
             return
 
         msg_lines = [f"• {k} ← {v}" for k, v in applied]
+        _year, found_sem, found_round = self._detect_exam_round()
+        if found_sem or found_round:
+            msg_lines.append(f"• 시험 구분 ← {round_history.round_name(found_sem, found_round)}")
         skipped = [p.name for p in files if p not in used]
         msg = "다음 파일을 자동으로 채웠습니다:\n\n" + "\n".join(msg_lines)
         if skipped:
@@ -2199,6 +2238,81 @@ class MainWindow(QMainWindow):
             msg += "\n\n⚠ 정오표·문항정보표 중 일부가 인식되지 않아, 수동으로 지정해 주세요."
         self.statusBar().showMessage(f"폴더 일괄 불러오기 · {len(applied)}개 채움", 5000)
         QMessageBox.information(self, "폴더 일괄 불러오기", msg)
+
+    # ---- 회차(학기·차수) 기록 ------------------------------------------
+    def _round_file_names(self) -> dict[str, str]:
+        def first(paths):
+            return Path(paths[0]).name if paths else ""
+        grade5 = getattr(self, "fs_grade5_report", None)
+        return {
+            "정오표": first(self.fs_response.paths()),
+            "분할점수": first(split_paths(self.fs_cuts.path())),
+            "일람표": first(grade5.paths()) if grade5 is not None else "",
+            "수행평가": first(self.fs_perform.paths()) if hasattr(self, "fs_perform") else "",
+        }
+
+    def _detect_exam_round(self) -> tuple[int | None, int | None, int | None]:
+        """(학년도, 학기, 차수). 직접 적은 값이 있으면 그것을, 없으면 파일 이름과 정오표 머리글에서 찾는다."""
+        manual = self.cmb_round.currentText().strip() if hasattr(self, "cmb_round") else ""
+        semester, round_no = round_history.parse_round(manual) if manual else (None, None)
+        header = (getattr(self.exam, "semester", "") or "") if getattr(self, "exam", None) is not None else ""
+        if semester is None and round_no is None:
+            names = self._round_file_names()
+            semester, round_no = round_history.parse_round(
+                names["정오표"], names["분할점수"], names["일람표"], names["수행평가"], header)
+        return round_history.parse_year(header), semester, round_no
+
+    def _update_round_hint(self, *_args):
+        if not hasattr(self, "lbl_round_hint"):
+            return
+        names = self._round_file_names()
+        _year, semester, round_no = self._detect_exam_round()
+        text = f"기록 이름: {round_history.round_name(semester, round_no)}"
+        if semester is None and round_no is None and any(names.values()):
+            text += " (파일 이름에서 학기·차수를 찾지 못했습니다. 위에서 직접 고를 수 있습니다.)"
+        base = round_history.tag_of(names["정오표"])
+        odd = [f"{key} 파일은 {round_history.round_name(*round_history.tag_of(name))}용"
+               for key, name in names.items()
+               if key != "정오표" and name and round_history.tags_conflict(base, round_history.tag_of(name))]
+        if odd:
+            text += "\n⚠ " + ", ".join(odd) + "으로 보입니다. 같은 시험의 파일인지 확인하세요."
+        self.lbl_round_hint.setText(text)
+
+    def _round_store(self) -> "round_history.RoundStore":
+        # 포트폴리오(subject_snapshots)와 따로 둔다: 같은 시험이 두 번 세어지지 않게.
+        return round_history.RoundStore(self._ai_material_root_dir() / "round_history")
+
+    def _current_round_record(self) -> dict | None:
+        exam, overall = self.exam, self.overall
+        if exam is None or overall is None:
+            return None
+        year, semester, round_no = self._detect_exam_round()
+        key = self._portfolio_hash_key()
+        students = {}
+        for idx, st in enumerate(exam.students):
+            level = overall.levels_arr[idx] if idx < len(overall.levels_arr) else grade_level(st.final_score, exam.cut_scores)
+            students[student_hash(key, st.sid, st.class_no, st.name)] = {
+                "level": level, "score": round(float(st.final_score), 2)}
+        return round_history.build_record(
+            subject=exam.subject or "(과목 미상)", grade=exam.grade, year=year, semester=semester, round_no=round_no,
+            n_students=len(exam.students), mean=overall.mean, std=overall.std,
+            level_pct=overall.level_dist_pct, level_n=overall.level_dist, cuts=exam.cut_scores, students=students,
+            weights={"pencil": exam.weight_pencil, "perform": exam.weight_perform})
+
+    def _save_round_history(self):
+        """분석할 때마다 회차 기록을 남긴다. 실패해도 분석은 그대로 진행한다."""
+        try:
+            record = self._current_round_record()
+            if record is None:
+                return
+            self._round_store().save(record)
+        except Exception as exc:  # 기록을 못 남겨도 분석 결과는 보여 준다
+            self.statusBar().showMessage(f"회차 기록을 저장하지 못했습니다: {exc}", 6000)
+            return
+        note = "" if record["semester_no"] or record["round_no"] else " · 시험 구분을 지정하면 회차별로 나뉘어 쌓입니다"
+        self.statusBar().showMessage(f"회차 기록 저장: {record['label']}{note}", 6000)
+        if hasattr(self, "table_round_metrics"):
+            self._refresh_rounds_tab()
 
     def calculate_grade5_cuts_from_report(self):
         path = self.fs_grade5_report.path() if hasattr(self, "fs_grade5_report") else ""
@@ -2571,6 +2685,7 @@ class MainWindow(QMainWindow):
         self.tab_standard = QWidget(); self._init_tab_standard()
         self.tab_ai_review = None
         self.tab_spliter = QWidget(); self._init_tab_spliter()
+        self.tab_rounds = QWidget(); self._init_tab_rounds()
         self.tab_monitor = QWidget(); self._init_tab_monitor()
         self.tab_help = QWidget(); self._init_tab_help()
         self._tab_label_sets = [
@@ -2582,6 +2697,7 @@ class MainWindow(QMainWindow):
             (self.tab_choice, "성취수준별 답지반응 분포", "답지반응", "답지"),
             (self.tab_standard, "성취기준 분석 결과", "성취기준", "기준"),
             (self.tab_spliter, "예상정답률 입력", "예상정답률", "정답률"),
+            (self.tab_rounds, "회차 비교", "회차비교", "비교"),
             (self.tab_monitor, "모니터링", "모니터링", "모니터"),
             (self.tab_help, "도움말", "도움말", "도움"),
         ]
@@ -2739,6 +2855,8 @@ class MainWindow(QMainWindow):
             self._schedule_ai_ollama_mlx_help_popup()
         if self.tabs.currentWidget() is self.tab_spliter:
             QTimer.singleShot(0, self._ensure_spliter_tab_loaded)
+        if self.tabs.currentWidget() is getattr(self, "tab_rounds", None):
+            self._refresh_rounds_tab()
 
     def _ensure_spliter_tab_loaded(self):
         if self.spliter_view is None:
@@ -3873,6 +3991,147 @@ class MainWindow(QMainWindow):
         panel.setMaximumHeight(16777215)
         panel.updateGeometry()
 
+    # ---- 회차 비교 ------------------------------------------------------
+    def _init_tab_rounds(self):
+        layout = QVBoxLayout(self.tab_rounds)
+        intro = QLabel(
+            "분석할 때마다 자동으로 쌓인 회차 기록 가운데 두 개를 골라 비교합니다. 같은 학생은 이름 없이 해시로만 "
+            "이어지고, 기록은 이 컴퓨터에만 저장됩니다. 같은 과목·학기·차수를 다시 분석하면 최신 결과로 바뀝니다."
+        )
+        intro.setProperty("role", "muted"); intro.setWordWrap(True)
+        layout.addWidget(intro)
+        row = QHBoxLayout()
+        self.cmb_round_base = QComboBox(); self.cmb_round_other = QComboBox()
+        for box in (self.cmb_round_base, self.cmb_round_other):
+            box.setMinimumContentsLength(16)
+            box.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        row.addWidget(QLabel("기준")); row.addWidget(self.cmb_round_base, 1)
+        row.addWidget(QLabel("비교")); row.addWidget(self.cmb_round_other, 1)
+        btn_refresh = QPushButton("새로고침")
+        btn_refresh.clicked.connect(self._refresh_rounds_tab)
+        row.addWidget(btn_refresh)
+        layout.addLayout(row)
+        self.lbl_round_status = QLabel("")
+        self.lbl_round_status.setProperty("role", "muted"); self.lbl_round_status.setWordWrap(True)
+        layout.addWidget(self.lbl_round_status)
+
+        body = QSplitter(Qt.Vertical)
+        self.canvas_round_compare = CanvasHolder()
+        self.canvas_round_compare.setMinimumHeight(self._px(170))
+        body.addWidget(self._fold("rounds.chart", "성취수준 분포 비교", self.canvas_round_compare))
+        tables = QSplitter(Qt.Horizontal)
+        self.table_round_metrics = QTableWidget(0, 4)
+        self.table_round_metrics.setHorizontalHeaderLabels(["항목", "기준", "비교", "변화"])
+        _setup_table(self.table_round_metrics, row_height=30)
+        tables.addWidget(self._fold("rounds.metrics", "지표 비교", self.table_round_metrics))
+        moves_wrap = QWidget()
+        moves_layout = QVBoxLayout(moves_wrap); moves_layout.setContentsMargins(0, 0, 0, 0)
+        self.lbl_round_moves = QLabel("")
+        self.lbl_round_moves.setProperty("role", "muted"); self.lbl_round_moves.setWordWrap(True)
+        moves_layout.addWidget(self.lbl_round_moves)
+        self.table_round_moves = QTableWidget(0, 0)
+        _setup_table(self.table_round_moves, row_height=30)
+        moves_layout.addWidget(self.table_round_moves, 1)
+        tables.addWidget(self._fold("rounds.moves", "학생 성취수준 이동 (기준 → 비교)", moves_wrap))
+        body.addWidget(tables)
+        body.setSizes([260, 320])
+        layout.addWidget(body, 1)
+        self._round_records: list[dict] = []
+        self.cmb_round_base.currentIndexChanged.connect(self._render_rounds_compare)
+        self.cmb_round_other.currentIndexChanged.connect(self._render_rounds_compare)
+        self._refresh_rounds_tab()
+
+    def _course_round_records(self) -> list[dict]:
+        records = self._round_store().load_all()
+        exam = getattr(self, "exam", None)
+        if exam is not None:
+            return round_history.same_course(records, exam.subject or "(과목 미상)", exam.grade)
+        return records
+
+    def _refresh_rounds_tab(self):
+        if not hasattr(self, "cmb_round_base"):
+            return
+        records = self._course_round_records()
+        keep = [self.cmb_round_base.currentData(), self.cmb_round_other.currentData()]
+        self._round_records = records
+        multi_subject = len({(r.get("subject"), r.get("grade")) for r in records}) > 1
+        for box in (self.cmb_round_base, self.cmb_round_other):
+            box.blockSignals(True)
+            box.clear()
+            for index, record in enumerate(records):
+                prefix = f"{record.get('subject')} · " if multi_subject else ""
+                box.addItem(f"{prefix}{record['label']} ({record['n_students']}명)", index)
+            box.blockSignals(False)
+        if records:
+            def pick(box, wanted, default):
+                found = box.findData(wanted) if wanted is not None else -1
+                box.setCurrentIndex(found if found >= 0 else default)
+            # 새 회차가 쌓였거나 두 칸이 같아지면 가장 최근 두 회차를 고른다. 아니면 고르던 것을 유지한다.
+            changed = len(records) != getattr(self, "_round_count_seen", None) or keep[0] == keep[1]
+            pick(self.cmb_round_base, None if changed else keep[0], max(0, len(records) - 2))
+            pick(self.cmb_round_other, None if changed else keep[1], len(records) - 1)
+        self._round_count_seen = len(records)
+        self._render_rounds_compare()
+
+    def _render_rounds_compare(self, *_args):
+        if not hasattr(self, "table_round_metrics"):
+            return
+        records = getattr(self, "_round_records", [])
+        base_i, other_i = self.cmb_round_base.currentData(), self.cmb_round_other.currentData()
+        self.table_round_metrics.setRowCount(0)
+        self.table_round_moves.setRowCount(0); self.table_round_moves.setColumnCount(0)
+        if len(records) < 2 or base_i is None or other_i is None:
+            self.canvas_round_compare.set_figure(charts.fig_round_compare(None, None))
+            self.lbl_round_moves.setText("")
+            self.lbl_round_status.setText(
+                "저장된 회차가 아직 %d개입니다. 서로 다른 시험(예: 1학기 1차, 1학기 2차)을 분석하면 비교할 수 있습니다. "
+                "분석 전에 '시험 구분'을 확인하세요." % len(records))
+            return
+        if base_i == other_i:
+            self.canvas_round_compare.set_figure(charts.fig_round_compare(None, None))
+            self.lbl_round_status.setText("기준과 비교에 서로 다른 회차를 골라 주세요.")
+            return
+        base, other = records[base_i], records[other_i]
+        result = round_history.compare(base, other)
+        self.lbl_round_status.setText(f"{base['label']} → {other['label']}")
+        self.canvas_round_compare.set_figure(charts.fig_round_compare(base, other))
+
+        def fmt(value, signed=False):
+            if value is None:
+                return "-"
+            text = f"{value:+.1f}" if signed else f"{value:.1f}"
+            return text[:-2] if text.endswith(".0") else text
+        table = self.table_round_metrics
+        table.setRowCount(len(result["rows"]))
+        good, bad = QColor("#cfe8d5"), QColor("#f5c9c9")
+        for r, (name, a, b, diff) in enumerate(result["rows"]):
+            _set_item(table, r, 0, name, align_left=True)
+            _set_item(table, r, 1, fmt(a)); _set_item(table, r, 2, fmt(b))
+            tint = None
+            if diff and name.startswith("A 비율"):
+                tint = good if diff > 0 else bad
+            _set_item(table, r, 3, fmt(diff, signed=True), bold=True, bg=tint)
+        moves = self.table_round_moves
+        levels = [lv for lv in round_history.LEVELS
+                  if lv != "미도달" or any(result["matrix"][lv][o] or result["matrix"][o][lv] for o in round_history.LEVELS)]
+        moves.setColumnCount(len(levels) + 1); moves.setRowCount(len(levels))
+        moves.setHorizontalHeaderLabels(["기준＼비교"] + levels)
+        up, down = QColor("#cfe8d5"), QColor("#f5c9c9")
+        for r, src in enumerate(levels):
+            _set_item(moves, r, 0, src, bold=True)
+            for c, dst in enumerate(levels, start=1):
+                count = result["matrix"][src][dst]
+                shade = None
+                if count and levels.index(dst) < levels.index(src):
+                    shade = up
+                elif count and levels.index(dst) > levels.index(src):
+                    shade = down
+                _set_item(moves, r, c, count if count else "", bg=shade, bold=(src == dst and count > 0))
+        self.lbl_round_moves.setText(
+            f"같은 학생 {result['paired']}명: 상승 {result['up']}명 · 유지 {result['same']}명 · 하락 {result['down']}명"
+            f" (한쪽 회차에만 있는 학생: 기준 {result['only_base']}명, 비교 {result['only_other']}명). "
+            "초록=수준 상승, 빨강=수준 하락.")
+
     def _init_tab_monitor(self):
         layout = QVBoxLayout(self.tab_monitor)
         head_row = QHBoxLayout()
@@ -3886,6 +4145,10 @@ class MainWindow(QMainWindow):
         intro.setProperty("role", "muted")
         intro.setWordWrap(True)
         head_row.addWidget(intro, 1)
+        btn_prev_year = QPushButton("전년도 기록으로 채우기")
+        btn_prev_year.setToolTip("같은 과목·학기·차수의 전년도 분석 기록이 있으면 아래 전년도 값을 자동으로 넣습니다.")
+        btn_prev_year.clicked.connect(self._fill_monitor_prev_year)
+        head_row.addWidget(btn_prev_year)
         btn_refresh = QPushButton("새로고침")
         btn_refresh.clicked.connect(self._refresh_monitoring_tab)
         head_row.addWidget(btn_refresh)
@@ -3943,6 +4206,9 @@ class MainWindow(QMainWindow):
         self.canvas_monitor = CanvasHolder()
         self.canvas_monitor.setMinimumHeight(self._px(170))
         body.addWidget(self._fold("monitor.chart", "기준 비교 그래프", self.canvas_monitor))
+        self.canvas_monitor_trend = CanvasHolder()
+        self.canvas_monitor_trend.setMinimumHeight(self._px(150))
+        body.addWidget(self._fold("monitor.trend", "회차별 추이 (분석할 때마다 자동으로 쌓임)", self.canvas_monitor_trend))
 
         flow_note = QLabel(
             "점검 흐름: 1단계 A 비율 변화 확인 → 2단계 대상교·학생 특성 확인 → "
@@ -3960,8 +4226,8 @@ class MainWindow(QMainWindow):
         self.table_monitor.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         table_layout.addWidget(self.table_monitor, 1)
         body.addWidget(self._fold("monitor.table", "점검 표", table_wrap))
-        body.setStretchFactor(0, 1); body.setStretchFactor(1, 2)
-        body.setSizes([260, 360])
+        body.setStretchFactor(0, 1); body.setStretchFactor(1, 1); body.setStretchFactor(2, 2)
+        body.setSizes([240, 220, 360])
         monitor_split = QSplitter(Qt.Vertical)
         monitor_split.addWidget(self._fold("monitor.inputs", "현재 값과 비교 기준 입력", top_area))
         monitor_split.addWidget(body)
@@ -3974,6 +4240,25 @@ class MainWindow(QMainWindow):
     def _refresh_monitoring_tab(self):
         self._render_monitor_tab()
         self.statusBar().showMessage("모니터링 탭을 새로고침했습니다.", 2500)
+
+    def _fill_monitor_prev_year(self):
+        if self.exam is None or self.overall is None:
+            QMessageBox.information(self, "전년도 기록", "먼저 분석을 실행해 주세요.")
+            return
+        year, semester, round_no = self._detect_exam_round()
+        previous = round_history.previous_year(
+            self._round_store().load_all(), self.exam.subject or "(과목 미상)", self.exam.grade, year, semester, round_no)
+        if previous is None:
+            QMessageBox.information(
+                self, "전년도 기록",
+                f"저장된 {round_history.round_label((year - 1) if year else None, semester, round_no)} 분석 기록이 없습니다.\n"
+                "작년 같은 시험을 이 앱으로 분석한 적이 있어야 자동으로 채울 수 있습니다. "
+                "없으면 아래 칸에 직접 입력하세요.")
+            return
+        for key, value in (("prev_a_pct", previous["level_pct"].get("A", 0.0)), ("prev_mean", previous["mean"]),
+                           ("prev_cut_a", previous["cuts"].get("A", 0.0))):
+            self.monitor_spins[key].setValue(float(value))
+        self.statusBar().showMessage(f"전년도 값을 {previous['label']} 기록으로 채웠습니다.", 5000)
 
     def _add_monitor_spin(self, form: QFormLayout, key: str, label: str, value: float,
                           *, suffix: str = "", tip: str = ""):
@@ -4149,6 +4434,8 @@ class MainWindow(QMainWindow):
             self.table_monitor.setRowCount(0)
             if hasattr(self, "canvas_monitor"):
                 self.canvas_monitor.set_figure(charts.fig_monitoring_benchmarks([]))
+            if hasattr(self, "canvas_monitor_trend"):
+                self.canvas_monitor_trend.set_figure(charts.fig_round_trend(None))
             return
 
         a_pct = float(self.overall.level_dist_pct.get("A", 0.0))
@@ -4159,6 +4446,12 @@ class MainWindow(QMainWindow):
 
         rows, benchmarks = self._monitor_rows_and_benchmarks()
         self.canvas_monitor.set_figure(charts.fig_monitoring_benchmarks(benchmarks))
+        if hasattr(self, "canvas_monitor_trend"):
+            try:
+                course = self._course_round_records()
+            except Exception:
+                course = []
+            self.canvas_monitor_trend.set_figure(charts.fig_round_trend(round_history.trend(course) if course else None))
 
         self.table_monitor.setSortingEnabled(False)
         self.table_monitor.setRowCount(len(rows))
@@ -9065,6 +9358,7 @@ codex login status</pre>
         self.exam, self.overall, self.item_stats, self.perform_data = exam, overall, items, perform_data
         # 마지막 분석 시점 입력 스냅샷 저장 (실수 복원용)
         self._snapshot_inputs()
+        self._save_round_history()
         if hasattr(self, "btn_revert"):
             self.btn_revert.setEnabled(True)
         self.exam_info_lbl.setText(

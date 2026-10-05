@@ -489,6 +489,88 @@ def fig_monitoring_benchmarks(
     return fig
 
 
+def fig_round_compare(base: dict | None, other: dict | None, title: str = "회차별 성취수준 분포 비교") -> Figure:
+    """두 회차의 성취수준 비율을 나란히 막대로 비교한다. base·other는 rounds 기록."""
+    fig = Figure(figsize=(7.2, 3.6), dpi=110)
+    ax = fig.add_subplot(111)
+    text_color = THEME_COLORS["chart_text"]
+    if not base or not other:
+        ax.text(0.5, 0.5, "비교할 두 회차를 고르세요.", ha="center", va="center", color=text_color)
+        ax.set_axis_off()
+        return fig
+    levels = [lv for lv in ["A", "B", "C", "D", "E", "미도달"]
+              if lv != "미도달" or base["level_pct"].get(lv) or other["level_pct"].get(lv)]
+    x = np.arange(len(levels))
+    width = 0.38
+    a_vals = [base["level_pct"].get(lv, 0.0) for lv in levels]
+    b_vals = [other["level_pct"].get(lv, 0.0) for lv in levels]
+    bars_a = ax.bar(x - width / 2, a_vals, width, label=base["label"], color="#94a3b8", edgecolor="white")
+    bars_b = ax.bar(x + width / 2, b_vals, width, label=other["label"], color=THEME_COLORS["highlight"], edgecolor="white")
+    top = max(a_vals + b_vals + [10]) * 1.25 + 4
+    for bars in (bars_a, bars_b):
+        for bar in bars:
+            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + top * 0.015, f"{bar.get_height():.1f}",
+                    ha="center", va="bottom", fontsize=8.5, color=text_color)
+    ax.set_xticks(x)
+    ax.set_xticklabels(levels)
+    ax.set_ylim(0, top)
+    ax.set_ylabel("학생 비율 (%)")
+    ax.set_title(title)
+    ax.legend(frameon=False, fontsize=8.5, loc="upper right")
+    ax.spines[["top", "right"]].set_visible(False)
+    ax.grid(axis="y", linestyle=":", alpha=0.4)
+    fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.12)
+    return fig
+
+
+def fig_round_trend(trend: dict | None, title: str = "회차별 추이") -> Figure:
+    """저장된 회차들의 평균±표준편차, A·A+B 비율, A/B 분할점수 추이. trend는 rounds.trend() 결과."""
+    fig = Figure(figsize=(8.2, 3.2), dpi=110)
+    text_color = THEME_COLORS["chart_text"]
+    if not trend or len(trend["labels"]) < 2:
+        ax = fig.add_subplot(111)
+        ax.text(0.5, 0.5, "분석한 회차가 2개 이상 저장되면 추이가 표시됩니다.\n"
+                          "(분석할 때마다 자동으로 쌓입니다.)", ha="center", va="center", color=text_color)
+        ax.set_axis_off()
+        return fig
+    labels = trend["labels"]
+    x = np.arange(len(labels))
+    axes = fig.subplots(1, 3)
+
+    def finish(ax, name, unit):
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=20 if len(labels) > 3 else 0, ha="right" if len(labels) > 3 else "center",
+                           fontsize=8)
+        ax.set_title(name, fontsize=9.5)
+        ax.set_ylabel(unit, fontsize=8.5)
+        ax.margins(x=0.18)
+        ax.spines[["top", "right"]].set_visible(False)
+        ax.grid(axis="y", linestyle=":", alpha=0.4)
+
+    mean, std = trend["mean"], trend["std"]
+    axes[0].errorbar(x, mean, yerr=std, fmt="o-", color=THEME_COLORS["highlight"], ecolor="#94a3b8", capsize=3)
+    for i, v in enumerate(mean):
+        axes[0].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", xytext=(0, 7), ha="center",
+                         fontsize=8, color=text_color)
+    finish(axes[0], "평균 ± 표준편차", "점")
+    axes[1].plot(x, trend["a_pct"], "o-", color=COLOR_LEVELS["A"], label="A")
+    axes[1].plot(x, trend["ab_pct"], "s--", color=COLOR_LEVELS["B"], label="A+B")
+    for series in (trend["a_pct"], trend["ab_pct"]):
+        for i, v in enumerate(series):
+            axes[1].annotate(f"{v:.0f}", (x[i], v), textcoords="offset points", xytext=(0, 6), ha="center",
+                             fontsize=7.5, color=text_color)
+    axes[1].legend(frameon=False, fontsize=8)
+    finish(axes[1], "A · A+B 비율", "%")
+    axes[2].plot(x, trend["cut_a"], "o-", color=THEME_COLORS["highlight"])
+    for i, v in enumerate(trend["cut_a"]):
+        axes[2].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", xytext=(0, 7), ha="center",
+                         fontsize=8, color=text_color)
+    finish(axes[2], "A/B 분할점수", "점")
+    fig.suptitle(title, fontsize=10.5)
+    fig.subplots_adjust(left=0.07, right=0.99, top=0.82, bottom=0.2, wspace=0.32)
+    return fig
+
+
 def fig_perform_area_rates(
     area_rows: list[dict],
     title: str = "수행평가 영역별 평균 점수율",
