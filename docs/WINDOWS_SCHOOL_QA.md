@@ -1,6 +1,6 @@
 # 학교 Windows에서 후보 검사하기
 
-이 안내는 **1.0.6 / a7f7d95b6a751606ac75d1f6958ed9686bd9884b** portable 후보의 실제 PC 실행을 확인하는 절차입니다. 설치와 기존 앱 교체 없이 합성 작업을 새 폴더에서 검사합니다. Python·Git·Node 설치는 필요하지 않습니다.
+이 안내는 **1.0.6 / 65cfc79268b00aaf2077e094c2e24e37b12bcdbc** portable 후보의 실제 PC 실행을 확인하는 절차입니다. 설치와 기존 앱 교체 없이 합성 작업을 새 폴더에서 검사합니다. Python·Git·Node 설치는 필요하지 않습니다.
 
 ## 학교 PC에서 먼저 할 일
 
@@ -41,7 +41,7 @@ powershell.exe -NoProfile -File .\build_scripts\validate_school_candidate.ps1 -C
 기존 개발 환경과 검증된 로컬 후보를 사용합니다. 명령은 새 출력에만 쓰며 네트워크와 설치를 사용하지 않습니다.
 
 ```bash
-.venv/bin/python -B build_scripts/make_school_validation_bundle.py --candidate-dir artifacts/Goedu-Split-1.0.6-a7f7d95 --output artifacts/Goedu-Split-1.0.6-school-check
+.venv/bin/python -B build_scripts/make_school_validation_bundle.py --candidate-dir artifacts/Goedu-Split-1.0.6-65cfc79 --output artifacts/Goedu-Split-1.0.6-school-check
 ```
 
 완성 폴더의 `HANDOFF_MANIFEST.json`은 실행기·문서·합성 자료·후보 파일의 지문을 기록합니다. 전달 ZIP 생성은 학교 실행 결과가 아닙니다. 앱 후보의 빌드 SHA와 이후 추가한 검사기·문서의 소스 SHA를 구분합니다.

@@ -18,9 +18,9 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 VERSION = "1.0.6"
-COMMIT = "a7f7d95b6a751606ac75d1f6958ed9686bd9884b"
+COMMIT = "65cfc79268b00aaf2077e094c2e24e37b12bcdbc"
 ZIP_NAME = "Goedu-Split-1.0.6-windows.zip"
-ZIP_HASH = "446a5478fef905f60dee2e83269394c7a2f27f80e9feed7d8fdfad9057563069"
+ZIP_HASH = "9852262fc23195f41625c3a051e1743b1ddc6765ed9a9437260b10437e67d8d3"
 DOCS = (
     "docs/WINDOWS_SCHOOL_QA.md", "docs/SYNTHETIC_VALIDATION.md",
     "docs/PC_VALIDATION_RECORD.md", "docs/AUTONOMOUS_COMPLETION.md",

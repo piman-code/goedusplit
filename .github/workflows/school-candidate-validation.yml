@@ -27,21 +27,21 @@ jobs:
           script: |
             const {data: a} = await github.rest.actions.getArtifact({
               owner: context.repo.owner, repo: context.repo.repo,
-              artifact_id: 11204209837
+              artifact_id: 11311850810
             });
-            if (a.expired || a.id !== 11204209837 ||
-                a.name !== 'desktop-candidates-1.0.6-a7f7d95b6a751606ac75d1f6958ed9686bd9884b' ||
-                a.workflow_run.id !== 36952967141 ||
-                a.workflow_run.head_sha !== 'a7f7d95b6a751606ac75d1f6958ed9686bd9884b' ||
-                a.digest !== 'sha256:85d3790db44081d0ed1baedc7b3f3fb1a252838e7ca59349b82834ea169a4eb0') {
+            if (a.expired || a.id !== 11311850810 ||
+                a.name !== 'desktop-candidates-1.0.6-65cfc79268b00aaf2077e094c2e24e37b12bcdbc' ||
+                a.workflow_run.id !== 37224144468 ||
+                a.workflow_run.head_sha !== '65cfc79268b00aaf2077e094c2e24e37b12bcdbc' ||
+                a.digest !== 'sha256:7d96367eb7ebd83bfe1ed94067b6770a7ebd570cfb54afb4a8837ff57b95d6e4') {
               throw new Error('Immutable candidate artifact identity mismatch');
             }
             core.info('Confirmed existing candidate artifact and source SHA. No rebuild or installation.');
       - uses: actions/download-artifact@v4
         with:
-          artifact-ids: '11204209837'
+          artifact-ids: '11311850810'
           merge-multiple: true
-          run-id: '36952967141'
+          run-id: '37224144468'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           path: ${{ runner.temp }}/school candidate input
       - name: PowerShell 5.1 bad ZIP and existing output preservation
@@ -100,7 +100,7 @@ jobs:
           if ([Environment]::GetEnvironmentVariable('QT_QPA_PLATFORM', 'Process') -cne $before) { throw 'Caller environment changed' }
           $report = Get-Content -LiteralPath (Join-Path $output 'SCHOOL_VALIDATION_REPORT.json') -Raw -Encoding UTF8 | ConvertFrom-Json
           if ($report.status -ne 'passed-synthetic-only' -or $report.context -ne 'CI' -or
-              $report.source_commit -ne 'a7f7d95b6a751606ac75d1f6958ed9686bd9884b' -or
+              $report.source_commit -ne '65cfc79268b00aaf2077e094c2e24e37b12bcdbc' -or
               $report.errors.Count -ne 0 -or -not $report.process_environment_restored) { throw 'Wrapper report failed' }
           if ($report.school_acceptance -ne 'not evaluated; no T01-T09 completion is inferred') { throw 'Acceptance scope changed' }
           'Immutable frozen candidate, PS5.1, Unicode/spaced path and synthetic checks passed.'

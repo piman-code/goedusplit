@@ -11,9 +11,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $Version = '1.0.6'
-$Commit = 'a7f7d95b6a751606ac75d1f6958ed9686bd9884b'
-$ZipHash = '446a5478fef905f60dee2e83269394c7a2f27f80e9feed7d8fdfad9057563069'
-$ExeHash = 'ca46662ff46611a8dc7716d356a102eb12acb7a240453f8bcac5ec398c22b965'
+$Commit = '65cfc79268b00aaf2077e094c2e24e37b12bcdbc'
+$ZipHash = '9852262fc23195f41625c3a051e1743b1ddc6765ed9a9437260b10437e67d8d3'
+$ExeHash = 'de4b16fa1d23d95c3ebb8ddd9871fbd53cbe4c38bf358c94c649defcd1a0f766'
 $GuideHash = '7539ac6d1f4b5863a7f73a44f6c151a1060207d78aa8e1c7dd5dd50e3c93143f'
 $ExpectedChecks = @(
     'settings are explicit isolated INI', 'portfolio is isolated',
