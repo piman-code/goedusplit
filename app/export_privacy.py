@@ -88,7 +88,7 @@ def student_hash(key: bytes, sid, class_no="", name="") -> str:
 def student_result_table(students, levels, *, include_identity: bool,
                          pseudonyms: list[str] | None = None) -> tuple[list[str], list[list]]:
     """Headers and rows for 학생결과.csv. Pseudonymized rows are sorted by pseudonym."""
-    score_headers = ["학급", "선택형", "서답형", "기타", "지필총점", "수행환산", "환산점수", "성취도"]
+    score_headers = ["학급", "선택형", "서답형", "기타", "정기시험 총점", "수행환산", "환산점수", "성취도"]
     id_headers = ["학번", "반/번호", "이름"] if include_identity else ["가명 ID"]
     rows = []
     for index, st in enumerate(students):

@@ -281,7 +281,7 @@ def analyze_overall(exam: ExamData, score_matrix: np.ndarray | None = None) -> O
     """전체 성취도 통계 (환산점수 final_score 기준).
 
     final_score는 data_loader.apply_perform()에서 계산된 100점 만점 환산점수.
-    수행평가가 적용되지 않은 경우 final_score == total(지필 점수)와 같다.
+    수행평가가 적용되지 않은 경우 final_score == total(정기시험 점수)와 같다.
     """
     out = OverallStats()
     students = exam.students

@@ -167,7 +167,7 @@ def build_calibration(designs: list[dict], exam, levels: list[str], rates_for=No
         rows[-1]["members"] = [(float(d["points"]), d["difficulty"]) for d in serdap]
 
     if getattr(exam, "use_perform", False) and float(getattr(exam, "weight_perform", 0) or 0) > 0:
-        notes.append("성취수준은 수행평가를 합산한 환산점수로 나뉘었고, 정답률은 지필 결과입니다. 수행평가 비중만큼 차이가 생길 수 있습니다.")
+        notes.append("성취수준은 수행평가를 합산한 환산점수로 나뉘었고, 정답률은 정기시험 결과입니다. 수행평가 비중만큼 차이가 생길 수 있습니다.")
 
     designed = {(d["type"], int(d["number"])) for d in designs}
     not_designed = [f"{it.item_type} {it.number}번" for it in exam.items if (it.item_type, int(it.number)) not in designed]
@@ -298,7 +298,7 @@ def cut_lines(report: dict) -> list[str]:
     if report["not_designed"] or report["unmatched"]:
         return ["일부 문항만 예측값이 있어 검토안 분할점수를 이번 적용 분할점수와 직접 비교하지 않았습니다."]
     if any("수행평가" in note for note in report["notes"]):
-        return ["수행평가를 합산한 분할점수라 지필 검토안 분할점수와 직접 비교하지 않았습니다."]
+        return ["수행평가를 합산한 분할점수라 정기시험 검토안 분할점수와 직접 비교하지 않았습니다."]
     lines = []
     for cut in report["cuts"]:
         if cut["predicted_scaled"] is None or cut["applied"] is None:

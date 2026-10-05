@@ -221,6 +221,35 @@ class WindowTests(unittest.TestCase):
         folded = next(f for f in again.findChildren(FoldSection) if f._key.endswith("data.chart"))
         self.assertFalse(folded.is_open())
 
+    def test_folder_batch_recognises_regular_exam_names_and_the_old_written_exam_names(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        names = {
+            "new": ["1차 정기시험 교과목별 학생답 정오표(1-1).xlsx", "1차 정기시험 교과목별 일람표(공통수학1).xlsx",
+                    "수행평가 강의실별 일람표(1-1).xlsx", "문항정보표(공통수학1) 샘플.xlsx"],
+            "old": ["1차 지필평가 교과목별 학생답 정오표(1-1).xlsx", "1차 지필평가 교과목별 일람표(공통수학1).xlsx",
+                    "수행평가 조회(3-5, 확통).xlsx", "문항정보표(공통수학1) 샘플.xlsx"],
+        }
+        for label, files in names.items():
+            with self.subTest(label), tempfile.TemporaryDirectory() as directory:
+                for name in files:
+                    (Path(directory) / name).write_bytes(b"")
+                with patch.object(QFileDialog, "getExistingDirectory", return_value=directory), \
+                        patch.object(QMessageBox, "information"), patch.object(QMessageBox, "warning"):
+                    self.window._pick_folder_batch()
+                window = self.window
+                self.assertIn("학생답 정오표", window.fs_response.path_edit.text())
+                self.assertIn("교과목별 일람표", window.fs_grade5_report.path_edit.text())
+                self.assertIn("수행평가", window.fs_perform.path_edit.text())
+                self.assertIn("문항정보표", window.fs_iteminfo.path_edit.text())
+                self.assertTrue(window.chk_perform.isChecked())
+                window.chk_perform.setChecked(False)
+
+    def test_screen_text_uses_regular_exam_instead_of_written_exam(self):
+        from PySide6.QtWidgets import QLabel, QPushButton
+        shown = " ".join(w.text() for kind in (QLabel, QPushButton) for w in self.window.findChildren(kind))
+        self.assertIn("정기시험", shown)
+        self.assertNotIn("지필", shown)
+
 
 if __name__ == "__main__":
     unittest.main()

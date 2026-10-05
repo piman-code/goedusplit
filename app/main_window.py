@@ -1098,7 +1098,7 @@ class MainWindow(QMainWindow):
         self.fs_grade5_report = FileSelector("교과목별 일람표")
         gf.addWidget(self.fs_grade5_report)
         self.lbl_grade5_cut_info = QLabel(
-            "지필평가 교과목별 일람표의 실제 숫자 점수만 기준으로 계산합니다. 인정결·질병결·자퇴·전출 등 비점수 값은 제외합니다."
+            "정기시험 교과목별 일람표의 실제 숫자 점수만 기준으로 계산합니다. 인정결·질병결·자퇴·전출 등 비점수 값은 제외합니다."
         )
         self.lbl_grade5_cut_info.setProperty("role", "muted")
         self.lbl_grade5_cut_info.setWordWrap(True)
@@ -1129,9 +1129,9 @@ class MainWindow(QMainWindow):
         self.spin_perform_ratio.setEnabled(False)
         self.spin_pencil_ratio.valueChanged.connect(self._sync_pencil_to_perform)
         self.spin_perform_ratio.valueChanged.connect(self._sync_perform_to_pencil)
-        self._add_sidebar_stepper_row(wf, "지필평가 반영비율", self.spin_pencil_ratio)
+        self._add_sidebar_stepper_row(wf, "정기시험 반영비율", self.spin_pencil_ratio)
         self._add_sidebar_stepper_row(wf, "수행평가 반영비율", self.spin_perform_ratio)
-        v.addWidget(self._make_collapsible_panel("반영비율 (지필 + 수행 = 100)", weight_body))
+        v.addWidget(self._make_collapsible_panel("반영비율 (정기시험 + 수행 = 100)", weight_body))
 
         # 분할점수
         cuts_body = QWidget()
@@ -2075,7 +2075,7 @@ class MainWindow(QMainWindow):
                 ("수행 결과", 60), ("performance", 50),
             ],
             "grade5_report": [       # 2022 개정 1~5등급 컷 계산용 교과목별 일람표
-                ("지필평가 교과목별 일람표", 110), ("교과목별 일람표", 100),
+                ("정기시험 교과목별 일람표", 110), ("지필평가 교과목별 일람표", 110), ("교과목별 일람표", 100),
                 ("일람표", 70),
             ],
         }
@@ -2170,7 +2170,7 @@ class MainWindow(QMainWindow):
         if not path:
             path, _ = QFileDialog.getOpenFileName(
                 self,
-                "지필평가 교과목별 일람표 선택",
+                "정기시험 교과목별 일람표 선택",
                 str(Path.home() / "Downloads"),
                 "Excel 통합문서 (*.xlsx)",
             )
@@ -2185,7 +2185,7 @@ class MainWindow(QMainWindow):
                 self,
                 "1-5등급 컷 계산",
                 "등급 컷 계산기 파일은 사용하지 않습니다.\n"
-                "지필평가 교과목별 일람표 파일을 선택해 주세요.",
+                "정기시험 교과목별 일람표 파일을 선택해 주세요.",
             )
             return
 
@@ -2367,7 +2367,7 @@ class MainWindow(QMainWindow):
             "컷 점수 조견표 공식\n"
             "- 인원수 = INT(비율 × 총원)\n"
             "- 컷 점수 = LARGE(전체 점수 범위, 인원수)\n"
-            "- 여기서 전체 점수 범위는 지필평가 교과목별 일람표의 실제 숫자 점수입니다.\n"
+            "- 여기서 전체 점수 범위는 정기시험 교과목별 일람표의 실제 숫자 점수입니다.\n"
             "- 인정결·질병결·자퇴·전출처럼 점수가 아닌 값은 계산에서 제외합니다.\n\n"
             "생활기록부 등급 판정 점검\n"
             "- 실제 등급 판정은 누적인원 경계와 동점자를 함께 봅니다.\n"
@@ -3909,7 +3909,7 @@ class MainWindow(QMainWindow):
 
         flow_note = QLabel(
             "점검 흐름: 1단계 A 비율 변화 확인 → 2단계 대상교·학생 특성 확인 → "
-            "3단계 지필평가 특성 확인 → 4단계 분할점수 재산출 → 5단계 A 비율 재산정"
+            "3단계 정기시험 특성 확인 → 4단계 분할점수 재산출 → 5단계 A 비율 재산정"
         )
         flow_note.setProperty("role", "muted")
         flow_note.setWordWrap(True)
@@ -4201,7 +4201,7 @@ class MainWindow(QMainWindow):
 
         head_row = QHBoxLayout()
         self.lbl_perform_tab_note = QLabel(
-            "수행평가 영역별 점수율, 지필총점과의 관계, 학생별 차이를 함께 봅니다. "
+            "수행평가 영역별 점수율, 정기시험 총점과의 관계, 학생별 차이를 함께 봅니다. "
             "왼쪽 입력 패널에서 수행평가 파일을 지정하고 체크한 뒤 분석을 실행하세요."
         )
         self.lbl_perform_tab_note.setProperty("role", "muted")
@@ -4217,7 +4217,7 @@ class MainWindow(QMainWindow):
             "ratio": self._kpi_card("수행 반영비율", "-"),
             "areas": self._kpi_card("수행 영역", "-"),
             "matched": self._kpi_card("매칭 학생", "-"),
-            "corr": self._kpi_card("지필-수행 상관", "-"),
+            "corr": self._kpi_card("정기시험-수행 상관", "-"),
         }
         for i, card in enumerate(self.perform_cards.values()):
             grid.addWidget(card, 0, i)
@@ -4233,7 +4233,7 @@ class MainWindow(QMainWindow):
         self.canvas_perform_scatter = CanvasHolder()
         chart_layout.addWidget(self.canvas_perform_area, 1)
         chart_layout.addWidget(self.canvas_perform_scatter, 1)
-        split.addWidget(self._fold("perform.charts", "영역별·지필-수행 그래프", chart_row))
+        split.addWidget(self._fold("perform.charts", "영역별·정기시험-수행 그래프", chart_row))
 
         table_tabs = QTabWidget()
         self.perform_table_tabs = table_tabs
@@ -4250,7 +4250,7 @@ class MainWindow(QMainWindow):
 
         self.table_perform_students = QTableWidget(0, 7)
         self.table_perform_students.setHorizontalHeaderLabels([
-            "반/번호", "이름", "성취도", "지필총점", "수행환산", "수행-지필", "해석",
+            "반/번호", "이름", "성취도", "정기시험 총점", "수행환산", "수행-정기시험", "해석",
         ])
         _setup_table(self.table_perform_students, word_wrap=False, horizontal_scroll=True, row_height=30)
         self.table_perform_students.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
@@ -4517,7 +4517,7 @@ class MainWindow(QMainWindow):
     # ---- 문항 분석 -----------------------------------------------------
     def _init_tab_items(self):
         layout = QVBoxLayout(self.tab_items)
-        self.lbl_alpha = QLabel("지필평가 신뢰도 (Cronbach's alpha): -")
+        self.lbl_alpha = QLabel("정기시험 신뢰도 (Cronbach's alpha): -")
         f = self.lbl_alpha.font(); f.setPointSize(f.pointSize()+3); f.setBold(True); self.lbl_alpha.setFont(f)
         self.lbl_alpha.setToolTip(
             "신뢰도: 문항들이 같은 능력을 얼마나 일관되게 재는지(0~1).\n"
@@ -4667,8 +4667,8 @@ class MainWindow(QMainWindow):
         btn_reference.setToolTip("성취기준, 성취수준, 최소능력자 설명 자료를 참고자료 칸에 불러옵니다.")
         btn_reference.clicked.connect(self._load_ai_reference_file)
         head.addWidget(btn_reference)
-        btn_written_example = QPushButton("지필 예시")
-        btn_written_example.setToolTip("지필평가 문항 예시를 원문 칸에 넣어 흐름을 테스트합니다.")
+        btn_written_example = QPushButton("정기시험 예시")
+        btn_written_example.setToolTip("정기시험 문항 예시를 원문 칸에 넣어 흐름을 테스트합니다.")
         btn_written_example.clicked.connect(lambda: self._insert_ai_review_example("written"))
         head.addWidget(btn_written_example)
         btn_perform_example = QPushButton("수행 예시")
@@ -4696,7 +4696,7 @@ class MainWindow(QMainWindow):
         self.btn_ai_review_resume.clicked.connect(self._resume_ai_review_completion)
         self.btn_ai_review_resume.setEnabled(False)
         head.addWidget(self.btn_ai_review_resume)
-        btn_to_spliter = QPushButton("지필→예상정답률")
+        btn_to_spliter = QPushButton("정기시험→예상정답률")
         btn_to_spliter.clicked.connect(self._send_ai_review_to_spliter)
         head.addWidget(btn_to_spliter)
         btn_to_perform = QPushButton("수행→재산정")
@@ -4927,11 +4927,11 @@ class MainWindow(QMainWindow):
           <li>성취기준·수준 PDF는 원문 전체가 아니라 성취기준 코드와 A~E 성취수준 설명 중심으로 정리되어 표시됩니다.</li>
           <li><b>검토 초안 생성</b>을 누르면 앱 내부 규칙으로 문항을 먼저 나누고, 참고자료와 대조해 성취기준, 평가유형, 목표수준, 난이도, A~E 예상값을 만듭니다. 이미 분석을 실행한 이전 시험 자료가 있으면 성취수준별 정답률을 우선 근거로 씁니다.</li>
           <li>로컬 AI를 연결했다면 <b>AI로 보강</b>을 눌러 근거와 판단을 더 정교하게 보강합니다.</li>
-          <li>지필 문항은 <b>지필→예상정답률</b>, 수행평가는 <b>수행→재산정</b>으로 보냅니다.</li>
+          <li>정기시험 문항은 <b>정기시험→예상정답률</b>, 수행평가는 <b>수행→재산정</b>으로 보냅니다.</li>
           <li>교사가 문항을 직접 보며 A~E 예상값을 수정하고 최종 분할점수를 확인합니다.</li>
         </ol>
 
-        <h3>지필평가 예시 해석</h3>
+        <h3>정기시험 예시 해석</h3>
         <p><code>C 예상 2/3</code>은 C 수준 최소능력자 3명 중 2명 정도가 맞힐 것 같다는 뜻입니다. 이전 시험의 유사 문항에서 C 수준 학생 정답률이 약 2/3 이상이면 목표수준 후보가 C 쪽으로 잡힙니다.</p>
         <p><code>A 수준 문항</code>은 A 학생만 맞히는 문항이라는 뜻이 아니라, A 수준 최소능력자 3명 중 약 2명이 해결할 수 있는 문항이라는 뜻으로 봅니다.</p>
         <p>AI 보강은 문항 자료만 보지 않고, 성취기준·수준 자료를 기준표로 삼아 어떤 성취기준과 성취수준에 가까운지 다시 판단합니다.</p>
@@ -6291,7 +6291,7 @@ codex login status</pre>
         self.txt_ai_review_source.setPlainText(self._ai_review_example_text(kind))
         if hasattr(self, "txt_ai_review_reference"):
             self.txt_ai_review_reference.setPlainText(self._ai_review_reference_example_text(kind))
-        label = "수행평가" if kind == "perform" else "지필평가"
+        label = "수행평가" if kind == "perform" else "정기시험"
         self.statusBar().showMessage(f"{label} 문항 자료와 성취기준·수준 예시를 입력했습니다. '검토 초안 생성'을 누르세요.", 5000)
 
     def _extract_text_from_review_file(self, path: str) -> str:
@@ -7456,7 +7456,7 @@ codex login status</pre>
         elif any(term in compact for term in ("선택형", "객관식", "보기", "①", "②", "③", "④", "⑤")):
             review_type = "선택형"
         else:
-            review_type = "지필 문항"
+            review_type = "정기시험 문항"
 
         previous_expected = None
         previous_evidence = ""
@@ -7482,7 +7482,7 @@ codex login status</pre>
             warnings.append("성취기준·수준 자료 대조 확인")
         if block["kind"] == "전체 자료":
             warnings.append("문항/평가요소 분리 확인")
-        if review_type == "지필 문항" and "배점" not in compact:
+        if review_type == "정기시험 문항" and "배점" not in compact:
             warnings.append("배점 확인")
         next_step = " / ".join(warnings) if warnings else "성취기준 진술과 문항 요구 행동을 비교"
         if review_type == "수행평가":
@@ -7578,7 +7578,7 @@ codex login status</pre>
             "수행평가는 평가요소별로 A~E 최소능력자의 예상점수를 산출할 수 있도록 채점기준표의 행동 표현을 분석한다.\n\n"
             "출력 형식은 표로 한다: 번호/요소 | 성취기준 후보 | 평가유형 | 목표수준 후보 | 난이도 후보 | "
             "A 예상 | B 예상 | C 예상 | D 예상 | E 예상 | 근거 | 추가 확인 질문.\n"
-            "지필 문항의 A~E 예상은 3명 기준 O/X 개수처럼 3/3, 2/3, 1/3, 0/3으로 쓰고, "
+            "정기시험 문항의 A~E 예상은 3명 기준 O/X 개수처럼 3/3, 2/3, 1/3, 0/3으로 쓰고, "
             "수행평가는 만점 대비 예상점수 또는 90% 같은 비율로 쓴다.\n\n"
             "[로컬 초안]\n"
             f"{row_lines}\n\n"
@@ -7648,7 +7648,7 @@ codex login status</pre>
             "평가유형은 선택형, 서답형, 수행평가 중 하나를 우선 사용한다.\n"
             "목표수준 후보는 A/B/C/D/E 중 하나를 사용한다.\n"
             "난이도 후보는 쉬움/보통/어려움 중 하나를 사용한다.\n\n"
-            "지필 문항의 A~E 예상은 각 수준 대표학생 3명 중 몇 명이 맞힐지 3/3, 2/3, 1/3, 0/3으로 쓴다.\n"
+            "정기시험 문항의 A~E 예상은 각 수준 대표학생 3명 중 몇 명이 맞힐지 3/3, 2/3, 1/3, 0/3으로 쓴다.\n"
             "수행평가의 A~E 예상은 만점 대비 점수나 비율로 쓴다. 예: 9점, 80%, 7.5/10.\n"
             "A에서 E로 갈수록 예상값은 같거나 낮아야 한다.\n\n"
             "근거 열에는 가능한 한 `문항: ... / 기준: ... / 수준: ...` 형태로 쓴다. "
@@ -7736,7 +7736,7 @@ codex login status</pre>
             return 2
         if "서답" in raw_type or "서술" in raw_type or "논술" in raw_type:
             return 1
-        if "선택" in raw_type or "객관" in raw_type or "지필" in raw_type or "문항" in raw_type:
+        if "선택" in raw_type or "객관" in raw_type or "정기" in raw_type or "지필" in raw_type or "문항" in raw_type:
             return 0
         return 9
 
@@ -8616,7 +8616,7 @@ codex login status</pre>
             review_type = str(row.get("평가유형", "") or "").strip()
             if "수행" in review_type:
                 continue
-            if not any(token in review_type for token in ("선택", "객관", "서답", "서술", "논술", "지필", "문항")):
+            if not any(token in review_type for token in ("선택", "객관", "서답", "서술", "논술", "정기", "지필", "문항")):
                 review_type = "선택형"
             number = self._ai_review_number(row.get("번호/요소", ""), idx)
             item_type = self._ai_review_expected_type(review_type)
@@ -8666,7 +8666,7 @@ codex login status</pre>
             QMessageBox.information(
                 self,
                 "AI 문항 검토",
-                "예상정답률 계산기로 보낼 지필 문항 초안이 없습니다.\n먼저 검토 초안을 생성하거나 평가유형을 선택형/서답형으로 수정해 주세요.",
+                "예상정답률 계산기로 보낼 정기시험 문항 초안이 없습니다.\n먼저 검토 초안을 생성하거나 평가유형을 선택형/서답형으로 수정해 주세요.",
             )
             return
         if self.spliter_view is None:
@@ -8676,7 +8676,7 @@ codex login status</pre>
         if self.exam is not None and self.overall is not None:
             self._spliter_pending_payload = self._build_spliter_evidence_payload()
         self._activate_spliter_tab_for_pending_payloads()
-        self.statusBar().showMessage(f"AI 검토 지필 초안 {len(project['items'])}개를 예상정답률 계산기로 보냈습니다.", 5000)
+        self.statusBar().showMessage(f"AI 검토 정기시험 초안 {len(project['items'])}개를 예상정답률 계산기로 보냈습니다.", 5000)
 
     def _extract_perform_max_score_from_review(self, *texts: str) -> float:
         joined = " ".join(texts)
@@ -8765,8 +8765,8 @@ codex login status</pre>
           <li><b>학생답 정오표</b>: 학생별 답, 선택형/서답형 점수, 과목총점이 들어 있는 파일입니다.</li>
           <li><b>문항정보표</b>: 문항번호, 성취기준, 난이도, 배점, 정답을 읽습니다.</li>
           <li><b>분할점수</b>: 90, 80, 70, 60, 40이면 <b>고정 분할 방식</b>, 그 밖의 값이면 <b>추정 분할 방식</b>으로 표시합니다.</li>
-          <li><b>1-5등급 컷 계산</b>: 지필평가 교과목별 일람표를 넣으면 2022 개정 5등급 누적비율 기준으로 1등급, 2등급, 3등급, 4등급 컷 점수를 바로 계산합니다. 동점자가 경계에 걸리면 실제 인원이 기준 비율과 달라질 수 있음을 함께 표시합니다.</li>
-          <li><b>수행평가</b>: 체크하면 지필과 수행 반영비율을 합산해 최종 환산점수를 계산합니다.</li>
+          <li><b>1-5등급 컷 계산</b>: 정기시험 교과목별 일람표를 넣으면 2022 개정 5등급 누적비율 기준으로 1등급, 2등급, 3등급, 4등급 컷 점수를 바로 계산합니다. 동점자가 경계에 걸리면 실제 인원이 기준 비율과 달라질 수 있음을 함께 표시합니다.</li>
+          <li><b>수행평가</b>: 체크하면 정기시험과 수행 반영비율을 합산해 최종 환산점수를 계산합니다.</li>
         </ul>
 
         <h2>Data 탭</h2>
@@ -8807,8 +8807,8 @@ codex login status</pre>
         <h2>수행평가 분석</h2>
         <ul>
           <li><b>영역별 요약</b>: 수행평가 각 영역의 평균, 표준편차, 평균점수율, 만점자 비율, 50% 미만 비율을 봅니다.</li>
-          <li><b>지필총점 × 수행평가 환산</b>: 지필과 수행이 비슷하게 움직이는지, 특정 학생군이 수행에서 강점/보완점을 보이는지 확인합니다.</li>
-          <li><b>학생별 차이</b>: 수행환산점수와 지필총점의 차이가 큰 학생을 먼저 보여줍니다. 수행 강점·수행 보완 학생을 빠르게 찾을 수 있습니다.</li>
+          <li><b>정기시험 총점 × 수행평가 환산</b>: 정기시험과 수행이 비슷하게 움직이는지, 특정 학생군이 수행에서 강점/보완점을 보이는지 확인합니다.</li>
+          <li><b>학생별 차이</b>: 수행환산점수와 정기시험 총점의 차이가 큰 학생을 먼저 보여줍니다. 수행 강점·수행 보완 학생을 빠르게 찾을 수 있습니다.</li>
           <li><b>분할점수 재산정</b>: 평가요소별로 A~E 최소능력자가 받을 것으로 예상되는 점수를 입력하면 A/B, B/C, C/D, D/E, E/미도달 분할점수를 계산합니다.</li>
           <li><b>자료 기준 딸깍 추천</b>: 수행평가 자료가 있으면 각 성취수준에서 경계에 가까운 대표 학생들의 영역별 점수를 바탕으로 초기값을 제안합니다.</li>
           <li>영역별 2/3 기준선은 “해당 수준 학생이 어느 정도 안정적으로 해결 가능한가”를 보는 참고선입니다. 최종 판단은 채점기준표와 문항지를 함께 보며 교사가 조정합니다.</li>
@@ -8851,7 +8851,7 @@ codex login status</pre>
         엑셀에는 문항별 원래 입력값, 분할점수 비교, NEIS 준비표를 함께 저장합니다. 이 표는 NEIS 자동 입력이나 공식 확정값이 아닙니다.</p>
         <p><b>문항 구성안 제안</b>은 사용자가 입력한 문항 수에 맞춰 성취수준 목표와 배점을 먼저 제시합니다.
         분석자료가 있으면 기존 문항의 정답률·난이도·배점 분포를 참고하고, 없으면 100점 기준 기본 구성안을 만듭니다.</p>
-        <p>지필평가는 문항별 예상정답률을 합산해 분할점수를 만들고, 수행평가는 평가요소별 예상점수를 합산해 분할점수를 만듭니다.
+        <p>정기시험는 문항별 예상정답률을 합산해 분할점수를 만들고, 수행평가는 평가요소별 예상점수를 합산해 분할점수를 만듭니다.
         두 기능은 모두 “최소능력자가 어느 정도 수행할 수 있는가”를 숫자로 옮기는 같은 구조입니다.</p>
 
         <h2>이번 버전의 범위</h2>
@@ -8888,9 +8888,9 @@ codex login status</pre>
 
         <h2>계산 기준</h2>
         <ul>
-          <li>환산점수 = 지필점수 × 지필반영비율 + 수행환산점수 × 수행반영비율</li>
+          <li>환산점수 = 정기시험 점수 × 정기시험 반영비율 + 수행환산점수 × 수행반영비율</li>
           <li>성취수준은 환산점수를 반올림한 정수 점수와 분할점수를 비교해 판정합니다.</li>
-          <li>Cronbach α는 지필 문항의 내적 일관성을 확인하는 참고 지표입니다.</li>
+          <li>Cronbach α는 정기시험 문항의 내적 일관성을 확인하는 참고 지표입니다.</li>
         </ul>
         """)
         layout.addWidget(txt)
@@ -9010,7 +9010,7 @@ codex login status</pre>
                 perform_data = load_perform(self.fs_perform.path())
             except Exception as e:
                 QMessageBox.warning(self, "수행평가 파일 오류",
-                                    f"수행평가 파일을 읽지 못했습니다. 지필만 분석합니다.\n{e}")
+                                    f"수행평가 파일을 읽지 못했습니다. 정기시험만 분석합니다.\n{e}")
         apply_perform(
             exam, perform_data,
             float(self.spin_pencil_ratio.value()),
@@ -9092,9 +9092,9 @@ codex login status</pre>
         grade9_labels, grade5_labels = self._current_relative_grades()
         score_headers = ["성취도", "9등급", "5등급", "원점수"]
         if self.exam.use_perform:
-            score_headers += ["수행환산", "지필총점"]
+            score_headers += ["수행환산", "정기시험 총점"]
         else:
-            score_headers += ["지필총점"]
+            score_headers += ["정기시험 총점"]
         item_headers = [f"문{it.number}" for it in items]
         headers = ["반/번호", "이름"] + score_headers + item_headers
         self._data_level_col = 2
@@ -9313,7 +9313,7 @@ codex login status</pre>
             if hasattr(self, "lbl_perform_tab_note"):
                 self.lbl_perform_tab_note.setText(
                     "수행평가 파일을 지정하고 ‘수행평가도 포함하여 분석합니다’를 체크한 뒤 분석을 실행하면 "
-                    "영역별 점수율, 지필-수행 관계, 학생별 차이가 표시됩니다."
+                    "영역별 점수율, 정기시험-수행 관계, 학생별 차이가 표시됩니다."
                 )
             self._render_perform_recalc_results()
             return
@@ -9418,7 +9418,7 @@ codex login status</pre>
 
     def _render_items(self):
         ov = self.overall
-        self.lbl_alpha.setText(f"지필평가 신뢰도 (Cronbach's alpha): {ov.cronbach_alpha:.3f} "
+        self.lbl_alpha.setText(f"정기시험 신뢰도 (Cronbach's alpha): {ov.cronbach_alpha:.3f} "
                                f"({reliability_label(ov.cronbach_alpha)})")
 
         self.canvas_pvalue.set_figure(charts.fig_item_difficulty(self.item_stats))
@@ -9782,7 +9782,7 @@ codex login status</pre>
         append(ws, ["학기", payload.get("semester", "")])
         append(ws, ["학생 수", len(payload.get("students", []))])
         append(ws, ["근거 문항 수", len(payload.get("items", []))])
-        append(ws, ["지필 반영비율", payload.get("weights", {}).get("pencil", "")])
+        append(ws, ["정기시험 반영비율", payload.get("weights", {}).get("pencil", "")])
         append(ws, ["수행 반영비율", payload.get("weights", {}).get("perform", "")])
         for lv, label in [("A", "A/B"), ("B", "B/C"), ("C", "C/D"), ("D", "D/E"), ("E", "E/미도달")]:
             append(ws, [f"{label} 분할점수", payload.get("cuts", {}).get(lv, "")])
@@ -9824,7 +9824,7 @@ codex login status</pre>
         ws_items.freeze_panes = "A2"
 
         ws_students = wb.create_sheet("학생")
-        student_headers = ["학생ID", "반/번호", "학년반", "이름", "성취도", "환산점수", "지필점수", "수행점수"]
+        student_headers = ["학생ID", "반/번호", "학년반", "이름", "성취도", "환산점수", "정기시험 점수", "수행점수"]
         append(ws_students, student_headers)
         for st in payload.get("students", []):
             append(ws_students, [

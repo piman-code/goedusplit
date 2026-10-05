@@ -1,5 +1,5 @@
 """
-NEIS 지필 정오표, 문항정보표, (선택) 수행평가 결과 엑셀 파일을 읽어
+NEIS 정기시험 정오표, 문항정보표, (선택) 수행평가 결과 엑셀 파일을 읽어
 표준화된 파이썬 객체로 변환한다.
 
 - 입력 파일은 셀 병합·머리글이 복잡하므로, 키워드 셀 위치를 탐색한 뒤
@@ -49,7 +49,7 @@ class StudentResponse:
     serdap_score: float = 0.0    # 서답형 점수
     multi_score: float = 0.0     # 선택형 점수
     etc_score: float = 0.0       # 기타점수
-    total: float = 0.0           # 과목 총점 (지필 100점 만점)
+    total: float = 0.0           # 과목 총점 (정기시험 100점 만점)
     perform_score: float = 0.0   # 수행평가 환산점수 (100점 만점)
     final_score: float = 0.0     # 반영비율 합산 환산점수 (100점 만점)
 
@@ -66,7 +66,7 @@ class ExamData:
         "A": 90.0, "B": 80.0, "C": 70.0, "D": 60.0, "E": 40.0
     })
     source_files: dict = field(default_factory=dict)
-    # 반영비율 (지필 + 수행 = 100). 수행 0이면 지필만 분석
+    # 반영비율 (정기시험 + 수행 = 100). 수행 0이면 정기시험만 분석
     weight_pencil: float = 100.0
     weight_perform: float = 0.0
     use_perform: bool = False
@@ -373,7 +373,7 @@ def load_student_responses(path) -> tuple[list[StudentResponse], dict, dict]:
             serdap_score=gnum("서답형점수"),
             etc_score=gnum("기타점수"),
             total=total_v,
-            final_score=total_v,   # 수행평가 미적용 시 지필점수가 곧 환산점수
+            final_score=total_v,   # 수행평가 미적용 시 정기시험 점수가 곧 환산점수
         ))
 
     meta = {"path": str(path)}
@@ -391,7 +391,7 @@ def load_student_responses(path) -> tuple[list[StudentResponse], dict, dict]:
 def apply_perform(exam: "ExamData", perform_data, weight_pencil: float, weight_perform: float):
     """수행평가 결과를 학생 레코드에 합치고 환산점수(final_score)를 계산.
 
-    환산점수 = 지필점수(100점) × 지필반영비율 + 수행평가(100점환산) × 수행반영비율
+    환산점수 = 정기시험 점수(100점) × 정기시험 반영비율 + 수행평가(100점환산) × 수행반영비율
     반영비율은 합 100을 가정. 0이거나 합이 100이 아닐 때 자동 정규화.
     """
     total_w = float(weight_pencil) + float(weight_perform)

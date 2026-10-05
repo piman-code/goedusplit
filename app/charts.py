@@ -535,9 +535,9 @@ def fig_perform_scatter(
     pencil_scores,
     perform_scores,
     levels_arr,
-    title: str = "지필총점 × 수행평가 환산",
+    title: str = "정기시험 총점 × 수행평가 환산",
 ) -> Figure:
-    """지필총점과 수행평가 환산점수의 관계를 성취수준 색으로 표시한다."""
+    """정기시험 총점과 수행평가 환산점수의 관계를 성취수준 색으로 표시한다."""
     fig = Figure(figsize=(7.8, 3.8), dpi=110)
     ax = fig.add_subplot(111)
     x = np.array(pencil_scores, dtype=float)
@@ -564,9 +564,9 @@ def fig_perform_scatter(
     ax.axhline(y_mean, color="#2a7770", linestyle="--", linewidth=1.0, alpha=0.7)
     if x.size > 1 and x.std(ddof=0) > 0 and y.std(ddof=0) > 0:
         corr = float(np.corrcoef(x, y)[0, 1])
-        note = f"상관 r={corr:.2f}\n지필 평균 {x_mean:.1f}\n수행 평균 {y_mean:.1f}"
+        note = f"상관 r={corr:.2f}\n정기시험 평균 {x_mean:.1f}\n수행 평균 {y_mean:.1f}"
     else:
-        note = f"지필 평균 {x_mean:.1f}\n수행 평균 {y_mean:.1f}"
+        note = f"정기시험 평균 {x_mean:.1f}\n수행 평균 {y_mean:.1f}"
     ax.text(
         0.02, 0.98, note, transform=ax.transAxes, ha="left", va="top",
         fontsize=8.8, color=THEME_COLORS["chart_text"],
@@ -575,7 +575,7 @@ def fig_perform_scatter(
     )
     ax.set_xlim(0, 100)
     ax.set_ylim(0, 100)
-    ax.set_xlabel("지필총점")
+    ax.set_xlabel("정기시험 총점")
     ax.set_ylabel("수행평가 환산점수")
     ax.set_title(title)
     ax.grid(True, linestyle=":", alpha=0.32)
