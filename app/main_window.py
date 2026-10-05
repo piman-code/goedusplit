@@ -43,7 +43,7 @@ from PySide6.QtWidgets import (
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
-from .data_loader import load_exam, load_item_info, apply_perform, ExamData
+from .data_loader import load_exam, load_item_info, apply_perform, ExamData, split_paths, PATH_SEPARATOR
 from .analysis import (
     analyze_overall, analyze_items, build_score_matrix, analyze_serdap,
     grade_level, reliability_label, LEVELS,
@@ -67,7 +67,7 @@ from .calibration import (
     LARGE_GAP, build_calibration, cut_lines, headline_lines, observed_targets, suggest_presets, summary_lines,
     write_calibration_workbook,
 )
-from .perform_loader import load_perform
+from .perform_loader import load_perform, load_perform_many
 from . import fonts as font_pack
 from .grade_cut_calculator import (
     GRADE5_CUMULATIVE,
@@ -256,14 +256,16 @@ class FileSelector(QWidget):
     """좁은 사이드바에서도 잘리지 않는 파일 선택 위젯."""
     BUTTON_BASE_WIDTH = 56
 
-    def __init__(self, label: str, file_filter: str = "Excel (*.xlsx)", parent=None):
+    def __init__(self, label: str, file_filter: str = "Excel (*.xlsx)", parent=None, multiple: bool = False):
         super().__init__(parent)
+        self.multiple = multiple
         layout = QVBoxLayout(self); layout.setContentsMargins(0, 0, 0, 0); layout.setSpacing(4)
         self.label = QLabel(label)
         self.label.setWordWrap(True)
         self.label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.path_edit = QLineEdit(); self.path_edit.setReadOnly(True)
-        self.path_edit.setPlaceholderText("xlsx")
+        self.path_edit.setPlaceholderText("xlsx · 여러 반은 Ctrl/Shift로 함께 선택" if multiple else "xlsx")
+        self.path_edit.textChanged.connect(self._show_all_paths)
         self.path_edit.setMinimumWidth(0)
         self.path_edit.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.btn = QPushButton("찾기")
@@ -279,12 +281,24 @@ class FileSelector(QWidget):
         self.file_filter = file_filter
 
     def _pick(self):
+        if self.multiple:
+            paths, _ = QFileDialog.getOpenFileNames(self, "파일 선택 (여러 반은 함께 선택)", "", self.file_filter)
+            if paths:
+                self.path_edit.setText(PATH_SEPARATOR.join(paths))
+            return
         path, _ = QFileDialog.getOpenFileName(self, "파일 선택", "", self.file_filter)
         if path:
             self.path_edit.setText(path)
 
+    def _show_all_paths(self, text: str):
+        names = [Path(p).name for p in split_paths(text)]
+        self.path_edit.setToolTip("\n".join(names) if len(names) > 1 else text)
+
     def path(self) -> str:
         return self.path_edit.text().strip()
+
+    def paths(self) -> list[str]:
+        return split_paths(self.path())
 
 
 class _MarginKeepingCanvas(FigureCanvas):
@@ -1082,7 +1096,7 @@ class MainWindow(QMainWindow):
         )
         ff.addWidget(folder_btn)
 
-        self.fs_response = FileSelector("학생답 정오표 data")
+        self.fs_response = FileSelector("학생답 정오표 data (반별 파일 여러 개 가능)", multiple=True)
         self.fs_iteminfo = FileSelector("문항정보표")
         self.fs_cuts = FileSelector("예상추정분할점수 조회")
         self.fs_cuts.path_edit.textChanged.connect(self._on_cuts_path_changed)
@@ -1113,7 +1127,7 @@ class MainWindow(QMainWindow):
         pf = QVBoxLayout(perf_body); pf.setContentsMargins(0, 0, 0, 0); pf.setSpacing(8)
         self.chk_perform = QCheckBox("수행평가도 포함하여 분석합니다.")
         self.chk_perform.toggled.connect(self._toggle_perform)
-        self.fs_perform = FileSelector("수행평가 결과 (.xlsx)")
+        self.fs_perform = FileSelector("수행평가 결과 (.xlsx, 반별 파일 여러 개 가능)", multiple=True)
         self.fs_perform.setEnabled(False)
         self.fs_perform.path_edit.textChanged.connect(self._on_perform_path_changed)
         self.lbl_perform_info = QLabel("(미설정)")
@@ -2101,6 +2115,8 @@ class MainWindow(QMainWindow):
                 s = score(p, kws)
                 if s > 0:
                     cands[cat].append((s, p.stat().st_mtime, p))
+        # 수행평가 일람표는 정기시험 교과목별 일람표(1~5등급 컷 계산용)가 아니다.
+        cands["grade5_report"] = [c for c in cands["grade5_report"] if "수행평가" not in _norm(c[2].name)]
         # 한 파일이 여러 카테고리에 걸리지 않도록 — 더 높은 점수 카테고리에 배정
         chosen: dict[str, Path] = {}
         used: set[Path] = set()
@@ -2126,10 +2142,29 @@ class MainWindow(QMainWindow):
             else:
                 chosen[cat] = p; used.add(p)
 
+        # 반별로 나뉜 정오표·수행평가 파일("…(1-1)", "…(1-2)")은 같은 시험의 한 묶음으로 함께 채운다.
+        # 이름에서 반 표기만 빼고 같으면 한 묶음이라 1차/2차는 섞이지 않는다.
+        def group_key(path: Path) -> str:
+            return _norm(re.sub(r"\(\s*\d+\s*-\s*\d+\s*\)", "", path.name))
+        groups: dict[str, list[Path]] = {}
+        for cat in ("response", "perform"):
+            if cat in chosen:
+                key = group_key(chosen[cat])
+                groups[cat] = sorted((p for _, _, p in cands[cat] if group_key(p) == key and p not in used - {chosen[cat]}),
+                                     key=lambda q: q.name)
+                used.update(groups[cat])
+
+        def with_group(cat: str) -> str:
+            return PATH_SEPARATOR.join(str(p) for p in groups.get(cat, [chosen[cat]]))
+
+        def group_label(cat: str) -> str:
+            n = len(groups.get(cat, []))
+            return chosen[cat].name + (f" 외 {n - 1}개 반" if n > 1 else "")
+
         applied = []
         if "response" in chosen:
-            self.fs_response.path_edit.setText(str(chosen["response"]))
-            applied.append(("학생답 정오표 data", chosen["response"].name))
+            self.fs_response.path_edit.setText(with_group("response"))
+            applied.append(("학생답 정오표 data", group_label("response")))
         if "iteminfo" in chosen:
             self.fs_iteminfo.path_edit.setText(str(chosen["iteminfo"]))
             applied.append(("문항정보표", chosen["iteminfo"].name))
@@ -2138,8 +2173,8 @@ class MainWindow(QMainWindow):
             applied.append(("예상추정분할점수", chosen["cuts"].name))
         if "perform" in chosen:
             self.chk_perform.setChecked(True)
-            self.fs_perform.path_edit.setText(str(chosen["perform"]))
-            applied.append(("수행평가", chosen["perform"].name))
+            self.fs_perform.path_edit.setText(with_group("perform"))
+            applied.append(("수행평가", group_label("perform")))
         if "grade5_report" in chosen:
             self.fs_grade5_report.path_edit.setText(str(chosen["grade5_report"]))
             applied.append(("교과목별 일람표", chosen["grade5_report"].name))
@@ -2482,14 +2517,16 @@ class MainWindow(QMainWindow):
             self.lbl_perform_info.setText("(미설정)")
             return
         try:
-            pd_obj = load_perform(path)
+            pd_obj = load_perform_many(path)
         except Exception as e:
             QMessageBox.warning(self, "수행평가 파일 오류", f"파일을 인식하지 못했습니다.\n{e}")
             self.lbl_perform_info.setText("(파일 인식 실패)")
             return
         areas_text = ", ".join(f"{a.name}({a.ratio_pct:.0f}%)" for a in pd_obj.areas)
+        files = len(split_paths(path))
+        files_text = f" · 파일 {files}개(반별)" if files > 1 else ""
         self.lbl_perform_info.setText(
-            f"<b>{pd_obj.subject}</b><br>학생 {len(pd_obj.records)}명 · 영역 {len(pd_obj.areas)}개<br>{areas_text}"
+            f"<b>{pd_obj.subject}</b><br>학생 {len(pd_obj.records)}명{files_text} · 영역 {len(pd_obj.areas)}개<br>{areas_text}"
         )
         # 영역 반영비율 합을 수행평가 반영비율 기본값으로 제안
         if pd_obj.ratio_total > 0:
@@ -9007,7 +9044,7 @@ codex login status</pre>
         perform_data = None
         if self.chk_perform.isChecked() and self.fs_perform.path():
             try:
-                perform_data = load_perform(self.fs_perform.path())
+                perform_data = load_perform_many(self.fs_perform.path())
             except Exception as e:
                 QMessageBox.warning(self, "수행평가 파일 오류",
                                     f"수행평가 파일을 읽지 못했습니다. 정기시험만 분석합니다.\n{e}")

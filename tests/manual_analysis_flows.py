@@ -65,6 +65,7 @@ def run(output):
     report = {'source_app': True, 'frozen': False, 'synthetic_only': True,
               'checks': checks, 'errors': errors, 'status': 'incomplete'}
     with patch.object(ui.QFileDialog, 'getOpenFileName', side_effect=lambda *a, **k: (input_path[0], '')), \
+         patch.object(ui.QFileDialog, 'getOpenFileNames', side_effect=lambda *a, **k: ([input_path[0]], '')), \
          patch.object(ui.QFileDialog, 'getSaveFileName', side_effect=lambda *a, **k: (destination[0], '')), \
          patch.object(ui.QFileDialog, 'getExistingDirectory', side_effect=lambda *a, **k: folder[0]), \
          patch.object(QMessageBox, 'exec', option), \

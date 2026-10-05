@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 import openpyxl
 
@@ -153,6 +154,35 @@ def load_perform(path) -> PerformData:
             pd_obj.records[sid] = rec
         pd_obj.by_classno[str(cls_v).strip()] = rec
     return pd_obj
+
+
+def load_perform_many(paths) -> PerformData:
+    """Merge one 수행평가 일람표 per class. All files must score the same areas out of the same maximums."""
+    from .data_loader import split_paths
+    paths = split_paths(paths)
+    if not paths:
+        raise ValueError("수행평가 파일이 지정되지 않았습니다.")
+    merged = load_perform(paths[0])
+    if len(paths) == 1:
+        return merged
+    shape = [(a.name, a.max_score, a.ratio_pct) for a in merged.areas]
+    owner = {sid: Path(paths[0]).name for sid in merged.records}
+    for path in paths[1:]:
+        part = load_perform(path)
+        name = Path(path).name
+        if [(a.name, a.max_score, a.ratio_pct) for a in part.areas] != shape:
+            raise ValueError(f"'{name}'의 평가 영역·만점·반영비율이 첫 번째 파일('{Path(paths[0]).name}')과 다릅니다. "
+                             "같은 수행평가의 반별 파일만 함께 선택해 주세요.")
+        for sid in part.records:
+            if sid in owner:
+                raise ValueError(f"학번 {sid} 학생이 '{owner[sid]}'와 '{name}'에 모두 있습니다. "
+                                 "같은 반 파일을 두 번 선택하지 않았는지 확인해 주세요.")
+            owner[sid] = name
+        merged.records.update(part.records)
+        merged.by_classno.update(part.by_classno)
+        if not merged.subject:
+            merged.subject = part.subject
+    return merged
 
 
 if __name__ == "__main__":

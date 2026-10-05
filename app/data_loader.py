@@ -266,6 +266,18 @@ def load_item_info(path) -> tuple[list[ItemInfo], dict]:
 # 학생답 정오표 파서
 # ---------------------------------------------------------------------------
 
+def _answer_text(value) -> str:
+    """Cell -> answer text. Excel may hold a choice as the number 3 (read as 3.0): '3.0' -> '3'; '.' stays '.'."""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    text = str(value).strip()
+    if re.fullmatch(r"\d+\.0+", text):
+        return text.split(".")[0]
+    return text
+
+
 def load_student_responses(path) -> tuple[list[StudentResponse], dict, dict]:
     """학생답 정오표 -> StudentResponse 리스트 + 정답표(item->answer) + 메타.
 
@@ -305,7 +317,7 @@ def load_student_responses(path) -> tuple[list[StudentResponse], dict, dict]:
     for no, c in item_cols.items():
         a = answer_row[c] if c < len(answer_row) else None
         s = score_row[c] if c < len(score_row) else None
-        answers[no] = str(a).strip() if a is not None else ""
+        answers[no] = _answer_text(a)
         try:
             item_scores[no] = float(s) if s not in (None, "") else 0.0
         except (TypeError, ValueError):
@@ -333,6 +345,9 @@ def load_student_responses(path) -> tuple[list[StudentResponse], dict, dict]:
             sid_str = str(int(sid))
         except (TypeError, ValueError):
             sid_str = str(sid).strip()
+        # NEIS 정오표 맨 아래의 범례("※ . : 맞음 , 번호 : 틀림 ...")는 학생이 아니다.
+        if sid_str.startswith("※") or len(sid_str) > 20:
+            continue
 
         # '반/번호' 컬럼 다음 셀이 '1/3'식 학급/번호 표기 (NEIS 양식 기준)
         cls_val = row[sid_col + 1] if sid_col + 1 < len(row) else ""
@@ -352,7 +367,7 @@ def load_student_responses(path) -> tuple[list[StudentResponse], dict, dict]:
         ans_map = {}
         for no, c in item_cols.items():
             v = row[c] if c < len(row) else None
-            ans_map[no] = "" if v is None else str(v).strip()
+            ans_map[no] = _answer_text(v)
 
         def gnum(name):
             c = sum_cols.get(name)
@@ -427,9 +442,54 @@ def apply_perform(exam: "ExamData", perform_data, weight_pencil: float, weight_p
             st.final_score = st.total
 
 
+PATH_SEPARATOR = "|"   # never part of a Windows file name; joins several class files in one path box
+
+
+def split_paths(value) -> list[str]:
+    """'a.xlsx|b.xlsx' (or a list/tuple of paths) -> ['a.xlsx', 'b.xlsx']; a single path stays as it is."""
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return [p.strip() for p in str(value).split(PATH_SEPARATOR) if p.strip()]
+
+
+def load_student_responses_many(paths) -> tuple[list[StudentResponse], dict, dict]:
+    """Merge one 정오표 file per class into a single student list (the whole grade/subject).
+
+    Every file has to be the same exam (same answer key) and no student may appear twice.
+    """
+    paths = split_paths(paths)
+    if not paths:
+        raise ValueError("정오표 파일이 지정되지 않았습니다.")
+    students: list[StudentResponse] = []
+    answers: dict = {}
+    meta: dict = {}
+    seen: dict[str, str] = {}
+    for index, path in enumerate(paths):
+        part, part_answers, part_meta = load_student_responses(path)
+        name = Path(path).name
+        if index == 0:
+            answers, meta = part_answers, part_meta
+        elif part_answers != answers:
+            raise ValueError(f"'{name}'의 정답이 첫 번째 파일('{Path(paths[0]).name}')과 다릅니다. "
+                             "같은 시험(같은 차수)의 반별 파일만 함께 선택해 주세요.")
+        for student in part:
+            if student.sid in seen:
+                raise ValueError(f"학번 {student.sid} 학생이 '{seen[student.sid]}'와 '{name}'에 모두 있습니다. "
+                                 "같은 반 파일을 두 번 선택하지 않았는지 확인해 주세요.")
+            seen[student.sid] = name
+        students.extend(part)
+    return students, answers, meta
+
+
 def load_exam(item_info_path, response_path) -> ExamData:
+    """response_path: one 정오표 file, a list of them, or 'a.xlsx|b.xlsx' (one file per class)."""
     items, item_meta = load_item_info(item_info_path)
-    students, answers, resp_meta = load_student_responses(response_path)
+    response_paths = split_paths(response_path)
+    if len(response_paths) > 1:
+        students, answers, resp_meta = load_student_responses_many(response_paths)
+        response_path = PATH_SEPARATOR.join(response_paths)
+    else:
+        students, answers, resp_meta = load_student_responses(response_paths[0] if response_paths else response_path)
 
     # 정답 일관성 보정: 정오표에 정답이 더 신뢰 가능 → 우선 적용
     for it in items:
