@@ -53,6 +53,28 @@ a = Analysis(
 # Third-party demo datasets are not runtime assets for this application.
 a.datas = [entry for entry in a.datas if not entry[0].replace("\\", "/").startswith("matplotlib/mpl-data/sample_data/")]
 
+# PyInstaller's PySide6 hooks copy nearly every Qt module. The app only uses Core/Gui/Widgets/Network,
+# SVG/PrintSupport/OpenGL, QtQuick (QQuickWidget), WebEngine, WebChannel and QtTest (synthetic QA), so
+# leave out Qt modules nothing imports. Matches path components: "Qt3DCore", "Qt63DCore.dll", "QtPdf.framework",
+# "qml/QtQuick3D" ... but never "QtQuick" itself or the WebEngine/Qml pieces.
+import re
+_UNUSED_QT = re.compile(
+    r"(?:^|/)(?:lib/)?Qt6?(?:3D|Quick3D|Charts|DataVisualization|Graphs|Location|Multimedia|Pdf|Sensors|"
+    r"VirtualKeyboard|TextToSpeech|WebView|WebSockets|Scxml|RemoteObjects|SerialPort|SpatialAudio|StateMachine|"
+    r"Sql|Bluetooth|Nfc|HttpServer|NetworkAuth|ShaderTools)[A-Za-z0-9]*"
+    r"(?:\.framework|\.dll|\.dylib|\.pyd|\.abi3\.so|/|$)"
+)
+_UNUSED_QT_PLUGINS = ("libqpdf.", "qpdf.dll")   # image-format plugin that needs the removed QtPdf
+
+
+def _unused_qt(dest):
+    dest = dest.replace("\\", "/")
+    return bool(_UNUSED_QT.search(dest)) or dest.rsplit("/", 1)[-1].startswith(_UNUSED_QT_PLUGINS)
+
+
+a.binaries = [entry for entry in a.binaries if not _unused_qt(entry[0])]
+a.datas = [entry for entry in a.datas if not _unused_qt(entry[0])]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
