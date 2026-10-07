@@ -22,7 +22,15 @@ REQUIRED_CHECKS = (
     'synthetic file loads and preserves fractional business values',
     'real JSON download preserves business values', 'downloaded work reopens',
     'cancelled save creates no extra JSON', 'tab switch retains loaded work',
-    'no JavaScript or native warnings', 'core flow attempted no network',
+    'first calculator activation preserves the native window',
+    'tab switches preserve the native window',
+    'analysis tables contain both synthetic classes',
+    'performance scores preserve expected combined values',
+    'analysis and performance charts render',
+    'semester and round are recognized from synthetic filenames',
+    'second round analysis and comparison render',
+    'synthetic analysis window capture exists',
+    'no JavaScript or application dialog errors', 'core flow attempted no network',
     'native window capture exists',
 )
 
@@ -45,13 +53,86 @@ def business_values(project):
             'items':[{k:item.get(k) for k in keys} for item in project['items']]}
 
 
+def analysis_fixtures(inputs):
+    """Write new, synthetic-only NEIS-style workbooks; never open user inputs."""
+    from xml.etree.ElementTree import Element, SubElement, tostring
+    from zipfile import ZipFile, ZIP_DEFLATED
+    def write(name, rows):
+        path = inputs / name
+        if path.exists():
+            raise FileExistsError(path)
+        # Write a minimal workbook directly: no temporary-file cleanup/deletion.
+        namespace = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main'
+        sheet = Element('worksheet', xmlns=namespace)
+        data = SubElement(sheet, 'sheetData')
+        for row_number, values in enumerate(rows, 1):
+            row = SubElement(data, 'row', r=str(row_number))
+            for column, value in enumerate(values, 1):
+                if value is None:
+                    continue
+                address = chr(64 + column) + str(row_number)
+                cell = SubElement(row, 'c', r=address)
+                if isinstance(value, (int, float)):
+                    SubElement(cell, 'v').text = str(value)
+                else:
+                    cell.set('t', 'inlineStr')
+                    SubElement(SubElement(cell, 'is'), 't').text = str(value)
+        with ZipFile(path, 'x', compression=ZIP_DEFLATED) as archive:
+            archive.writestr('[Content_Types].xml',
+                '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+                '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+                '<Default Extension="xml" ContentType="application/xml"/>'
+                '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>'
+                '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>')
+            archive.writestr('_rels/.rels',
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>')
+            archive.writestr('xl/workbook.xml',
+                '<workbook xmlns="'+namespace+'" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">'
+                '<sheets><sheet name="합성" sheetId="1" r:id="rId1"/></sheets></workbook>')
+            archive.writestr('xl/_rels/workbook.xml.rels',
+                '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+                '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>')
+            archive.writestr('xl/worksheets/sheet1.xml', tostring(sheet, encoding='utf-8', xml_declaration=True))
+        return path
+    item = write('합성_문항정보표.xlsx', [
+        ['합성 검증 전용 (합성수학) 과목'], ['선택형 문항'],
+        ['문항번호','내용영역','성취기준','난이도',None,None,'배점','정답'],
+        [None,None,None,'어려움','보통','쉬움'],
+        [1,'합성 연산','[합성-01] 합성 기준',None,None,'○',50,1],
+        [2,'합성 연산','[합성-02] 합성 기준',None,'○',None,50,3]])
+    responses, performance = {}, []
+    for round_no in (1, 2):
+        responses[round_no] = []
+        for klass, students in ((1, [(1,'.','.',100),(2,'.','2',50)]),
+                                (2, [(1,'4','.',50),(2,'.','.',100),(3,'4','2',0)])):
+            if round_no == 2 and klass == 1:
+                students = [(1,'.','2',50),(2,'.','.',100)]
+            rows = [['합성 검증 전용'], [],
+                    [f'2026학년도 1학기 {round_no}차 1학년 수학:합성수학'],
+                    ['반/번호',None,'성명',1,2,'선택형점수','서답형점수','기타점수','과목총점'],
+                    [None,None,'정답',1,3],[None,None,'배점',50,50]]
+            for number, answer1, answer2, total in students:
+                rows.append([f'2026{klass}{number:03d}',f'{klass}/{number}',f'합성{klass}{number}',
+                             answer1,answer2,total,0,0,total])
+            rows.append(['※ . : 맞음 , 번호 : 틀림 , 알파벳 : 복수답안코드 (합성 범례)'])
+            responses[round_no].append(write(f'합성_2026_1학기_{round_no}차_정오표(1-{klass}).xlsx',rows))
+    for klass, scores in ((1, [(1,40),(2,20)]), (2, [(1,10),(2,30),(3,0)])):
+        rows = [['합성 검증 전용'],['교과목 : 합성수학'],
+                ['반/번호','합성 학번','성명','합성 영역(만점 40.00,40.00%)','합 계']]
+        for number, score in scores:
+            rows.append([f'{klass}/{number}',f'2026{klass}{number:03d}',f'합성{klass}{number}',score,score])
+        performance.append(write(f'합성_수행평가(1-{klass}).xlsx',rows))
+    return item, responses, performance
+
+
 def run(output):
     # This is the first application import, after isolated paths have been selected.
     state=output/'state';state.mkdir()
     for name in ('appdata','matplotlib','cache','tmp','codex'): (state/name).mkdir()
     os.environ.update(MPLCONFIGDIR=str(state/'matplotlib'),XDG_CACHE_HOME=str(state/'cache'),
                       GOEDUSPLIT_CODEX_WORKDIR=str(state/'codex'))
-    from PySide6.QtCore import QPoint, QSettings, Qt, QCoreApplication, QEvent
+    from PySide6.QtCore import QPoint, QSettings, Qt, QCoreApplication, QEvent, QObject
     from PySide6.QtTest import QTest
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineUrlRequestInterceptor
     from PySide6.QtWidgets import QApplication
@@ -66,6 +147,7 @@ def run(output):
     inputs=output/'inputs';inputs.mkdir()
     work=inputs/'합성 작업.json';work.write_text(json.dumps(project_fixture(),ensure_ascii=False),encoding='utf-8')
     saved=output/'합성 저장.json'
+    analysis_item, analysis_responses, analysis_performance = analysis_fixtures(inputs)
     chosen=[str(work)]
     save_dest=[str(saved)]
     blocked=[]
@@ -110,6 +192,12 @@ def run(output):
         report['checks'][name]=bool(condition)
         if not condition: raise AssertionError(name)
     window=None
+    destroyed_surfaces=[]
+    class SurfaceWatch(QObject):
+        def eventFilter(self, obj, event):
+            if event.type() == QEvent.PlatformSurface and event.surfaceEventType().name == 'SurfaceAboutToBeDestroyed':
+                destroyed_surfaces.append(obj.surfaceType().name)
+            return False
     with patch.object(tempfile,'tempdir',str(state/'tmp')), \
          patch.object(ui,'QSettings',return_value=settings), \
          patch.object(ui.MainWindow,'_ai_material_root_dir',lambda _self:state/'appdata'), \
@@ -121,11 +209,19 @@ def run(output):
          patch.object(ui.QMessageBox,'critical',side_effect=lambda *a,**k:report['errors'].append('critical: '+str(a[2]))):
         try:
             window=ui.MainWindow();window.resize(1280,800);window.show()
+            QTest.qWait(500)
+            initial_window_id=int(window.winId())
+            watcher=SurfaceWatch()
+            window.windowHandle().installEventFilter(watcher)
+            report['native_window']={'platform':application.platformName(),'initial_id':initial_window_id,
+                                     'initial_surface':window.windowHandle().surfaceType().name}
             check('settings are explicit isolated INI',window.settings is settings and not settings.fallbacksEnabled())
             check('portfolio is isolated',window._portfolio_store_dir().is_relative_to(state/'appdata'))
             check('WebEngine is off the record',profile.isOffTheRecord())
             window.tabs.setCurrentWidget(window.tab_spliter)
             wait(lambda:window._spliter_loaded,30);QTest.qWait(1500)
+            check('first calculator activation preserves the native window',
+                  not destroyed_surfaces and int(window.winId())==initial_window_id)
             check('bundled calculator renders',js(window,'Boolean(document.querySelector(".item-table"))'))
             click(window,'작업 불러오기');QTest.qWait(1800)
             loaded=js(window,'window.__GOEDUSPLIT_GET_PROJECT__()')
@@ -149,7 +245,47 @@ def run(output):
             window.tabs.setCurrentWidget(window.tab_data);QTest.qWait(500)
             window.tabs.setCurrentWidget(window.tab_spliter);QTest.qWait(500)
             check('tab switch retains loaded work',business_values(js(window,'window.__GOEDUSPLIT_GET_PROJECT__()'))==business_values(persisted))
-            check('no JavaScript or native warnings',not report['errors'])
+            check('tab switches preserve the native window',not destroyed_surfaces and int(window.winId())==initial_window_id)
+            window.tabs.setCurrentWidget(window.tab_data)
+            window.fs_iteminfo.path_edit.setText(str(analysis_item))
+            window.fs_response.path_edit.setText(ui.PATH_SEPARATOR.join(map(str,analysis_responses[1])))
+            window.fs_perform.path_edit.setText(ui.PATH_SEPARATOR.join(map(str,analysis_performance)))
+            window.chk_perform.setChecked(True)
+            window.spin_pencil_ratio.setValue(60)
+            window.spin_perform_ratio.setValue(40)
+            window.run_analysis();QTest.qWait(500)
+            check('analysis tables contain both synthetic classes',window.table_data.rowCount()==5
+                  and window.table_items.rowCount()==2 and set(window.overall.by_class)=={'1','2'})
+            combined=[float(student.final_score) for student in window.exam.students]
+            check('performance scores preserve expected combined values',combined==[100.0,50.0,40.0,90.0,0.0]
+                  and window.table_perform_students.rowCount()==5 and window.table_perform_areas.rowCount()==1)
+            chart_names=('canvas_score_hist','canvas_score_normal','canvas_level_stack','canvas_level_means',
+                         'canvas_class','canvas_pvalue','canvas_discr','canvas_monitor','canvas_monitor_trend',
+                         'canvas_perform_area','canvas_perform_scatter')
+            charts_dir=output/'charts';charts_dir.mkdir()
+            chart_files=[]
+            for name in chart_names:
+                canvas=getattr(window,name)._canvas
+                if canvas is None or not canvas.figure.axes:
+                    raise AssertionError('Missing rendered analysis chart: '+name)
+                canvas.draw()
+                path=charts_dir/(name+'.png');canvas.figure.savefig(path)
+                if not path.is_file() or path.stat().st_size<1000:
+                    raise AssertionError('Empty chart image: '+name)
+                chart_files.append(path.name)
+            check('analysis and performance charts render',len(chart_files)==len(chart_names))
+            check('semester and round are recognized from synthetic filenames',window._detect_exam_round()==(2026,1,1))
+            check('synthetic analysis window capture exists',window.grab().save(str(output/'analysis-window.png')))
+            window.fs_response.path_edit.setText(ui.PATH_SEPARATOR.join(map(str,analysis_responses[2])))
+            window.run_analysis();QTest.qWait(500)
+            check('second round analysis and comparison render',window._detect_exam_round()==(2026,1,2)
+                  and len(window._round_records)==2 and window.table_round_metrics.rowCount()>0
+                  and window.canvas_round_compare._canvas is not None)
+            window.canvas_round_compare._canvas.figure.savefig(charts_dir/'round-comparison.png')
+            report['analysis']={'students':5,'classes':2,'items':2,'combined_scores_first_round':combined,
+                                'chart_files':chart_files+['round-comparison.png'],'rounds':len(window._round_records)}
+            report['native_window'].update(final_id=int(window.winId()),destroyed_before_close=list(destroyed_surfaces))
+            check('no JavaScript or application dialog errors',not report['errors'])
             check('core flow attempted no network',not blocked)
             check('native window capture exists',window.grab().save(str(output/'candidate-window.png')))
             report['status']='passed'

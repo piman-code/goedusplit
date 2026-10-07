@@ -39,7 +39,7 @@ class DeferredStartupTests(unittest.TestCase):
             self.assertIsNone(window.canvas_perform_scatter._canvas)
             web_view.assert_not_called()
             web_import.assert_not_called()
-            self.assertFalse(hasattr(window, "_gpu_surface_anchor"))
+            self.assertTrue(hasattr(window, "_gpu_surface_anchor"))
             window.close()
 
     @unittest.skipUnless(sys.platform == "win32", "Windows on-demand WebEngine; Mac retains eager GPU setup")
@@ -52,6 +52,8 @@ class DeferredStartupTests(unittest.TestCase):
             self.assertTrue(page.profile().isOffTheRecord())
             self.assertTrue(window._create_spliter_view())
             self.assertIs(window.spliter_view, view)
+            self.assertIs(window.spliter_view.page(), page)
+            window._ensure_spliter_tab_loaded()
             self.assertIs(window.spliter_view.page(), page)
             window.close()
 

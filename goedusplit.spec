@@ -22,6 +22,7 @@ WINDOWS_ICON = str(APP_ICON_ICO) if sys.platform.startswith("win") and APP_ICON_
 MAC_ICON = str(APP_ICON_ICNS) if sys.platform == "darwin" and APP_ICON_ICNS.exists() else None
 
 hiddenimports = [
+    "app.charts",  # lazy_charts loads this dynamically; frozen builds still need the module.
     "matplotlib.backends.backend_qtagg",
     "matplotlib.backends.backend_pdf",
     "PySide6.QtSvg",

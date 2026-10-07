@@ -2879,7 +2879,7 @@ class MainWindow(QMainWindow):
         if not self._create_spliter_view():
             return
         if not self._spliter_load_requested:
-            self._load_spliter_web(force_recreate=True)
+            self._load_spliter_web()
             return
         if self._spliter_loaded:
             QTimer.singleShot(80, self._nudge_spliter_view)
@@ -9287,6 +9287,7 @@ codex login status</pre>
         # _on_theme_changed가 차트 재렌더 처리
 
     def _build_statusbar(self):
+        global QQuickWidget
         sb = self.statusBar()
         right = QLabel(f"{APP_COPYRIGHT}   v{APP_VERSION}")
         right.setProperty("role", "muted")
@@ -9296,7 +9297,16 @@ codex login status</pre>
         # which on a Mac looked like the app closing and starting again on the first click of the
         # 예상정답률 tab. A 1x1 GPU widget present from the start makes the window GPU-drawn from the
         # beginning, so nothing is recreated later.
-        if sys.platform == "darwin" and QWebEngineView is not None and QQuickWidget is not None:
+        # Windows also recreates an already visible raster window when the first
+        # WebEngine view is inserted. Prepare its GPU surface before first show,
+        # while keeping the calculator and chart imports deferred.
+        if sys.platform == "win32" and QQuickWidget is None:
+            try:
+                from PySide6.QtQuickWidgets import QQuickWidget as gpu_widget
+                QQuickWidget = gpu_widget
+            except ImportError:
+                pass
+        if QWebEngineView is not None and QQuickWidget is not None:
             self._gpu_surface_anchor = QQuickWidget()
             self._gpu_surface_anchor.setFixedSize(1, 1)
             self._gpu_surface_anchor.setAttribute(Qt.WA_TransparentForMouseEvents)
