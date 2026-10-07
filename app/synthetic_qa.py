@@ -137,7 +137,6 @@ def analysis_fixtures(inputs):
 
 
 def run(output):
-    faulthandler.enable(all_threads=True)  # Record native-crash Python stacks in CI stderr.
     # This is the first application import, after isolated paths have been selected.
     state=output/'state';state.mkdir()
     for name in ('appdata','matplotlib','cache','tmp','codex'): (state/name).mkdir()
@@ -413,4 +412,10 @@ def main():
     args=parser.parse_args()
     output=args.synthetic_qa.expanduser().resolve()
     output.mkdir(parents=True,exist_ok=False)
-    return run(output)
+    # Windowed PyInstaller builds may have sys.stderr=None. Use an explicit file.
+    with (output / 'NATIVE_CRASH.log').open('xb') as crash_log:
+        faulthandler.enable(file=crash_log, all_threads=True)
+        try:
+            return run(output)
+        finally:
+            faulthandler.disable()

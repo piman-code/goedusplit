@@ -105,7 +105,11 @@ jobs:
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'macos'
         timeout-minutes: 5
         run: |
+          set +e
           dist/Goedu-Split.app/Contents/MacOS/Goedu-Split --synthetic-qa "$RUNNER_TEMP/goedusplit-candidate-qa"
+          qaExit=$?
+          if [ -f "$RUNNER_TEMP/goedusplit-candidate-qa/NATIVE_CRASH.log" ]; then cat "$RUNNER_TEMP/goedusplit-candidate-qa/NATIVE_CRASH.log"; fi
+          exit "$qaExit"
       - name: Build Windows candidate
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
         shell: cmd
@@ -122,9 +126,19 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: |
           $qaRoot = Join-Path $env:RUNNER_TEMP 'goedusplit-candidate-qa'
-          $process = Start-Process -FilePath '.\dist\Goedu-Split\Goedu-Split.exe' -ArgumentList @('--synthetic-qa', ('"' + $qaRoot + '"')) -Wait -PassThru
+          $process = Start-Process -FilePath '.\dist\Goedu-Split\Goedu-Split.exe' -ArgumentList @('--synthetic-qa', ('"' + $qaRoot + '"')) -Wait -PassThru -WindowStyle Hidden
+          $crashLog = Join-Path $qaRoot 'NATIVE_CRASH.log'
+          if (Test-Path -LiteralPath $crashLog) { Get-Content -LiteralPath $crashLog }
           if ($process.ExitCode -ne 0) { throw "Frozen candidate QA failed: $($process.ExitCode)" }
           if (-not (Test-Path (Join-Path $qaRoot 'QA_REPORT.json'))) { throw 'Candidate QA report missing' }
+      - name: Preserve failed synthetic QA diagnostics
+        if: failure() && needs.source.outputs.candidate == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: failed-synthetic-qa-${{ matrix.target }}-${{ needs.source.outputs.commit }}
+          path: ${{ runner.temp }}/goedusplit-candidate-qa/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Pack Windows setup (preinstalled Inno Setup required)
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
         shell: cmd
