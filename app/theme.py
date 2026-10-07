@@ -17,8 +17,9 @@ from __future__ import annotations
 import base64
 import datetime as dt
 
-import matplotlib
-from matplotlib import rcParams as _rc
+import sys
+
+_matplotlib_theme = None
 from PySide6.QtCore import QObject, Signal, QTimer
 from PySide6.QtGui import QColor, QPalette
 
@@ -333,6 +334,11 @@ class ThemeManager(QObject):
 
     @staticmethod
     def _apply_matplotlib(c: dict, base_pt: int = 13):
+        global _matplotlib_theme
+        _matplotlib_theme = (dict(c), base_pt)
+        if "matplotlib" not in sys.modules:
+            return
+        from matplotlib import rcParams as _rc
         _rc["axes.facecolor"] = c["chart_bg"]
         _rc["figure.facecolor"] = c["chart_bg"]
         _rc["savefig.facecolor"] = c["chart_bg"]

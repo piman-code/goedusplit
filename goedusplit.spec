@@ -75,6 +75,14 @@ def _unused_qt(dest):
 a.binaries = [entry for entry in a.binaries if not _unused_qt(entry[0])]
 a.datas = [entry for entry in a.datas if not _unused_qt(entry[0])]
 
+# Keep audit-blocked build leftovers out of the collection before copying;
+# no deletion/slimming is needed in preservation-mode builds.
+def _build_leftover(dest):
+    return bool(set(dest.replace("\\", "/").split("/")) & {"__pycache__", "sample_data"})
+
+a.binaries = [entry for entry in a.binaries if not _build_leftover(entry[0])]
+a.datas = [entry for entry in a.datas if not _build_leftover(entry[0])]
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

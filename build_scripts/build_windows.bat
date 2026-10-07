@@ -62,8 +62,12 @@ echo [5/8] PyInstaller 빌드
 if errorlevel 1 exit /b 1
 
 echo [6/8] Windows 배포 폴더 경량화
-"%BUILD_PYTHON%" build_scripts\slim_windows_dist.py dist\Goedu-Split
-if errorlevel 1 exit /b 1
+if "%GOEDUSPLIT_PRESERVE_BUILD%"=="1" (
+  echo [preserved] 경량화 생략 - 모든 빌드 파일 보존
+) else (
+  "%BUILD_PYTHON%" build_scripts\slim_windows_dist.py dist\Goedu-Split
+  if errorlevel 1 exit /b 1
+)
 
 echo [7/8] 개인정보/비밀값 감사
 "%BUILD_PYTHON%" build_scripts\privacy_release_audit.py dist\Goedu-Split

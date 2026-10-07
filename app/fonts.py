@@ -11,8 +11,8 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-import matplotlib
-from matplotlib import font_manager as fm
+_mpl_registered = set()
+_qt_registered = set()
 
 
 def font_dir() -> Path:
@@ -23,7 +23,7 @@ def font_dir() -> Path:
     return Path(__file__).resolve().parent.parent / "assets" / "fonts"
 
 
-def register_fonts():
+def register_fonts(*, matplotlib_fonts=True):
     """폰트 디렉토리의 모든 .ttf/.otf를 등록.
 
     - matplotlib: fm.fontManager.addfont
@@ -36,22 +36,31 @@ def register_fonts():
 
     files = sorted([p for p in fdir.iterdir() if p.suffix.lower() in (".ttf", ".otf")])
     registered = []
-    # matplotlib
-    for p in files:
-        try:
-            fm.fontManager.addfont(str(p))
-            registered.append(p.name)
-        except Exception:
-            pass
-    matplotlib.rcParams["axes.unicode_minus"] = False
-
-    # Qt (QApplication 생성 이후일 때만)
+    # Qt registration must not scan matplotlib's system font cache at startup.
+    if matplotlib_fonts:
+        import matplotlib
+        from matplotlib import font_manager as fm
+        for p in files:
+            key = str(p.resolve())
+            if key in _mpl_registered:
+                registered.append(p.name)
+                continue
+            try:
+                fm.fontManager.addfont(str(p))
+                _mpl_registered.add(key)
+                registered.append(p.name)
+            except Exception:
+                pass
+        matplotlib.rcParams["axes.unicode_minus"] = False
     try:
         from PySide6.QtCore import QCoreApplication
         from PySide6.QtGui import QFontDatabase
         if QCoreApplication.instance() is not None:
             for p in files:
-                QFontDatabase.addApplicationFont(str(p))
+                key = str(p.resolve())
+                if key not in _qt_registered:
+                    if QFontDatabase.addApplicationFont(str(p)) >= 0:
+                        _qt_registered.add(key)
     except ImportError:
         pass
     return registered
@@ -59,6 +68,8 @@ def register_fonts():
 
 def pick_korean_font() -> str:
     """matplotlib에서 사용할 한글 폰트 이름 (우선순위 탐색)."""
+    import matplotlib
+    from matplotlib import font_manager as fm
     candidates = [
         "Gowun Dodum",
         "NanumGothic",

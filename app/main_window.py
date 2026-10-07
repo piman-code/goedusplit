@@ -41,14 +41,13 @@ from PySide6.QtWidgets import (
     QDialog, QLayout, QMenu,
 )
 
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 
 from .data_loader import load_exam, load_item_info, apply_perform, ExamData, split_paths, PATH_SEPARATOR
 from .analysis import (
     analyze_overall, analyze_items, build_score_matrix, analyze_serdap,
     grade_level, reliability_label, LEVELS,
 )
-from . import charts
+from . import lazy_charts as charts
 from .theme import ThemeManager
 from .cuts_loader import load_cut_scores
 from .expected_rates import (
@@ -95,26 +94,52 @@ from .widgets import (
 )
 from . import __version__
 
-try:
-    from PySide6.QtWebEngineWidgets import QWebEngineView
-except Exception:
-    QWebEngineView = None
+# Windows starts with ordinary Qt widgets; the calculator loads WebEngine on demand.
+# A sentinel keeps explicit None overrides used by isolated tests effective.
+_WEB_UNLOADED = object()
+QWebEngineView = QWebEnginePage = QWebChannel = _WEB_UNLOADED
+QQuickWidget = None
 
-try:
-    from PySide6.QtQuickWidgets import QQuickWidget
-except Exception:
-    QQuickWidget = None
 
-try:
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineDownloadRequest
-except Exception:
-    QWebEnginePage = None
-    QWebEngineDownloadRequest = None
+def _load_webengine():
+    global QWebEngineView, QWebEnginePage, QWebChannel
+    if QWebEngineView is _WEB_UNLOADED:
+        try:
+            from PySide6.QtWebEngineWidgets import QWebEngineView as view
+            QWebEngineView = view
+        except ImportError:
+            QWebEngineView = None
+    if QWebEnginePage is _WEB_UNLOADED:
+        try:
+            from PySide6.QtWebEngineCore import QWebEnginePage as page
+            QWebEnginePage = page
+        except ImportError:
+            QWebEnginePage = None
+    if QWebChannel is _WEB_UNLOADED:
+        try:
+            from PySide6.QtWebChannel import QWebChannel as channel
+            QWebChannel = channel
+        except ImportError:
+            QWebChannel = None
 
-try:
-    from PySide6.QtWebChannel import QWebChannel
-except Exception:
-    QWebChannel = None
+
+def __getattr__(name):
+    if name == "_MarginKeepingCanvas":
+        from .chart_canvas import _MarginKeepingCanvas
+        return _MarginKeepingCanvas
+    if name == "QWebEngineDownloadRequest":
+        from PySide6.QtWebEngineCore import QWebEngineDownloadRequest
+        return QWebEngineDownloadRequest
+    raise AttributeError(name)
+
+
+if sys.platform == "darwin":
+    # Preserve the Mac GPU anchor: otherwise opening the calculator recreates the window.
+    _load_webengine()
+    try:
+        from PySide6.QtQuickWidgets import QQuickWidget
+    except ImportError:
+        pass
 
 
 APP_TITLE = "성취평가 결과 분석 (Goedu-Split)"
@@ -302,43 +327,6 @@ class FileSelector(QWidget):
         return split_paths(self.path())
 
 
-class _MarginKeepingCanvas(FigureCanvas):
-    """Fits a chart's margins to its labels when the widget is smaller than the chart's design.
-
-    Charts set margins as fractions of their designed size (e.g. bottom=0.18 of 3.9 in). In a
-    shorter pane the same fraction left too little room and axis titles were cut off. Below the
-    designed size the margins are measured from the actual labels (tight_layout); at or above it
-    the designed margins are used as before.
-    """
-
-    def __init__(self, fig):
-        super().__init__(fig)
-        pars = fig.subplotpars
-        # Decided once: tight_layout leaves a placeholder layout engine behind, which would read as
-        # "the chart manages its own layout" on every later resize and freeze the first margins.
-        self._own_layout = fig.get_layout_engine() is not None
-        self._design_size = tuple(fig.get_size_inches())
-        self._design_pars = {"left": pars.left, "right": pars.right, "bottom": pars.bottom, "top": pars.top}
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        fig = self.figure
-        if self._own_layout:
-            return
-        w0, h0 = self._design_size
-        w, h = fig.get_size_inches()
-        fig.set_layout_engine(None)
-        fig.subplots_adjust(**self._design_pars)
-        if w < w0 - 0.05 or h < h0 - 0.05:
-            try:
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", UserWarning)  # "Tight layout not applied" on very small panes
-                    fig.tight_layout(pad=0.5)
-            except Exception:
-                fig.subplots_adjust(**self._design_pars)
-            fig.set_layout_engine(None)
-
-
 class FoldSection(QWidget):
     """A large area (chart, table, explanation) with a header that folds it to one line.
 
@@ -431,9 +419,16 @@ class CanvasHolder(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._layout = QVBoxLayout(self); self._layout.setContentsMargins(0, 0, 0, 0)
-        self._canvas: FigureCanvas | None = None
+        self._canvas = None
+        self._placeholder = QLabel("분석자료를 불러오면 그래프를 표시합니다.")
+        self._placeholder.setAlignment(Qt.AlignCenter)
+        self._placeholder.setWordWrap(True)
+        self._placeholder.setProperty("role", "muted")
+        self._layout.addWidget(self._placeholder)
 
     def set_figure(self, fig):
+        from .chart_canvas import _MarginKeepingCanvas
+        self._placeholder.hide()
         if self._canvas is not None:
             self._layout.removeWidget(self._canvas); self._canvas.setParent(None); self._canvas.deleteLater()
         self._canvas = _MarginKeepingCanvas(fig)
@@ -442,6 +437,16 @@ class CanvasHolder(QWidget):
         attach_wheel_zoom(self._canvas)
         self._canvas.setToolTip("마우스 휠 = 확대/축소 · 더블클릭 = 원상복귀")
         self._layout.addWidget(self._canvas)
+
+
+    def set_placeholder(self, text):
+        if self._canvas is not None:
+            self._layout.removeWidget(self._canvas)
+            self._canvas.setParent(None)
+            self._canvas.deleteLater()
+            self._canvas = None
+        self._placeholder.setText(text)
+        self._placeholder.show()
 
 
 def _set_item(table: QTableWidget, r: int, c: int, value, *, align_right=False, bg=None,
@@ -649,13 +654,15 @@ class MainWindow(QMainWindow):
         self._sidebar_hidden_for_calculator = False
 
         # Qt에 번들 폰트 등록 → 시스템에 Gowun Dodum/NanumGothic이 없어도 동작
-        try: font_pack.register_fonts()
+        try: font_pack.register_fonts(matplotlib_fonts=False)
         except Exception: pass
 
+        self._startup_building = True
         self._build_ui()
         self._build_menu()
         self._build_statusbar()
         self._install_shortcuts()
+        self._startup_building = False
         if self.theme is not None:
             self.theme.changed.connect(self._on_theme_changed)
             charts.set_theme(self.theme.colors)
@@ -2768,18 +2775,28 @@ class MainWindow(QMainWindow):
         toolbar_layout.addWidget(btn_neis)
         layout.addWidget(self.spliter_toolbar, 0)
 
+        self._spliter_layout = layout
+        self.lbl_spliter_web = QLabel("예상정답률 탭을 열면 계산기를 준비합니다.")
+        self.lbl_spliter_web.setProperty("role", "muted")
+        self.lbl_spliter_web.setWordWrap(True)
+        layout.addWidget(self.lbl_spliter_web, 1)
+        if sys.platform == "darwin":
+            self._create_spliter_view()
+
+    def _create_spliter_view(self):
+        if self.spliter_view is not None:
+            return True
+        _load_webengine()
         if QWebEngineView is None:
-            self.lbl_spliter_web = QLabel(
+            self.lbl_spliter_web.setText(
                 "이 Python 환경에는 Qt WebEngine이 없어 내장 계산기를 표시할 수 없습니다. "
-                "근거 엑셀을 내보내 자료를 확인해 주세요."
-            )
-            self.lbl_spliter_web.setProperty("role", "muted")
-            self.lbl_spliter_web.setWordWrap(True)
-            layout.addWidget(self.lbl_spliter_web, 1)
-        else:
-            self.spliter_view = QWebEngineView()
-            self._reset_spliter_web_page()
-            layout.addWidget(self.spliter_view, 1)
+                "근거 엑셀을 내보내 자료를 확인해 주세요.")
+            return False
+        self.spliter_view = QWebEngineView()
+        self._reset_spliter_web_page()
+        self.lbl_spliter_web.hide()
+        self._spliter_layout.addWidget(self.spliter_view, 1)
+        return True
 
     def _reset_spliter_web_page(self):
         if self.spliter_view is None:
@@ -2828,7 +2845,7 @@ class MainWindow(QMainWindow):
         if not request.isFinished():
             return
         target = Path(request.downloadDirectory()) / request.downloadFileName()
-        if request.state() != QWebEngineDownloadRequest.DownloadState.DownloadCompleted:
+        if request.state() != __getattr__("QWebEngineDownloadRequest").DownloadState.DownloadCompleted:
             QMessageBox.warning(self, "계산기 파일 저장", f"저장하지 못했습니다.\n{target}\n{request.interruptReasonString()}")
             return
         if csv_file if csv_file is not None else target.suffix.lower() == ".csv":
@@ -2859,7 +2876,7 @@ class MainWindow(QMainWindow):
             self._refresh_rounds_tab()
 
     def _ensure_spliter_tab_loaded(self):
-        if self.spliter_view is None:
+        if not self._create_spliter_view():
             return
         if not self._spliter_load_requested:
             self._load_spliter_web(force_recreate=True)
@@ -2873,7 +2890,7 @@ class MainWindow(QMainWindow):
         self.tabs.setCurrentWidget(self.tab_spliter)
 
         def send_or_load():
-            if self.spliter_view is None:
+            if not self._create_spliter_view():
                 return
             if self._spliter_loaded:
                 self._flush_spliter_project_payload()
@@ -3331,7 +3348,7 @@ class MainWindow(QMainWindow):
         return None
 
     def _load_spliter_web(self, force_recreate: bool = False):
-        if self.spliter_view is None:
+        if not self._create_spliter_view():
             return
         if self._spliter_load_requested and not force_recreate and not self._spliter_loaded:
             return
@@ -4081,20 +4098,21 @@ class MainWindow(QMainWindow):
         self.table_round_metrics.setRowCount(0)
         self.table_round_moves.setRowCount(0); self.table_round_moves.setColumnCount(0)
         if len(records) < 2 or base_i is None or other_i is None:
-            self.canvas_round_compare.set_figure(charts.fig_round_compare(None, None))
+            self.canvas_round_compare.set_placeholder("서로 다른 두 회차를 분석하면 비교 그래프를 표시합니다.")
             self.lbl_round_moves.setText("")
             self.lbl_round_status.setText(
                 "저장된 회차가 아직 %d개입니다. 서로 다른 시험(예: 1학기 1차, 1학기 2차)을 분석하면 비교할 수 있습니다. "
                 "분석 전에 '시험 구분'을 확인하세요." % len(records))
             return
         if base_i == other_i:
-            self.canvas_round_compare.set_figure(charts.fig_round_compare(None, None))
+            self.canvas_round_compare.set_placeholder("서로 다른 두 회차를 분석하면 비교 그래프를 표시합니다.")
             self.lbl_round_status.setText("기준과 비교에 서로 다른 회차를 골라 주세요.")
             return
         base, other = records[base_i], records[other_i]
         result = round_history.compare(base, other)
         self.lbl_round_status.setText(f"{base['label']} → {other['label']}")
-        self.canvas_round_compare.set_figure(charts.fig_round_compare(base, other))
+        if not getattr(self, "_startup_building", False):
+            self.canvas_round_compare.set_figure(charts.fig_round_compare(base, other))
 
         def fmt(value, signed=False):
             if value is None:
@@ -4433,9 +4451,9 @@ class MainWindow(QMainWindow):
                 card.value_label.setText("-")
             self.table_monitor.setRowCount(0)
             if hasattr(self, "canvas_monitor"):
-                self.canvas_monitor.set_figure(charts.fig_monitoring_benchmarks([]))
+                self.canvas_monitor.set_placeholder("분석자료를 불러오면 기준 비교 그래프를 표시합니다.")
             if hasattr(self, "canvas_monitor_trend"):
-                self.canvas_monitor_trend.set_figure(charts.fig_round_trend(None))
+                self.canvas_monitor_trend.set_placeholder("분석한 회차의 추이를 표시합니다.")
             return
 
         a_pct = float(self.overall.level_dist_pct.get("A", 0.0))
@@ -9278,7 +9296,7 @@ codex login status</pre>
         # which on a Mac looked like the app closing and starting again on the first click of the
         # 예상정답률 tab. A 1x1 GPU widget present from the start makes the window GPU-drawn from the
         # beginning, so nothing is recreated later.
-        if QWebEngineView is not None and QQuickWidget is not None:
+        if sys.platform == "darwin" and QWebEngineView is not None and QQuickWidget is not None:
             self._gpu_surface_anchor = QQuickWidget()
             self._gpu_surface_anchor.setFixedSize(1, 1)
             self._gpu_surface_anchor.setAttribute(Qt.WA_TransparentForMouseEvents)

@@ -34,7 +34,7 @@ jobs:
         name: Resolve one commit and version for both platforms
         shell: bash
         env:
-          REQUESTED_VERSION: ${{ inputs.candidate_version }}
+          REQUESTED_VERSION: ${{ inputs.candidate_version || (github.event_name == 'push' && github.ref == 'refs/heads/codex/startup-optimized-20261007' && '1.0.6') || '' }}
         run: |
           python3 - <<'PY'
           import os, re, subprocess
@@ -67,6 +67,8 @@ jobs:
     env:
       PYTHONIOENCODING: utf-8
       PYTHONDONTWRITEBYTECODE: '1'
+      GOEDUSPLIT_PRESERVE_BUILD: '1'
+      GOEDUSPLIT_RETAIN_TEST_FILES: '1'
     steps:
       - uses: actions/checkout@v4
         with:
