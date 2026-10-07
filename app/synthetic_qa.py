@@ -33,6 +33,7 @@ REQUIRED_CHECKS = (
     'no JavaScript or application dialog errors', 'core flow attempted no network',
     'native window capture exists',
     'portfolio current analysis preview is visible without automatic saving',
+    'portfolio score column preserves combined scores and round labels',
     'portfolio explicit save removes preview and masks stored identities',
     'portfolio repeated save preserves every existing file',
     'portfolio links two subjects and filters selected student',
@@ -272,6 +273,10 @@ def run(output):
             check('portfolio current analysis preview is visible without automatic saving',
                   window.table_portfolio.rowCount()==5 and window.btn_portfolio_save.isEnabled()
                   and window._portfolio_has_preview and not list(store.glob('*.json')))
+            check('portfolio score column preserves combined scores and round labels',
+                  window.table_portfolio.horizontalHeaderItem(8).text()=='환산점수'
+                  and sorted(float(window.table_portfolio.item(r,8).text()) for r in range(5))==sorted(combined)
+                  and all('1차' in row['term'] for row in window._portfolio_rows_cache))
             window.btn_portfolio_save.click();QTest.qWait(100)
             first_files={path.name:path.read_bytes() for path in store.glob('*.json')}
             stored_text=next(iter(first_files.values())).decode('utf-8')

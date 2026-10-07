@@ -3979,7 +3979,7 @@ class MainWindow(QMainWindow):
 
         self.table_portfolio = QTableWidget(0, 9)
         self.table_portfolio.setHorizontalHeaderLabels([
-            "저장일", "과목", "학기/학년", "반/번호", "이름", "성취도", "9등급", "5등급", "원점수",
+            "저장일", "과목", "학기/학년", "반/번호", "이름", "성취도", "9등급", "5등급", "환산점수",
         ])
         _setup_table(self.table_portfolio, word_wrap=False, horizontal_scroll=True)
         self.table_portfolio.setSortingEnabled(True)
