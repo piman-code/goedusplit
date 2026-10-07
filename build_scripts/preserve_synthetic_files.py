@@ -23,6 +23,8 @@ def enable(root):
 
         def cleanup(self):
             self._finalizer.detach()
+            if Path(self.name).exists():
+                retain(self.name, ignore_errors=self._ignore_cleanup_errors)
 
     tempfile.TemporaryDirectory = RetainedDirectory
 

@@ -35,6 +35,8 @@ class DeferredStartupTests(unittest.TestCase):
             self.assertIsNone(window.canvas_round_compare._canvas)
             self.assertIsNone(window.canvas_monitor._canvas)
             self.assertIsNone(window.canvas_monitor_trend._canvas)
+            self.assertIsNone(window.canvas_perform_area._canvas)
+            self.assertIsNone(window.canvas_perform_scatter._canvas)
             web_view.assert_not_called()
             web_import.assert_not_called()
             self.assertFalse(hasattr(window, "_gpu_surface_anchor"))
