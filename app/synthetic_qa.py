@@ -32,6 +32,13 @@ REQUIRED_CHECKS = (
     'synthetic analysis window capture exists',
     'no JavaScript or application dialog errors', 'core flow attempted no network',
     'native window capture exists',
+    'portfolio current analysis preview is visible without automatic saving',
+    'portfolio explicit save removes preview and masks stored identities',
+    'portfolio repeated save preserves every existing file',
+    'portfolio links two subjects and filters selected student',
+    'portfolio consultation report opens and captures',
+    'portfolio records reload with isolated settings and recover names',
+    'portfolio malformed file is preserved and diagnosed',
 )
 
 
@@ -132,10 +139,10 @@ def run(output):
     for name in ('appdata','matplotlib','cache','tmp','codex'): (state/name).mkdir()
     os.environ.update(MPLCONFIGDIR=str(state/'matplotlib'),XDG_CACHE_HOME=str(state/'cache'),
                       GOEDUSPLIT_CODEX_WORKDIR=str(state/'codex'))
-    from PySide6.QtCore import QPoint, QSettings, Qt, QCoreApplication, QEvent, QObject
+    from PySide6.QtCore import QPoint, QSettings, Qt, QCoreApplication, QEvent, QObject, QTimer
     from PySide6.QtTest import QTest
     from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineUrlRequestInterceptor
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QTextBrowser
     import app.main_window as ui
     from app import __version__
     report={'version':__version__,'frozen':bool(getattr(sys,'frozen',False)),
@@ -259,6 +266,77 @@ def run(output):
             combined=[float(student.final_score) for student in window.exam.students]
             check('performance scores preserve expected combined values',combined==[100.0,50.0,40.0,90.0,0.0]
                   and window.table_perform_students.rowCount()==5 and window.table_perform_areas.rowCount()==1)
+            # Exercise the actual portfolio UI and file roundtrip, not just its directory.
+            store = window._portfolio_store_dir()
+            window.tabs.setCurrentWidget(window.tab_portfolio);QTest.qWait(150)
+            check('portfolio current analysis preview is visible without automatic saving',
+                  window.table_portfolio.rowCount()==5 and window.btn_portfolio_save.isEnabled()
+                  and window._portfolio_has_preview and not list(store.glob('*.json')))
+            window.btn_portfolio_save.click();QTest.qWait(100)
+            first_files={path.name:path.read_bytes() for path in store.glob('*.json')}
+            stored_text=next(iter(first_files.values())).decode('utf-8')
+            check('portfolio explicit save removes preview and masks stored identities',
+                  len(first_files)==1 and window.table_portfolio.rowCount()==5
+                  and not window._portfolio_has_preview
+                  and all(student.name not in stored_text and student.sid not in stored_text
+                          for student in window.exam.students))
+            window.btn_portfolio_save.click();QTest.qWait(100)
+            check('portfolio repeated save preserves every existing file',
+                  len(list(store.glob('*.json')))==2 and window.table_portfolio.rowCount()==10
+                  and all((store/name).read_bytes()==data for name,data in first_files.items()))
+            original_subject=window.exam.subject
+            window.exam.subject='합성영어';window.refresh_portfolio_tab()
+            window.btn_portfolio_save.click();QTest.qWait(100)
+            window.combo_portfolio_student.setCurrentIndex(1)
+            selected_key=window.combo_portfolio_student.currentData()
+            selected=window._portfolio_rows_for_key(selected_key)
+            visible=sum(not window.table_portfolio.isRowHidden(r) for r in range(window.table_portfolio.rowCount()))
+            check('portfolio links two subjects and filters selected student',
+                  len(selected)==3 and visible==3 and {row['subject'] for row in selected}=={original_subject,'합성영어'})
+            captured=[]
+            def capture_report():
+                dialog=application.activeModalWidget()
+                if dialog and dialog.windowTitle()=='학생 포트폴리오 상담 리포트':
+                    browsers=dialog.findChildren(QTextBrowser)
+                    text=browsers[0].toPlainText() if browsers else ''
+                    captured.append(original_subject in text and '합성영어' in text
+                                    and dialog.grab().save(str(output/'portfolio-report.png')))
+                    dialog.accept()
+            QTimer.singleShot(250,capture_report)
+            window.show_selected_student_portfolio()
+            check('portfolio consultation report opens and captures',captured==[True])
+            retained={path.name:path.read_bytes() for path in store.glob('*.json')}
+            current_exam,current_overall=window.exam,window.overall
+            settings.sync()
+            reloaded_settings=QSettings(settings.fileName(),QSettings.IniFormat)
+            reloaded_settings.setFallbacksEnabled(False)
+            original_hash=settings.value('privacy/portfolio_hash_key')
+            window.settings=reloaded_settings;window.exam=None;window.overall=None
+            window.refresh_portfolio_tab()
+            anonymous=window.table_portfolio.rowCount()==15 and all(
+                row['name'].startswith('학생#') for row in window._portfolio_rows_cache)
+            window.exam,window.overall=current_exam,current_overall
+            window.refresh_portfolio_tab()
+            restored=window._portfolio_rows_for_key(selected_key)
+            check('portfolio records reload with isolated settings and recover names',
+                  anonymous and reloaded_settings.value('privacy/portfolio_hash_key')==original_hash
+                  and len(restored)==3 and visible==sum(not window.table_portfolio.isRowHidden(r)
+                      for r in range(window.table_portfolio.rowCount()))
+                  and all(not row['name'].startswith('학생#') for row in restored)
+                  and all((store/name).read_bytes()==data for name,data in retained.items()))
+            malformed=store/'synthetic-malformed.json';malformed.write_text('{}',encoding='utf-8')
+            window.refresh_portfolio_tab()
+            check('portfolio malformed file is preserved and diagnosed',
+                  window.table_portfolio.rowCount()==15 and len(window._portfolio_load_errors)==1
+                  and '읽지 못한 저장 파일 1개' in window.lbl_portfolio_note.text()
+                  and malformed.read_text(encoding='utf-8')=='{}'
+                  and window.grab().save(str(output/'portfolio-window.png')))
+            report['portfolio']={'saved_files':len(retained),'records':15,'selected_student_records':3,
+                                 'subjects':2,'stored_identity':'keyed hashes only','malformed_files_preserved':1}
+            window.exam.subject=original_subject
+            window.combo_portfolio_student.setCurrentIndex(0)
+            window.refresh_portfolio_tab()
+            window.tabs.setCurrentWidget(window.tab_data)
             chart_names=('canvas_score_hist','canvas_score_normal','canvas_level_stack','canvas_level_means',
                          'canvas_class','canvas_pvalue','canvas_discr','canvas_monitor','canvas_monitor_trend',
                          'canvas_perform_area','canvas_perform_scatter')

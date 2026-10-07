@@ -84,6 +84,12 @@ def _build_leftover(dest):
 a.binaries = [entry for entry in a.binaries if not _build_leftover(entry[0])]
 a.datas = [entry for entry in a.datas if not _build_leftover(entry[0])]
 
+# Official windeployqt selects release/debug WebEngine resources separately.
+# Keep release resources, devtools, locales and software OpenGL; exclude only
+# redundant Windows debug variants that have a collected release counterpart.
+from build_scripts.package_assets import release_resources
+a.datas = release_resources(a.datas, sys.platform)
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(

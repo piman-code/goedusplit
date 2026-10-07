@@ -67,6 +67,7 @@ from .calibration import (
     write_calibration_workbook,
 )
 from .perform_loader import load_perform, load_perform_many
+from .portfolio import read_snapshot, snapshot_signature, write_snapshot
 from . import rounds as round_history
 from . import fonts as font_pack
 from .grade_cut_calculator import (
@@ -1642,6 +1643,7 @@ class MainWindow(QMainWindow):
             "subject": self.exam.subject or "(과목 미상)",
             "grade": self.exam.grade,
             "semester": self.exam.semester,
+            "round": self._detect_exam_round()[2] if hasattr(self, "fs_response") else None,
             "n_students": len(self.exam.students),
             "n_items": len(self.exam.items),
             "cuts": {lv: round(float(self.exam.cut_scores.get(lv, 0)), 2) for lv in ["A", "B", "C", "D", "E"]},
@@ -1654,12 +1656,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, "포트폴리오 저장", "먼저 분석을 실행해 주세요.")
             return
         store = self._portfolio_store_dir()
-        safe_subject = re.sub(r"[\\/:*?\"<>|]+", "_", snapshot.get("subject", "subject")).strip() or "subject"
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = store / f"{stamp}_{safe_subject}.json"
         try:
-            path.write_text(json.dumps(snapshot, ensure_ascii=False, indent=2), encoding="utf-8")
-        except OSError as exc:
+            path = write_snapshot(store, snapshot)
+        except (OSError, ValueError) as exc:
             QMessageBox.warning(self, "포트폴리오 저장", f"저장하지 못했습니다.\n{exc}")
             return
         self.refresh_portfolio_tab()
@@ -1670,14 +1669,25 @@ class MainWindow(QMainWindow):
         key = self._portfolio_hash_key()
         identities = self._current_identity_by_hash()
         rows = []
+        records = []
+        self._portfolio_load_errors = []
         for path in sorted(store.glob("*.json"), reverse=True):
             try:
-                data = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                continue
-            saved_at = str(data.get("saved_at", ""))
+                records.append((path, read_snapshot(path)))
+            except (OSError, ValueError, TypeError, OverflowError) as exc:
+                self._portfolio_load_errors.append((path.name, type(exc).__name__))
+        current = self._current_subject_snapshot()
+        self._portfolio_has_preview = bool(current) and not any(
+            snapshot_signature(data) == snapshot_signature(current) for _, data in records
+        )
+        if self._portfolio_has_preview:
+            records.insert(0, (None, current))
+        for path, data in records:
+            saved_at = str(data.get("saved_at", "")) if path else "현재 분석 (미저장)"
             subject = str(data.get("subject", ""))
-            term = " ".join(part for part in [str(data.get("semester", "")), str(data.get("grade", ""))] if part)
+            term = " ".join(str(data.get(field, "")) for field in ("semester", "grade") if data.get(field))
+            if data.get("round") in (1, 2):
+                term += f" · {data['round']}차"
             for student in data.get("students", []):
                 hashed = str(student.get("student_hash", "") or "")
                 if hashed:  # version 2: 학번·이름 없이 해시만 저장
@@ -1696,7 +1706,8 @@ class MainWindow(QMainWindow):
                     "grade9": str(student.get("grade9", "")),
                     "grade5": str(student.get("grade5", "")),
                     "score": float(student.get("final_score", 0) or 0),
-                    "snapshot_path": str(path),
+                    "snapshot_path": str(path) if path else "",
+                    "is_current_preview": path is None,
                 })
         return rows
 
@@ -1785,12 +1796,20 @@ class MainWindow(QMainWindow):
         self.table_portfolio.sortItems(3, Qt.AscendingOrder)  # 1반, 2반 … 10반 (Qt's default would sort by date, descending)
         self._filter_portfolio_table(self.le_portfolio_search.text() if hasattr(self, "le_portfolio_search") else "")
         if hasattr(self, "lbl_portfolio_note"):
-            # The full folder path was long and technical here; the '저장 위치' button shows and opens it.
+            saved_rows = [row for row in rows if not row.get("is_current_preview")]
+            preview = " · 현재 분석 미리보기 (아직 저장되지 않음)" if getattr(self, "_portfolio_has_preview", False) else ""
+            errors = len(getattr(self, "_portfolio_load_errors", []))
+            skipped = f" · 읽지 못한 저장 파일 {errors}개 (원본 보존)" if errors else ""
             self.lbl_portfolio_note.setText(
-                f"저장 과목 {len(set(row['subject'] for row in rows))}개 · 현재 저장 행 {len(rows)}개. "
-                "Data 탭의 '포트폴리오 저장'을 과목마다 누르면 다과목 포트폴리오가 누적됩니다. 저장 폴더는 '저장 위치' 버튼으로 확인합니다."
+                f"저장 과목 {len(set(row['subject'] for row in saved_rows))}개 · 저장 기록 {len(saved_rows)}개"
+                f"{preview}{skipped}. 현재 과목 저장을 누르면 재실행 후에도 기록이 남습니다. "
+                "저장된 익명 기록의 이름은 같은 학생 자료를 분석하면 다시 표시됩니다."
             )
             self.lbl_portfolio_note.setToolTip(f"저장 위치: {self._portfolio_store_dir()}")
+        if hasattr(self, "btn_portfolio_save"):
+            self.btn_portfolio_save.setEnabled(self.exam is not None and self.overall is not None)
+        if previous_student and self.combo_portfolio_student.currentData():
+            self._on_portfolio_student_selected()
 
     def _filter_portfolio_table(self, text: str = ""):
         if not hasattr(self, "table_portfolio"):
@@ -1840,7 +1859,11 @@ class MainWindow(QMainWindow):
         if not hasattr(self, "lbl_portfolio_summary") or not hasattr(self, "table_portfolio"):
             return
         if not visible_rows:
-            self.lbl_portfolio_summary.setText("표시할 포트폴리오 기록이 없습니다.")
+            self.lbl_portfolio_summary.setText(
+                "아직 기록이 없습니다. 입력 파일을 선택해 분석하면 현재 과목이 표시됩니다."
+                if not getattr(self, "_portfolio_rows_cache", []) else
+                "검색 조건에 맞는 기록이 없습니다. 학생·과목 선택과 검색어를 확인해 주세요."
+            )
             return
         subjects = []
         scores = []
@@ -1922,7 +1945,7 @@ class MainWindow(QMainWindow):
         for row in ordered:
             rows_html.append(
                 "<tr>"
-                f"<td>{html.escape(str(row.get('saved_at', ''))[:10])}</td>"
+                f"<td>{html.escape(str(row.get('saved_at', '')) if row.get('is_current_preview') else str(row.get('saved_at', ''))[:10])}</td>"
                 f"<td>{html.escape(str(row.get('subject', '')))}</td>"
                 f"<td>{html.escape(str(row.get('term', '')))}</td>"
                 f"<td>{html.escape(str(row.get('level', '')))}</td>"
@@ -1937,6 +1960,7 @@ class MainWindow(QMainWindow):
             "다음 평가 전까지 한 과목을 어떻게 유지하고, 한 과목을 어떻게 회복할지 작은 실천 계획을 정합니다.",
         ]
         question_html = "".join(f"<li>{q}</li>" for q in questions)
+        preview_note = "현재 분석 미리보기는 아직 저장되지 않았습니다. 현재 과목 저장을 눌러 보관해 주세요." if any(row.get("is_current_preview") for row in rows) else "저장된 과목 기록을 표시합니다."
         return f"""
         <html><head><style>
         body {{ font-family: sans-serif; line-height: 1.55; }}
@@ -1951,7 +1975,7 @@ class MainWindow(QMainWindow):
         th {{ background: #e2e8f0; }}
         </style></head><body>
         <h1>{name} 학생 포트폴리오</h1>
-        <p class="muted">{class_no} · 저장된 과목 기록 {len(ordered)}개</p>
+        <p class="muted">{class_no} · 과목 기록 {len(ordered)}개 · {preview_note}</p>
         <div class="cards">
           <div class="card"><div>과목 수</div><div class="value">{len({row.get('subject') for row in ordered})}</div></div>
           <div class="card"><div>평균 환산점수</div><div class="value">{avg:.1f}</div></div>
@@ -1967,7 +1991,7 @@ class MainWindow(QMainWindow):
         </table>
         <h2>상담 질문</h2>
         <ul>{question_html}</ul>
-        <p class="muted">이 리포트는 저장된 과목 스냅샷을 바탕으로 한 상담 보조 자료입니다. 최신 분석 결과를 반영하려면 각 과목 분석 후 Data 탭에서 포트폴리오 저장을 눌러 주세요.</p>
+        <p class="muted">이 리포트는 현재 분석과 저장한 과목 기록을 바탕으로 한 상담 보조 자료입니다. 각 과목 분석 후 현재 과목 저장을 누르면 여러 과목 기록을 보관할 수 있습니다.</p>
         </body></html>
         """
 
@@ -2011,7 +2035,7 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self,
             "학생 포트폴리오 저장 위치",
-            f"Finder에서 폴더를 열지 못했습니다. 아래 경로를 확인해 주세요.\n\n{store}",
+            f"파일 탐색기에서 폴더를 열지 못했습니다. 아래 경로를 확인해 주세요.\n\n{store}",
         )
 
     def _show_monitoring_dialog(self):
@@ -3920,20 +3944,27 @@ class MainWindow(QMainWindow):
             lambda _: self._filter_portfolio_table(self.le_portfolio_search.text())
         )
         top.addWidget(self.combo_portfolio_subject)
+        layout.addLayout(top)
+        actions = QHBoxLayout()
+        self.btn_portfolio_save = QPushButton("현재 과목 저장")
+        self.btn_portfolio_save.setToolTip("현재 분석을 저장합니다. 기존 기록을 덮어쓰지 않습니다.")
+        self.btn_portfolio_save.clicked.connect(self.save_current_subject_snapshot)
+        actions.addWidget(self.btn_portfolio_save)
         btn_report = QPushButton("상담 리포트 보기")
         btn_report.setToolTip("선택한 학생의 여러 과목 기록을 상담용 리포트로 정리합니다.")
         btn_report.clicked.connect(self.show_selected_student_portfolio)
-        top.addWidget(btn_report)
+        actions.addWidget(btn_report)
         btn_reload = QPushButton("저장자료 불러오기")
         btn_reload.clicked.connect(self.refresh_portfolio_tab)
-        top.addWidget(btn_reload)
+        actions.addWidget(btn_reload)
         btn_location = QPushButton("저장 위치")
         btn_location.clicked.connect(self.show_portfolio_store_location)
-        top.addWidget(btn_location)
-        layout.addLayout(top)
+        actions.addWidget(btn_location)
+        actions.addStretch(1)
+        layout.addLayout(actions)
 
         self.lbl_portfolio_note = QLabel(
-            "Data 탭의 '포트폴리오 저장'을 누르면 과목별 학생 결과가 이곳에 쌓입니다. "
+            "분석하면 현재 과목이 미리보기로 표시됩니다. 현재 과목 저장을 누르면 기록이 쌓입니다. "
             "이후 학생 선택에서 한 학생을 고르면 여러 과목 흐름이 자동으로 정리됩니다. "
             "상담 모드에서는 검색 대상 외 학생 이름과 반/번호가 가려집니다."
         )

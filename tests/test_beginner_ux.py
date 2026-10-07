@@ -195,6 +195,24 @@ class WindowTests(unittest.TestCase):
         self.assertNotIn("appdata", note.text())
         self.assertIn("appdata", note.toolTip())
 
+    def test_analysis_previews_portfolio_without_writing_student_records(self):
+        self.assertFalse(self.window.btn_portfolio_save.isEnabled())
+        self.analyze()
+        self.assertTrue(self.window.btn_portfolio_save.isEnabled())
+        self.assertEqual(self.window.table_portfolio.rowCount(), len(self.window.exam.students))
+        self.assertTrue(self.window._portfolio_has_preview)
+        self.assertEqual(list(self.window._portfolio_store_dir().glob("*.json")), [])
+
+    def test_bad_portfolio_file_does_not_hide_current_analysis_or_change_original(self):
+        store = self.window._portfolio_store_dir()
+        bad = store / "synthetic-malformed.json"
+        bad.write_text('{"students": [3]}', encoding="utf-8")
+        before = bad.read_bytes()
+        self.analyze()
+        self.assertEqual(self.window.table_portfolio.rowCount(), len(self.window.exam.students))
+        self.assertEqual(bad.read_bytes(), before)
+        self.assertIn("읽지 못한 저장 파일 1개", self.window.lbl_portfolio_note.text())
+
     def test_large_areas_fold_give_their_room_away_and_remember_it(self):
         self.analyze()
         self.window.tabs.setCurrentWidget(self.window.tab_data)
