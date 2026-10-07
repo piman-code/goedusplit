@@ -32,6 +32,7 @@ REQUIRED_CHECKS = (
     'synthetic analysis window capture exists',
     'no JavaScript or application dialog errors', 'core flow attempted no network',
     'native window capture exists',
+    'analysis creates no unexpected chart windows',
     'portfolio current analysis preview is visible without automatic saving',
     'portfolio score column preserves combined scores and round labels',
     'portfolio explicit save removes preview and masks stored identities',
@@ -201,6 +202,13 @@ def run(output):
         if not condition: raise AssertionError(name)
     window=None
     destroyed_surfaces=[]
+    unexpected_chart_windows=[]
+    class ChartWindowWatch(QObject):
+        def eventFilter(self, obj, event):
+            if event.type()==QEvent.Show and type(obj).__name__=="_MarginKeepingCanvas" and obj.isWindow():
+                unexpected_chart_windows.append({"width":obj.width(),"height":obj.height()})
+            return False
+    chart_watcher=ChartWindowWatch();application.installEventFilter(chart_watcher)
     class SurfaceWatch(QObject):
         def eventFilter(self, obj, event):
             if event.type() == QEvent.PlatformSurface and event.surfaceEventType().name == 'SurfaceAboutToBeDestroyed':
@@ -367,6 +375,8 @@ def run(output):
             window.canvas_round_compare._canvas.figure.savefig(charts_dir/'round-comparison.png')
             report['analysis']={'students':5,'classes':2,'items':2,'combined_scores_first_round':combined,
                                 'chart_files':chart_files+['round-comparison.png'],'rounds':len(window._round_records)}
+            report['unexpected_chart_windows']=unexpected_chart_windows
+            check('analysis creates no unexpected chart windows',not unexpected_chart_windows)
             report['native_window'].update(final_id=int(window.winId()),destroyed_before_close=list(destroyed_surfaces))
             check('no JavaScript or application dialog errors',not report['errors'])
             check('core flow attempted no network',not blocked)
@@ -376,6 +386,7 @@ def run(output):
             report['errors'].append(type(error).__name__+': '+str(error));report['status']='failed'
             if window: window.grab().save(str(output/'candidate-failure.png'))
         finally:
+            application.removeEventFilter(chart_watcher)
             if window:
                 window.close();QTest.qWait(1300);window.deleteLater()
                 QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete);application.processEvents()

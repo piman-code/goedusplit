@@ -431,7 +431,9 @@ class CanvasHolder(QWidget):
         from .chart_canvas import _MarginKeepingCanvas
         self._placeholder.hide()
         if self._canvas is not None:
-            self._layout.removeWidget(self._canvas); self._canvas.setParent(None); self._canvas.deleteLater()
+            self._canvas.hide()
+            self._layout.removeWidget(self._canvas)
+            self._canvas.deleteLater()  # Keep its parent until deferred deletion; never create a floating chart.
         self._canvas = _MarginKeepingCanvas(fig)
         self._canvas.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         # 마우스 휠로 줌, 더블클릭으로 원상 복귀
@@ -442,8 +444,8 @@ class CanvasHolder(QWidget):
 
     def set_placeholder(self, text):
         if self._canvas is not None:
+            self._canvas.hide()
             self._layout.removeWidget(self._canvas)
-            self._canvas.setParent(None)
             self._canvas.deleteLater()
             self._canvas = None
         self._placeholder.setText(text)
@@ -1967,8 +1969,8 @@ class MainWindow(QMainWindow):
         h1 {{ font-size: 22px; margin-bottom: 4px; }}
         h2 {{ font-size: 16px; margin-top: 18px; }}
         .muted {{ color: #64748b; }}
-        .cards {{ display: flex; gap: 10px; flex-wrap: wrap; }}
-        .card {{ border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px; min-width: 140px; }}
+        .cards {{ width: 100%; margin-top: 8px; }}
+        .card {{ border: 1px solid #cbd5e1; padding: 8px; width: 25%; vertical-align: top; }}
         .value {{ font-size: 20px; font-weight: 700; }}
         table {{ border-collapse: collapse; width: 100%; margin-top: 8px; }}
         th, td {{ border: 1px solid #cbd5e1; padding: 6px 8px; }}
@@ -1976,12 +1978,12 @@ class MainWindow(QMainWindow):
         </style></head><body>
         <h1>{name} 학생 포트폴리오</h1>
         <p class="muted">{class_no} · 과목 기록 {len(ordered)}개 · {preview_note}</p>
-        <div class="cards">
-          <div class="card"><div>과목 수</div><div class="value">{len({row.get('subject') for row in ordered})}</div></div>
-          <div class="card"><div>평균 환산점수</div><div class="value">{avg:.1f}</div></div>
-          <div class="card"><div>가장 높은 과목</div><div class="value">{html.escape(str(best.get('subject', '-')))}</div><div>{float(best.get('score', 0.0)):.1f}점</div></div>
-          <div class="card"><div>점검 과목</div><div class="value">{html.escape(str(low.get('subject', '-')))}</div><div>{float(low.get('score', 0.0)):.1f}점</div></div>
-        </div>
+        <table class="cards"><tr>
+          <td class="card"><div>과목 수</div><div class="value">{len({row.get('subject') for row in ordered})}</div></td>
+          <td class="card"><div>평균 환산점수</div><div class="value">{avg:.1f}</div></td>
+          <td class="card"><div>가장 높은 과목</div><div class="value">{html.escape(str(best.get('subject', '-')))}</div><div>{float(best.get('score', 0.0)):.1f}점</div></td>
+          <td class="card"><div>점검 과목</div><div class="value">{html.escape(str(low.get('subject', '-')))}</div><div>{float(low.get('score', 0.0)):.1f}점</div></td>
+        </tr></table>
         <h2>성취도 흐름</h2>
         <p>{level_text or '-'}</p>
         <h2>과목별 기록</h2>

@@ -58,6 +58,27 @@ class FrozenColumnSortTests(unittest.TestCase):
         install_frozen_columns(table, frozen_count=1)   # used to re-sort by Qt's default, descending
         self.assertEqual([table.item(r, 0).text() for r in range(3)], ["문1", "문2", "문3"])
 
+    def test_replaced_chart_never_becomes_an_independent_window(self):
+        from matplotlib.figure import Figure
+        from app.main_window import CanvasHolder
+        holder = CanvasHolder()
+        holder.set_figure(Figure(figsize=(8.2, 3.8)))
+        old = holder._canvas
+        holder.show()
+        self.app.processEvents()
+        holder.set_figure(Figure(figsize=(8.2, 3.8)))
+        self.assertFalse(old.isWindow())
+        self.assertFalse(old.isVisible())
+        self.assertIs(old.parentWidget(), holder)
+        latest = holder._canvas
+        holder.set_placeholder("합성 검사 완료")
+        self.assertFalse(latest.isWindow())
+        self.assertFalse(latest.isVisible())
+        self.assertIs(latest.parentWidget(), holder)
+        QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
+        holder.close()
+        holder.deleteLater()
+
 
 class ChartMarginTests(unittest.TestCase):
     @classmethod
