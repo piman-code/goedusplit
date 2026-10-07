@@ -6,6 +6,7 @@ is used; native UI, WebEngine and real project downloads run in an isolated root
 from __future__ import annotations
 import argparse
 import copy
+import faulthandler
 import hashlib
 import json
 import os
@@ -136,6 +137,7 @@ def analysis_fixtures(inputs):
 
 
 def run(output):
+    faulthandler.enable(all_threads=True)  # Record native-crash Python stacks in CI stderr.
     # This is the first application import, after isolated paths have been selected.
     state=output/'state';state.mkdir()
     for name in ('appdata','matplotlib','cache','tmp','codex'): (state/name).mkdir()
@@ -205,16 +207,22 @@ def run(output):
     unexpected_chart_windows=[]
     class ChartWindowWatch(QObject):
         def eventFilter(self, obj, event):
-            if event.type()==QEvent.Show and type(obj).__name__=="_MarginKeepingCanvas" and obj.isWindow():
+            if event.type()==QEvent.Show and obj.isWindow():
                 unexpected_chart_windows.append({"width":obj.width(),"height":obj.height()})
             return False
-    chart_watcher=ChartWindowWatch();application.installEventFilter(chart_watcher)
+    chart_watcher=ChartWindowWatch()
+    original_set_figure=ui.CanvasHolder.set_figure
+    def watched_set_figure(holder, figure):
+        original_set_figure(holder, figure)
+        # Watch only initialized chart widgets, never QtWebEngine internals.
+        holder._canvas.installEventFilter(chart_watcher)
     class SurfaceWatch(QObject):
         def eventFilter(self, obj, event):
             if event.type() == QEvent.PlatformSurface and event.surfaceEventType().name == 'SurfaceAboutToBeDestroyed':
                 destroyed_surfaces.append(obj.surfaceType().name)
             return False
-    with patch.object(tempfile,'tempdir',str(state/'tmp')), \
+    with patch.object(ui.CanvasHolder,'set_figure',new=watched_set_figure), \
+         patch.object(tempfile,'tempdir',str(state/'tmp')), \
          patch.object(ui,'QSettings',return_value=settings), \
          patch.object(ui.MainWindow,'_ai_material_root_dir',lambda _self:state/'appdata'), \
          patch.object(ui,'QWebEnginePage',side_effect=lambda parent:Page(profile,parent)), \
@@ -386,7 +394,6 @@ def run(output):
             report['errors'].append(type(error).__name__+': '+str(error));report['status']='failed'
             if window: window.grab().save(str(output/'candidate-failure.png'))
         finally:
-            application.removeEventFilter(chart_watcher)
             if window:
                 window.close();QTest.qWait(1300);window.deleteLater()
                 QCoreApplication.sendPostedEvents(None,QEvent.DeferredDelete);application.processEvents()
