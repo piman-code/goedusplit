@@ -42,6 +42,7 @@ class DeferredStartupTests(unittest.TestCase):
             self.assertFalse(hasattr(window, "_gpu_surface_anchor"))
             window.close()
 
+    @unittest.skipUnless(sys.platform == "win32", "Windows on-demand WebEngine; Mac retains eager GPU setup")
     def test_first_calculator_use_creates_once_and_keeps_the_page(self):
         with patch.object(ui.sys, "platform", "win32"):
             window = ui.MainWindow()

@@ -9658,7 +9658,7 @@ codex login status</pre>
             self.table_perform_areas.setRowCount(0)
             self.table_perform_students.setRowCount(0)
             self.canvas_perform_area.set_placeholder("수행평가 자료를 불러오면 영역별 그래프를 표시합니다.")
-            self.canvas_perform_scatter.set_placeholder("지필·수행평가 자료를 불러오면 비교 그래프를 표시합니다.")
+            self.canvas_perform_scatter.set_placeholder("정기시험·수행평가 자료를 불러오면 비교 그래프를 표시합니다.")
             if hasattr(self, "lbl_perform_tab_note"):
                 self.lbl_perform_tab_note.setText(
                     "수행평가 파일을 지정하고 ‘수행평가도 포함하여 분석합니다’를 체크한 뒤 분석을 실행하면 "
