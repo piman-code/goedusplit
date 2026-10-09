@@ -224,6 +224,15 @@ class WindowTests(unittest.TestCase):
         self.assertTrue(self.window._portfolio_has_preview)
         self.assertEqual(list(self.window._portfolio_store_dir().glob("*.json")), [])
 
+    def test_portfolio_save_message_shows_the_file_name_not_the_folder(self):
+        self.analyze()
+        self.window.save_current_subject_snapshot()
+        saved = list(self.window._portfolio_store_dir().glob("*.json"))
+        message = self.window.statusBar().currentMessage()
+        self.assertEqual(len(saved), 1)
+        self.assertIn(saved[0].name, message)
+        self.assertNotIn("appdata", message)
+
     def test_bad_portfolio_file_does_not_hide_current_analysis_or_change_original(self):
         store = self.window._portfolio_store_dir()
         bad = store / "synthetic-malformed.json"

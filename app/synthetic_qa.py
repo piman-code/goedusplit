@@ -345,7 +345,7 @@ def run(output):
                   and all(not row['name'].startswith('학생#') for row in restored)
                   and all((store/name).read_bytes()==data for name,data in retained.items()))
             malformed=store/'synthetic-malformed.json';malformed.write_text('{}',encoding='utf-8')
-            window.refresh_portfolio_tab()
+            window.refresh_portfolio_tab();QTest.qWait(50)  # let the longer note re-layout before capture
             check('portfolio malformed file is preserved and diagnosed',
                   window.table_portfolio.rowCount()==15 and len(window._portfolio_load_errors)==1
                   and '읽지 못한 저장 파일 1개' in window.lbl_portfolio_note.text()

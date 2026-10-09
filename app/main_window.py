@@ -1664,7 +1664,8 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "포트폴리오 저장", f"저장하지 못했습니다.\n{exc}")
             return
         self.refresh_portfolio_tab()
-        self.statusBar().showMessage(f"포트폴리오 스냅샷 저장 완료 · {path}", 7000)
+        # The full path did not fit the status bar; '저장 위치' shows the folder.
+        self.statusBar().showMessage(f"포트폴리오 저장 완료 · {path.name}", 7000)
 
     def _load_portfolio_rows(self) -> list[dict]:
         store = self._portfolio_store_dir()
