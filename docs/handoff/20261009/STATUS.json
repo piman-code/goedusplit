@@ -1,0 +1,204 @@
+{
+  "recorded_date_kst": "2026-10-09",
+  "candidate_source_commit": "943115609854894bc7be8b5b6ec1edc6fef29095",
+  "branch": "codex/startup-optimized-20261007",
+  "version": "1.0.6",
+  "status": "candidate-verified-handoff-ready-school-acceptance-pending",
+  "ci": {
+    "run_id": 37599918029,
+    "jobs": {
+      "source": "success",
+      "windows": "success",
+      "macos": "success",
+      "pair": "success"
+    },
+    "windows_python": {
+      "total": 267,
+      "passed": 256,
+      "skipped": 11
+    },
+    "macos_python": {
+      "total": 267,
+      "passed": 258,
+      "skipped": 9
+    },
+    "calculator_passed_each_platform": 43,
+    "macos_frozen_platform": "Cocoa arm64 hosted runner",
+    "macos_frozen_checks": {
+      "settings are explicit isolated INI": true,
+      "portfolio is isolated": true,
+      "WebEngine is off the record": true,
+      "first calculator activation preserves the native window": true,
+      "bundled calculator renders": true,
+      "synthetic file loads and preserves fractional business values": true,
+      "real JSON download preserves business values": true,
+      "downloaded work reopens": true,
+      "cancelled save creates no extra JSON": true,
+      "tab switch retains loaded work": true,
+      "tab switches preserve the native window": true,
+      "analysis tables contain both synthetic classes": true,
+      "performance scores preserve expected combined values": true,
+      "portfolio current analysis preview is visible without automatic saving": true,
+      "portfolio score column preserves combined scores and round labels": true,
+      "portfolio explicit save removes preview and masks stored identities": true,
+      "portfolio repeated save preserves every existing file": true,
+      "portfolio links two subjects and filters selected student": true,
+      "portfolio consultation report opens and captures": true,
+      "portfolio records reload with isolated settings and recover names": true,
+      "portfolio malformed file is preserved and diagnosed": true,
+      "analysis and performance charts render": true,
+      "semester and round are recognized from synthetic filenames": true,
+      "synthetic analysis window capture exists": true,
+      "second round analysis and comparison render": true,
+      "analysis creates no unexpected chart windows": true,
+      "no JavaScript or application dialog errors": true,
+      "core flow attempted no network": true,
+      "native window capture exists": true
+    },
+    "macos_artifact_id": 11473932968,
+    "windows_artifact_id": 11473485547,
+    "pair_artifact_id": 11474460585,
+    "artifact_expiry_utc": "2026-10-21",
+    "artifacts_unexpired_verified_on": "2026-10-09"
+  },
+  "local_windows": {
+    "status": "passed",
+    "checks": {
+      "settings are explicit isolated INI": true,
+      "portfolio is isolated": true,
+      "WebEngine is off the record": true,
+      "first calculator activation preserves the native window": true,
+      "bundled calculator renders": true,
+      "synthetic file loads and preserves fractional business values": true,
+      "real JSON download preserves business values": true,
+      "downloaded work reopens": true,
+      "cancelled save creates no extra JSON": true,
+      "tab switch retains loaded work": true,
+      "tab switches preserve the native window": true,
+      "analysis tables contain both synthetic classes": true,
+      "performance scores preserve expected combined values": true,
+      "portfolio current analysis preview is visible without automatic saving": true,
+      "portfolio score column preserves combined scores and round labels": true,
+      "portfolio explicit save removes preview and masks stored identities": true,
+      "portfolio repeated save preserves every existing file": true,
+      "portfolio links two subjects and filters selected student": true,
+      "portfolio consultation report opens and captures": true,
+      "portfolio records reload with isolated settings and recover names": true,
+      "portfolio malformed file is preserved and diagnosed": true,
+      "analysis and performance charts render": true,
+      "semester and round are recognized from synthetic filenames": true,
+      "synthetic analysis window capture exists": true,
+      "second round analysis and comparison render": true,
+      "analysis creates no unexpected chart windows": true,
+      "no JavaScript or application dialog errors": true,
+      "core flow attempted no network": true,
+      "native window capture exists": true
+    },
+    "analysis": {
+      "students": 5,
+      "classes": 2,
+      "items": 2,
+      "combined_scores_first_round": [
+        100.0,
+        50.0,
+        40.0,
+        90.0,
+        0.0
+      ],
+      "chart_files": [
+        "canvas_score_hist.png",
+        "canvas_score_normal.png",
+        "canvas_level_stack.png",
+        "canvas_level_means.png",
+        "canvas_class.png",
+        "canvas_pvalue.png",
+        "canvas_discr.png",
+        "canvas_monitor.png",
+        "canvas_monitor_trend.png",
+        "canvas_perform_area.png",
+        "canvas_perform_scatter.png",
+        "round-comparison.png"
+      ],
+      "rounds": 2
+    },
+    "portfolio": {
+      "saved_files": 3,
+      "records": 15,
+      "selected_student_records": 3,
+      "subjects": 2,
+      "stored_identity": "keyed hashes only",
+      "malformed_files_preserved": 1
+    },
+    "native_window": {
+      "platform": "windows",
+      "initial_id": 8390872,
+      "initial_surface": "Direct3DSurface",
+      "final_id": 8390872,
+      "destroyed_before_close": []
+    },
+    "errors": [],
+    "baseline_exit_code": 0,
+    "qt_scale_runs": [
+      {
+        "qt_scale_factor": "1.25",
+        "status": "passed-automated-synthetic-only",
+        "exit_code": 0,
+        "checks_passed": 29,
+        "chart_images": 12,
+        "duration_seconds": 35.284,
+        "verified_files": 2453,
+        "errors": []
+      },
+      {
+        "qt_scale_factor": "1.5",
+        "status": "passed-automated-synthetic-only",
+        "exit_code": 0,
+        "checks_passed": 29,
+        "chart_images": 12,
+        "duration_seconds": 31.193,
+        "verified_files": 2453,
+        "errors": []
+      }
+    ],
+    "scale_scope": "child-process Qt simulation, not actual OS display acceptance",
+    "graphics_stderr": "GLES3 context failure / GLES2 fallback / shared context error retained despite passing QA",
+    "incomplete_attempt": "current-qt125-01: no completion record; cause not established; preserved"
+  },
+  "size": {
+    "baseline_installed_bytes": 617144678,
+    "candidate_installed_bytes": 536250046,
+    "saved_bytes": 80894632,
+    "reduction_percent": 13.11,
+    "windows_zip_bytes": 221464754,
+    "mac_dmg_bytes": 235923549
+  },
+  "preservation": {
+    "previous_install_files_verified": 12280,
+    "old_a7_executable_preserved": true,
+    "student_data_used": false,
+    "existing_settings_preserved": true
+  },
+  "remaining": {
+    "school_pc_available_user_reported": true,
+    "school_pc_actual_validation": "not performed",
+    "teacher_acceptance": "not performed",
+    "actual_mac_9431156": "not performed",
+    "same_file_mac_windows_mac": "not performed: isolated external JSON input missing",
+    "excel_hwp_real_file": "not performed; COM registration only",
+    "actual_os_scale_theme_offline": "not performed",
+    "windows_authenticode": "NotSigned",
+    "mac_signing_notarization": "not completed",
+    "installer_recovery_public_distribution": "not performed"
+  },
+  "windows_helper": {
+    "manifest_file": "WINDOWS_FILES.json.gz",
+    "manifest_sha256": "969b6b748c5bcc025ca5ea431cc4841364afcc6c96f8e7b65478ad76786aef07",
+    "validation": "new helper actual run result recorded separately before upload",
+    "original_helper_ps7": "passed at Qt 1.25 and 1.5",
+    "original_helper_windows_ps51": "syntax only",
+    "deletes_existing_files": false,
+    "normal_launch": false,
+    "setup_execution": false
+  },
+  "evidence_scope": "Sanitized summary extracted from original local/CI records. Original local logs/captures remain on Windows; CI evidence remains in referenced artifacts. No local settings, keys, raw user paths or student files uploaded."
+}

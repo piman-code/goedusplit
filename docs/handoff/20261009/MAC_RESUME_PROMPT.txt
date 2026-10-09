@@ -1,0 +1,9 @@
+goedusplit의 현재 작업을 맥북에서 이어가줘. GitHub piman-code/goedusplit의 codex/startup-optimized-20261007 최신 인계 문서를 새 작업 폴더에서 받아 docs/MAC_HANDOFF_20261009.md와 docs/handoff/20261009/STATUS.json·CANDIDATE_LOCK.json을 먼저 읽어줘. 현재 체크아웃·기존 변경·앱·설정·학생자료·기존 결과를 모두 보존해. 삭제·정리·설치·보안정책 변경·공개 배포·학생자료 사용은 하지 말고 합성자료만 사용해.
+
+문서 커밋과 앱 후보 커밋을 구분해. 실제 검증된 후보는 1.0.6 / 943115609854894bc7be8b5b6ec1edc6fef29095야. CI 37599918029의 Mac artifact 11473932968을 인증된 GitHub 도구로 받아 새 폴더에 검증해. 바깥 artifact ZIP SHA256은 803c2dee9ff078590ab27d3c119fe6f6f16212fb81c8fdcbc7629898dca90daa, DMG는 b1b6366318c2514e060cac7640af18477ad881d0438ab5b1e723fd230aee52ed, 실행 파일은 5aeb8a5102960471ec245ece1c8f3237d37f12eea6247a06e407739b7f7ee548이야. 만료되거나 해시가 다르면 다른 후보를 쓰지 말고 정확한 진단을 남겨.
+
+Mac OS·모델·CPU 아키텍처, embedded BUILD_SOURCE, run.py와 app/synthetic_qa.py의 격리를 확인한 뒤 --synthetic-qa <아직 없는 새 절대 결과 경로>만 실행해. DMG는 필요할 때 읽기 전용으로 열고 Applications에 설치하거나 일반 실행하지 마. Gatekeeper 차단은 우회하지 말고 정확한 문구·단계·종료 코드·로그를 남겨. stdout/stderr·QA_REPORT·NATIVE_CRASH·캡처를 보존하고 29개 검사·그래프 12개·포트폴리오·native window를 실제 확인해. hosted Cocoa arm64 CI 성공과 사용자 Mac 성공을 구분해.
+
+docs/PC_VALIDATION_MAC_20261002.md와 tests/fixtures/T03-20261002-Mac-first/README.md·T03_MANIFEST.json·WINDOWS_RESUME_PROMPT.txt도 읽어 기존 실제 Mac 저장 파일을 보존해. 고정 a7에는 기존 JSON 입력 기능이 없고 현재 격리 QA도 외부 JSON 입력을 받지 않는다는 제한을 지켜. 설정 격리가 없으면 일반 실행하지 말고 동일 파일의 Windows 재저장·Mac 재열기는 미실행으로 기록해. 기기별로 독립 생성한 자료 성공을 같은 파일 왕복 성공으로 표현하지 마.
+
+기본 실제 Mac 검사 후 가능한 개발 후속으로, 기존 설정·키·저장 동작을 보존하는 격리 대화형 실행과 외부 합성 JSON 입력·저장 경로를 새 작업 경로에서 구현하고 검증해. 삭제하는 설치·빌드·테스트 명령은 그대로 실행하지 말고 원본·기존 산출물을 보존하는 경로를 사용해. 필요한 Qt/SDK 등이 없으면 새로 설치하지 말고 기존 GitHub CI 활용과 차단 진단을 정리해. 자동 검사·실제 동일 파일 왕복·학교 교사 인수·서명/공증을 각각 구분해서 보고해. 학교 Windows PC는 사용 가능하나 아직 인수 검사 결과가 없으므로 필요한 Windows 후속 프롬프트를 제공해.

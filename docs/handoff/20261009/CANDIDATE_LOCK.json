@@ -1,0 +1,45 @@
+{
+  "version": "1.0.6",
+  "source_commit": "943115609854894bc7be8b5b6ec1edc6fef29095",
+  "windows": {
+    "zip": "Goedu-Split-1.0.6-windows.zip",
+    "zip_sha256": "f9cb228af774b53fa6ccb73a64f5a9b55a6c15fc1b551b253ded9adad6f6aaaa",
+    "exe_sha256": "a7c157823a648433d9d420fdd73216b8777fe7066a5bf37b3484e3758f3b9701"
+  },
+  "macos": {
+    "dmg": "Goedu-Split-1.0.6-mac.dmg",
+    "dmg_sha256": "b1b6366318c2514e060cac7640af18477ad881d0438ab5b1e723fd230aee52ed",
+    "exe_sha256": "5aeb8a5102960471ec245ece1c8f3237d37f12eea6247a06e407739b7f7ee548"
+  },
+  "checks_required": [
+    "settings are explicit isolated INI",
+    "portfolio is isolated",
+    "WebEngine is off the record",
+    "first calculator activation preserves the native window",
+    "bundled calculator renders",
+    "synthetic file loads and preserves fractional business values",
+    "real JSON download preserves business values",
+    "downloaded work reopens",
+    "cancelled save creates no extra JSON",
+    "tab switch retains loaded work",
+    "tab switches preserve the native window",
+    "analysis tables contain both synthetic classes",
+    "performance scores preserve expected combined values",
+    "portfolio current analysis preview is visible without automatic saving",
+    "portfolio score column preserves combined scores and round labels",
+    "portfolio explicit save removes preview and masks stored identities",
+    "portfolio repeated save preserves every existing file",
+    "portfolio links two subjects and filters selected student",
+    "portfolio consultation report opens and captures",
+    "portfolio records reload with isolated settings and recover names",
+    "portfolio malformed file is preserved and diagnosed",
+    "analysis and performance charts render",
+    "semester and round are recognized from synthetic filenames",
+    "synthetic analysis window capture exists",
+    "second round analysis and comparison render",
+    "analysis creates no unexpected chart windows",
+    "no JavaScript or application dialog errors",
+    "core flow attempted no network",
+    "native window capture exists"
+  ]
+}

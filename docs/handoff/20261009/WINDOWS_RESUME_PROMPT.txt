@@ -1,0 +1,7 @@
+goedusplit 학교 Windows 검증을 이어가줘. codex/startup-optimized-20261007의 docs/MAC_HANDOFF_20261009.md와 docs/handoff/20261009/STATUS.json·CANDIDATE_LOCK.json·RUN_WINDOWS_CHECK.ps1을 먼저 읽어줘. 기존 앱·설정·학생자료·바로가기·파일을 모두 보존하고 합성자료만 사용해. 설치·보안정책 변경·공개 배포·파일 삭제는 하지 마.
+
+CI 37599918029의 Windows artifact 11473485547을 받아 고정 943115609854894bc7be8b5b6ec1edc6fef29095 후보를 확인해. 바깥 artifact ZIP SHA256은 ad9e05c78170defcab5ee762f2684d657e9f307090dfa02c07677c3771dca83c야. artifact 내부 Goedu-Split-1.0.6-windows.zip을 새 검사 도구 폴더에 놓고, 같은 폴더에 CANDIDATE_LOCK.json·WINDOWS_FILES.json.gz·RUN_WINDOWS_CHECK.ps1을 받아. ZIP SHA256은 f9cb228af774b53fa6ccb73a64f5a9b55a6c15fc1b551b253ded9adad6f6aaaa이고 EXE는 a7c157823a648433d9d420fdd73216b8777fe7066a5bf37b3484e3758f3b9701이야.
+
+스크립트를 검토하고 powershell.exe -NoProfile -File .\RUN_WINDOWS_CHECK.ps1 -OutputRoot <아직 없는 새 절대 결과 경로> -Context School로 격리 합성 검사만 실행해. 정상 실행이나 EXE 더블클릭은 금지야. 정책 차단 시 우회하지 말고 오류 문구·단계·코드·장치 환경을 기록해. 실제 RUN_RESULT·QA_REPORT·stderr·캡처를 확인하고 29개 검사·그래프 12개·포트폴리오를 기록해. QtScale은 프로세스 모의 배율이며 실제 OS 배율 검증이 아니야. 학교라는 표시는 실행자 선언이므로 학교 PC 환경을 따로 기록해.
+
+자동 합성 검사와 교사 인수·Excel/HWP 실제 호환성·서명/공증을 구분해. 고정 a7에는 JSON 입력 기능이 없고 최신 격리 QA도 기존 외부 JSON 입력을 받지 않아. 설정 격리가 확보되기 전에는 일반 실행하지 말고 실제 Mac 저장 파일의 Windows 재저장·Mac 재열기를 미실행으로 남겨. 독립 생성 자료 성공을 같은 파일 왕복 성공으로 표현하지 마. 정확한 결과와 다음 선행 조건을 문서로 남겨줘.
