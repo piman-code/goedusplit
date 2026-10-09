@@ -2159,6 +2159,10 @@ class MainWindow(QMainWindow):
                     best_score = max(best_score, w)
             return best_score
 
+        # 반 표시는 "(1-1)" 말고도 전각 괄호·밑줄·en dash·"(1반)"으로 적힐 수 있어 함께 떼어 낸다.
+        class_label = re.compile(r"[(（\[［]\s*\d+\s*(?:[-–—]\s*\d+|반)\s*[)）\]］]|_\s*\d+\s*[-–—]\s*\d+(?=\.xlsx$)", re.IGNORECASE)
+        trailing_label = re.compile(r"\s*(?:[(（\[［][^()（）\[\]［］]*[)）\]］]|_[^_]*)\s*$")
+
         # 카테고리별 후보 + 점수
         cands = {cat: [] for cat in rules}
         for p in files:
@@ -2174,9 +2178,15 @@ class MainWindow(QMainWindow):
         # 카테고리 → 점수 내림차순으로 한 번에 처리
         order = ["response", "iteminfo", "cuts", "perform", "grade5_report"]
         # 첫 패스: 카테고리별 최고 점수 1개씩 잠정 배정
+        def ranked(cat: str):
+            # 같은 점수면 반 표시를 알아볼 수 있는 정오표를 먼저, 그다음 최근 파일을 고른다.
+            if cat == "response":
+                return sorted(cands[cat], key=lambda c: (c[0], bool(class_label.search(c[2].name)), c[1]), reverse=True)
+            return sorted(cands[cat], reverse=True)
+
         prelim = {}
         for cat in order:
-            lst = sorted(cands[cat], reverse=True)
+            lst = ranked(cat)
             for s, mt, p in lst:
                 prelim[cat] = (s, mt, p)
                 break
@@ -2186,7 +2196,7 @@ class MainWindow(QMainWindow):
         for cat, (s, mt, p) in cat_by_score:
             if p in used:
                 # 다음 후보 시도
-                lst = sorted(cands[cat], reverse=True)
+                lst = ranked(cat)
                 for s2, mt2, p2 in lst:
                     if p2 not in used:
                         chosen[cat] = p2; used.add(p2); break
@@ -2215,7 +2225,12 @@ class MainWindow(QMainWindow):
         # 반별로 나뉜 정오표·수행평가 파일("…(1-1)", "…(1-2)")은 같은 시험의 한 묶음으로 함께 채운다.
         # 이름에서 반 표기만 빼고 같으면 한 묶음이라 1차/2차는 섞이지 않는다.
         def group_key(path: Path) -> str:
-            return _norm(re.sub(r"\(\s*\d+\s*-\s*\d+\s*\)", "", path.name))
+            return _norm(class_label.sub("", path.name))
+
+        def exam_key(path: Path) -> str:
+            # 마지막 괄호/밑줄 표기(반 표시 후보)와 차수를 뺀 시험 이름. 인식하지 못한 반 표시도 같은 시험으로 본다.
+            return re.sub(r"\d+\s*차|\d+\s*학기|\d{4}\s*학년도", "", _norm(trailing_label.sub("", path.stem)))
+
         groups: dict[str, list[Path]] = {}
         for cat in ("response", "perform"):
             if cat in chosen:
@@ -2223,6 +2238,15 @@ class MainWindow(QMainWindow):
                 groups[cat] = sorted((p for _, _, p in cands[cat] if group_key(p) == key and p not in used - {chosen[cat]}),
                                      key=lambda q: q.name)
                 used.update(groups[cat])
+
+        # 같은 시험·같은 차수인데 묶이지 않은 정오표는 반 표시를 알아보지 못한 파일이다. 이유를 알려 준다.
+        left_out: list[Path] = []
+        if "response" in chosen:
+            grouped = set(groups["response"])
+            left_out = sorted((p for _, _, p in cands["response"]
+                               if p not in grouped and exam_key(p) == exam_key(chosen["response"])
+                               and round_history.tag_of(p.name) == round_history.tag_of(chosen["response"].name)),
+                              key=lambda q: q.name)
 
         def with_group(cat: str) -> str:
             return PATH_SEPARATOR.join(str(p) for p in groups.get(cat, [chosen[cat]]))
@@ -2262,8 +2286,12 @@ class MainWindow(QMainWindow):
         _year, found_sem, found_round = self._detect_exam_round()
         if found_sem or found_round:
             msg_lines.append(f"• 시험 구분 ← {round_history.round_name(found_sem, found_round)}")
-        skipped = [p.name for p in files if p not in used]
+        skipped = [p.name for p in files if p not in used and p not in left_out]
         msg = "다음 파일을 자동으로 채웠습니다:\n\n" + "\n".join(msg_lines)
+        if left_out:
+            msg += (f"\n\n⚠ 같은 시험의 다른 반 정오표 {len(left_out)}개는 반 표시를 알아보지 못해 함께 채우지 못했습니다:\n"
+                    + "\n".join(f"  · {p.name}" for p in left_out[:6])
+                    + "\n반 표시를 '(1-1)' 형식으로 바꾸거나, 정오표 '찾기'에서 여러 파일을 함께 선택해 주세요.")
         if skipped:
             msg += "\n\n인식 안 된 파일:\n" + "\n".join(f"  · {n}" for n in skipped[:6])
             if len(skipped) > 6:

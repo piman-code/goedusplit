@@ -169,6 +169,61 @@ class MultiClassWindowTests(unittest.TestCase):
         self.assertEqual(["수행평가 강의실별 일람표(1-1).xlsx", "수행평가 강의실별 일람표(1-2).xlsx"],
                          [Path(p).name for p in self.window.fs_perform.paths()])
 
+    def test_folder_batch_reads_other_class_label_spellings(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        base = "1차 정기시험 교과목별 학생답 정오표"
+        spellings = {
+            "full-width parentheses": lambda c: f"（{c}）",
+            "underscore": lambda c: f"_{c}",
+            "en dash": lambda c: f"({c.replace('-', '–')})",
+            "spaces inside": lambda c: f"( {c} )",
+            "class word": lambda c: f"({c.split('-')[1]}반)",
+        }
+        for label, make in spellings.items():
+            with self.subTest(label=label):
+                d = Path(self.tmp_dir())
+                for index, c in enumerate(("1-1", "1-2", "1-3")):
+                    path = d / f"{base}{make(c)}.xlsx"
+                    path.write_bytes(b"")
+                    os.utime(path, (1_000 + index, 1_000 + index))
+                with patch.object(QFileDialog, "getExistingDirectory", return_value=str(d)), \
+                        patch.object(QMessageBox, "information") as info, patch.object(QMessageBox, "warning"):
+                    self.window._pick_folder_batch()
+                self.assertEqual(3, len(self.window.fs_response.paths()), label)
+                self.assertNotIn("다른 반 정오표", info.call_args[0][2])
+
+    def test_folder_batch_says_why_a_class_file_was_left_out(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        d = Path(self.tmp_dir())
+        names = [f"1차 정기시험 교과목별 학생답 정오표({c}).xlsx" for c in ("1-1", "1-2")]
+        names.append("1차 정기시험 교과목별 학생답 정오표(3학급).xlsx")       # label this app does not read
+        for index, name in enumerate(names):
+            path = d / name
+            path.write_bytes(b"")
+            os.utime(path, (1_000 + index, 1_000 + index))
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=str(d)), \
+                patch.object(QMessageBox, "information") as info, patch.object(QMessageBox, "warning"):
+            self.window._pick_folder_batch()
+        self.assertEqual(2, len(self.window.fs_response.paths()))
+        message = info.call_args[0][2]
+        self.assertIn("같은 시험의 다른 반 정오표 1개", message)
+        self.assertIn("1차 정기시험 교과목별 학생답 정오표(3학급).xlsx", message)
+
+    def test_folder_batch_does_not_warn_about_another_round(self):
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        d = Path(self.tmp_dir())
+        names = [f"1차 정기시험 교과목별 학생답 정오표({c}).xlsx" for c in ("1-1", "1-2")]
+        names += [f"2차 정기시험 교과목별 학생답 정오표({c}).xlsx" for c in ("1-1", "1-2")]
+        for index, name in enumerate(names):
+            path = d / name
+            path.write_bytes(b"")
+            os.utime(path, (1_000 + index, 1_000 + index))
+        with patch.object(QFileDialog, "getExistingDirectory", return_value=str(d)), \
+                patch.object(QMessageBox, "information") as info, patch.object(QMessageBox, "warning"):
+            self.window._pick_folder_batch()
+        self.assertEqual(2, len(self.window.fs_response.paths()))
+        self.assertNotIn("다른 반 정오표", info.call_args[0][2])
+
     def tmp_dir(self):
         return self.resources.enter_context(tempfile.TemporaryDirectory())
 
