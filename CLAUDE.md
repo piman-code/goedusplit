@@ -5,8 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Goedu-Split: a local PySide6 desktop app (macOS/Windows) that analyses NEIS 정오표 + 문항정보표 (+ 수행평가) files for 성취평가 and designs 예상정답률. Student data stays on the teacher's PC. UI text, docs and replies are Korean; keep file paths, commands and identifiers untranslated.
 
 ## Rules that apply here
-- `/Users/piman/Projects/AGENTS.md` and `~/.claude/CLAUDE.md` apply: no `rm`/`git clean`/force-push etc. (use `/usr/bin/trash <absolute path>` after stating target and reason), no overwriting existing files with `>`/`mv`/`cp`, push/CI/downloads/Release only after explicit approval, no secrets or student data (names, IDs) in output or notes.
-- The canonical project root is `/Users/piman/Projects/goedusplit`; DevDocs lives at `/Users/piman/DevDocs/10-프로젝트/linked/003-goedusplit/` (read `00-시작.md`, newest card in `90-세션-요약/`). Record substantive work as a new card there; do not rewrite existing DevDocs operating docs.
+- The parent `AGENTS.md` (in the folder above this repo) and the user's global `~/.claude/CLAUDE.md` apply: no `rm`/`git clean`/force-push etc. (use `/usr/bin/trash <absolute path>` after stating target and reason), no overwriting existing files with `>`/`mv`/`cp`, push/CI/downloads/Release only after explicit approval, no secrets or student data (names, IDs) in output or notes.
+- The canonical project root is this repository; DevDocs lives at `~/DevDocs/10-프로젝트/linked/003-goedusplit/` (read `00-시작.md`, newest card in `90-세션-요약/`). Record substantive work as a new card there; do not rewrite existing DevDocs operating docs.
 - Do not drive the app with Computer Use / accessibility automation (see "Known problems").
 
 ## Commands
@@ -49,7 +49,7 @@ Tests that open dialogs hang silently (offscreen Qt blocks on a modal). When a w
 - **Test isolation** (`tests/runtime_isolation.py::ensure_isolated`): every test module calls it first; it redirects settings/appdata/caches and blocks the network. `app/synthetic_qa.py` is imported only for `--synthetic-qa`.
 
 ## Real NEIS files (learned the hard way)
-Exports carry a legend row under the 정오표 ("※ . : 맞음 …") that must not become a student; some classes store choices as numbers; 일람표 files may be per exam (1차/2차) while 정오표 are per class (`(1-1)`); a 수행평가 일람표 is not a 교과목별 일람표. Test data lives outside the repo (`/Users/piman/Desktop/goedusplit 테스트 자료`); never copy student values into the repo.
+Exports carry a legend row under the 정오표 ("※ . : 맞음 …") that must not become a student; some classes store choices as numbers; 일람표 files may be per exam (1차/2차) while 정오표 are per class (`(1-1)`); a 수행평가 일람표 is not a 교과목별 일람표. Test data lives outside the repo (a 'goedusplit 테스트 자료' folder on the teacher's desktop); never copy student values into the repo.
 
 ## Known problems
 - macOS: Qt's Cocoa accessibility code crashes (SIGSEGV in `libqcocoa`, `getAttributeValue:forObject:`) when an accessibility client such as Codex Computer Use queries the app; it does not occur with that permission off. The QtWebEngine renderer `SIGTRAP` under the external sandbox guard (P4) was investigated and shelved; do not change guard/sandbox settings.
