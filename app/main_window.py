@@ -71,6 +71,7 @@ from .portfolio import read_snapshot, snapshot_signature, write_snapshot
 from . import rounds as round_history
 from . import rounds_tab
 from . import help_tab
+from . import monitor_tab
 from . import fonts as font_pack
 from .grade_cut_calculator import (
     GRADE5_CUMULATIVE,
@@ -4268,351 +4269,31 @@ class MainWindow(QMainWindow):
     def _render_rounds_compare(self, *_args):
         rounds_tab.render_rounds_compare(self, *_args)
 
+    # ---- 모니터링 (화면·판정은 monitor_tab.py) ----------------------------
     def _init_tab_monitor(self):
-        layout = QVBoxLayout(self.tab_monitor)
-        head_row = QHBoxLayout()
-        intro = QLabel(
-            "현재 과목의 A 비율, 과목 평균, A/B 분할점수를 "
-            "동일 학교유형·교과군의 전국 평균±표준편차 및 전년도 값과 비교합니다. "
-            "위쪽 카드(현재 값)는 분석 결과에서 자동으로 들어옵니다. 아래 칸은 직접 넣는 값입니다: "
-            "전국 기준은 교육청 등에서 받은 성취평가 모니터링 자료에 있을 때만, 전년도 값은 작년 같은 과목 결과로 넣으세요. "
-            "모르는 칸은 '미입력'으로 두면 되고, 그 항목은 판정 대신 '기준 입력 필요'로 표시됩니다."
-        )
-        intro.setProperty("role", "muted")
-        intro.setWordWrap(True)
-        head_row.addWidget(intro, 1)
-        btn_prev_year = QPushButton("전년도 기록으로 채우기")
-        btn_prev_year.setToolTip("같은 과목·학기·차수의 전년도 분석 기록이 있으면 아래 전년도 값을 자동으로 넣습니다.")
-        btn_prev_year.clicked.connect(self._fill_monitor_prev_year)
-        head_row.addWidget(btn_prev_year)
-        btn_refresh = QPushButton("새로고침")
-        btn_refresh.clicked.connect(self._refresh_monitoring_tab)
-        head_row.addWidget(btn_refresh)
-        layout.addLayout(head_row)
-
-        top_area = QWidget()
-        top_layout = QVBoxLayout(top_area)
-        top_layout.setContentsMargins(0, 0, 0, 0)
-        top_layout.setSpacing(8)
-        current_grid = QGridLayout(); current_grid.setSpacing(8)
-        self.monitor_current_cards = {
-            "a_pct": self._kpi_card("현재 A 비율", "-"),
-            "mean": self._kpi_card("현재 과목 평균", "-"),
-            "std": self._kpi_card("현재 표준편차", "-"),
-            "cut_a": self._kpi_card("현재 A/B 분할점수", "-"),
-        }
-        for i, card in enumerate(self.monitor_current_cards.values()):
-            current_grid.addWidget(card, 0, i)
-        top_layout.addLayout(current_grid)
-
-        self.monitor_spins: dict[str, StepperSpinBox] = {}
-        input_row = QSplitter(Qt.Horizontal)
-        national_body = QWidget()
-        national_form = QFormLayout(national_body); national_form.setLabelAlignment(Qt.AlignRight)
-        self._add_monitor_spin(national_form, "ref_a_mean", "A 비율 평균", 0.0, suffix=" %", tip="같은 학교유형·교과군 학교들의 A 비율 평균(모니터링 자료)")
-        self._add_monitor_spin(national_form, "ref_a_sd", "A 비율 표준편차", 0.0, suffix=" %p", tip="같은 자료의 A 비율 표준편차. 평균과 함께 있어야 Ⅰ/Ⅱ/Ⅲ 수준을 판정합니다")
-        self._add_monitor_spin(national_form, "ref_mean_mean", "과목 평균", 0.0, suffix=" 점")
-        self._add_monitor_spin(national_form, "ref_mean_sd", "과목 평균 표준편차", 0.0, suffix=" 점")
-        self._add_monitor_spin(national_form, "ref_cut_mean", "A/B 분할점수 평균", 0.0, suffix=" 점")
-        self._add_monitor_spin(national_form, "ref_cut_sd", "A/B 분할점수 표준편차", 0.0, suffix=" 점")
-        national_box = self._make_collapsible_panel("동일 학교유형·교과군 전국 기준", national_body)
-        input_row.addWidget(national_box)
-
-        history_body = QWidget()
-        history_form = QFormLayout(history_body); history_form.setLabelAlignment(Qt.AlignRight)
-        self._add_monitor_spin(history_form, "prev_a_pct", "전년도 A 비율", 0.0, suffix=" %", tip="작년 같은 과목·같은 학기의 A 비율")
-        self._add_monitor_spin(history_form, "prev_mean", "전년도 과목 평균", 0.0, suffix=" 점", tip="작년 같은 과목·같은 학기의 과목 평균")
-        self._add_monitor_spin(history_form, "prev_cut_a", "전년도 A/B 분할점수", 0.0, suffix=" 점", tip="작년 같은 과목·같은 학기의 A/B 분할점수")
-        self._add_monitor_spin(history_form, "th_a_delta", "A 비율 증가 기준", 10.0, suffix=" %p")
-        self._add_monitor_spin(history_form, "th_mean_stable", "평균 큰 변동 아님", 5.0, suffix=" 점")
-        self._add_monitor_spin(history_form, "th_cut_delta", "분할점수 감소 기준", 10.0, suffix=" 점")
-        history_box = self._make_collapsible_panel("전년도·판정 기준", history_body)
-        input_row.addWidget(history_box)
-        input_row.setStretchFactor(0, 1); input_row.setStretchFactor(1, 1)
-        # Twelve input rows are taller than their share of the tab and squeezed the chart below to
-        # a line; let them scroll instead.
-        input_scroll = QScrollArea()
-        input_scroll.setWidgetResizable(True)
-        input_scroll.setFrameShape(QFrame.NoFrame)
-        input_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        input_scroll.setWidget(input_row)
-        top_layout.addWidget(input_scroll, 1)
-
-        body = QSplitter(Qt.Vertical)
-        self.canvas_monitor = CanvasHolder()
-        self.canvas_monitor.setMinimumHeight(self._px(170))
-        body.addWidget(self._fold("monitor.chart", "기준 비교 그래프", self.canvas_monitor))
-        self.canvas_monitor_trend = CanvasHolder()
-        self.canvas_monitor_trend.setMinimumHeight(self._px(150))
-        body.addWidget(self._fold("monitor.trend", "회차별 추이 (분석할 때마다 자동으로 쌓임)", self.canvas_monitor_trend))
-
-        flow_note = QLabel(
-            "점검 흐름: 1단계 A 비율 변화 확인 → 2단계 대상교·학생 특성 확인 → "
-            "3단계 정기시험 특성 확인 → 4단계 분할점수 재산출 → 5단계 A 비율 재산정"
-        )
-        flow_note.setProperty("role", "muted")
-        flow_note.setWordWrap(True)
-
-        table_wrap = QWidget()
-        table_layout = QVBoxLayout(table_wrap); table_layout.setContentsMargins(0, 0, 0, 0)
-        table_layout.addWidget(flow_note)
-        self.table_monitor = QTableWidget(0, 5)
-        self.table_monitor.setHorizontalHeaderLabels(["지표", "현재/변화", "기준", "판정", "해석·질문"])
-        _setup_table(self.table_monitor, word_wrap=True, horizontal_scroll=True, row_height=42)
-        self.table_monitor.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
-        table_layout.addWidget(self.table_monitor, 1)
-        body.addWidget(self._fold("monitor.table", "점검 표", table_wrap))
-        body.setStretchFactor(0, 1); body.setStretchFactor(1, 1); body.setStretchFactor(2, 2)
-        body.setSizes([240, 220, 360])
-        monitor_split = QSplitter(Qt.Vertical)
-        monitor_split.addWidget(self._fold("monitor.inputs", "현재 값과 비교 기준 입력", top_area))
-        monitor_split.addWidget(body)
-        monitor_split.setStretchFactor(0, 0)
-        monitor_split.setStretchFactor(1, 1)
-        monitor_split.setSizes([250, 620])
-        layout.addWidget(monitor_split, 1)
-        self._render_monitor_tab()
+        monitor_tab.build_monitor_tab(self)
 
     def _refresh_monitoring_tab(self):
-        self._render_monitor_tab()
-        self.statusBar().showMessage("모니터링 탭을 새로고침했습니다.", 2500)
+        monitor_tab.refresh_monitoring_tab(self)
 
     def _fill_monitor_prev_year(self):
-        if self.exam is None or self.overall is None:
-            QMessageBox.information(self, "전년도 기록", "먼저 분석을 실행해 주세요.")
-            return
-        year, semester, round_no = self._detect_exam_round()
-        previous = round_history.previous_year(
-            self._round_store().load_all(), self.exam.subject or "(과목 미상)", self.exam.grade, year, semester, round_no)
-        if previous is None:
-            QMessageBox.information(
-                self, "전년도 기록",
-                f"저장된 {round_history.round_label((year - 1) if year else None, semester, round_no)} 분석 기록이 없습니다.\n"
-                "작년 같은 시험을 이 앱으로 분석한 적이 있어야 자동으로 채울 수 있습니다. "
-                "없으면 아래 칸에 직접 입력하세요.")
-            return
-        for key, value in (("prev_a_pct", previous["level_pct"].get("A", 0.0)), ("prev_mean", previous["mean"]),
-                           ("prev_cut_a", previous["cuts"].get("A", 0.0))):
-            self.monitor_spins[key].setValue(float(value))
-        self.statusBar().showMessage(f"전년도 값을 {previous['label']} 기록으로 채웠습니다.", 5000)
+        monitor_tab.fill_monitor_prev_year(self)
 
     def _add_monitor_spin(self, form: QFormLayout, key: str, label: str, value: float,
                           *, suffix: str = "", tip: str = ""):
-        spin = StepperSpinBox(value=value, minimum=-100.0, maximum=200.0,
-                              step=1.0, decimals=1, suffix=suffix)
-        if key.startswith(("ref_", "prev_")):
-            # 0 already means "not entered" in the checks below; show it as such instead of "0.0 %".
-            spin.spin.setMinimum(0.0)
-            spin.spin.setSpecialValueText("미입력")
-        if tip:
-            spin.setToolTip(tip)
-        spin.valueChanged.connect(lambda *_: self._render_monitor_tab())
-        self.monitor_spins[key] = spin
-        form.addRow(label, spin)
-        return spin
+        return monitor_tab.add_monitor_spin(self, form, key, label, value, suffix=suffix, tip=tip)
 
     def _monitor_value(self, key: str) -> float:
-        spin = getattr(self, "monitor_spins", {}).get(key)
-        return float(spin.value()) if spin is not None else 0.0
+        return monitor_tab.monitor_value(self, key)
 
     def _monitor_z_status(self, value: float, ref: float, sd: float, *, low_is_risk: bool = False):
-        if sd <= 0 or ref <= 0:  # 0 is shown as '미입력': a missing mean must not be compared as 0
-            return "기준 입력 필요", "전국 평균과 표준편차를 입력하면 Ⅰ/Ⅱ/Ⅲ 수준을 자동 판정합니다.", 0
-        z = (ref - value) / sd if low_is_risk else (value - ref) / sd
-        if z >= 2:
-            return "Ⅲ 점검", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} 표준편차의 {z:.2f}배 벗어났습니다.", 3
-        if z >= 1:
-            return "Ⅱ 주의", f"전국 평균에서 {'아래로' if low_is_risk else '위로'} 표준편차의 {z:.2f}배 벗어났습니다.", 2
-        return "참고 범위", f"전국 평균±1SD(표준편차) 안쪽 또는 위험 방향이 아닙니다. z={z:.2f}", 1
+        return monitor_tab.z_status(value, ref, sd, low_is_risk=low_is_risk)
 
     def _monitor_rows_and_benchmarks(self):
-        if self.exam is None or self.overall is None:
-            return [], []
-        a_pct = float(self.overall.level_dist_pct.get("A", 0.0))
-        mean = float(self.overall.mean)
-        std = float(self.overall.std)
-        cut_a = float(self.exam.cut_scores.get("A", 0.0))
-        prev_a = self._monitor_value("prev_a_pct")
-        prev_mean = self._monitor_value("prev_mean")
-        prev_cut = self._monitor_value("prev_cut_a")
-        th_a = self._monitor_value("th_a_delta")
-        th_mean = self._monitor_value("th_mean_stable")
-        th_cut = self._monitor_value("th_cut_delta")
-
-        rows = []
-        status, detail, sev = self._monitor_z_status(
-            a_pct, self._monitor_value("ref_a_mean"), self._monitor_value("ref_a_sd")
-        )
-        rows.append((
-            "필수 1 · 성취수준 A 비율이 높음",
-            f"{a_pct:.1f}%",
-            "전국 평균+1SD 이상: Ⅱ · +2SD 이상: Ⅲ",
-            status,
-            f"{detail} A 비율만으로 단정하지 않고 평균·분할점수와 함께 봅니다.",
-            sev,
-        ))
-
-        if mean >= cut_a:
-            status, detail, sev = "Ⅲ 점검", "과목 평균이 A/B 분할점수 이상입니다.", 3
-        elif cut_a - mean <= 3:
-            status, detail, sev = "Ⅱ 주의", "과목 평균이 A/B 분할점수에 매우 가깝습니다.", 2
-        else:
-            status, detail, sev = "참고 범위", "과목 평균이 A/B 분할점수보다 낮습니다.", 1
-        rows.append((
-            "필수 2 · 과목 평균이 A/B 분할점수보다 높음",
-            f"평균 {mean:.1f}점 / A/B {cut_a:.1f}점",
-            "평균 ≥ A/B 분할점수이면 점검",
-            status,
-            f"{detail} 평균 학생이 A 수준 경계 위에 놓이는지 보는 지표입니다.",
-            sev,
-        ))
-
-        status, detail, sev = self._monitor_z_status(
-            mean, self._monitor_value("ref_mean_mean"), self._monitor_value("ref_mean_sd")
-        )
-        rows.append((
-            "특성 3 · 과목 평균이 높음",
-            f"{mean:.1f}점",
-            "전국 평균+1SD 이상: 주의 · +2SD 이상: 점검",
-            status,
-            f"{detail} 평가도구가 쉬웠는지, 학생 특성이 높은지 함께 봅니다.",
-            sev,
-        ))
-
-        status, detail, sev = self._monitor_z_status(
-            cut_a, self._monitor_value("ref_cut_mean"), self._monitor_value("ref_cut_sd"),
-            low_is_risk=True,
-        )
-        rows.append((
-            "특성 4 · A/B 분할점수가 낮음",
-            f"{cut_a:.1f}점",
-            "전국 평균-1SD 이하: 주의 · -2SD 이하: 점검",
-            status,
-            f"{detail} A 비율이 높은 원인이 낮은 분할점수인지 확인합니다.",
-            sev,
-        ))
-
-        if prev_a <= 0 or prev_mean <= 0:
-            status, detail, sev = "기준 입력 필요", "전년도 A 비율과 과목 평균을 입력하면 판정합니다.", 0
-            current = "-"
-        else:
-            delta_a = a_pct - prev_a
-            delta_mean = mean - prev_mean
-            current = f"A {delta_a:+.1f}%p / 평균 {delta_mean:+.1f}점"
-            if delta_a >= th_a and abs(delta_mean) <= th_mean:
-                status, detail, sev = "특성 발생", "평균은 크게 변하지 않았는데 A 비율이 증가했습니다.", 3
-            elif delta_a >= th_a:
-                status, detail, sev = "Ⅱ 주의", "A 비율은 증가했지만 평균도 함께 변했습니다.", 2
-            else:
-                status, detail, sev = "참고 범위", "A 비율 증가 폭이 기준보다 작습니다.", 1
-        rows.append((
-            "특성 5 · 평균 큰 변동 없이 A 비율 증가",
-            current,
-            f"A 증가 ≥ {th_a:.1f}%p, 평균 변화 ≤ {th_mean:.1f}점",
-            status,
-            f"{detail} 역동적 성적 과대평가 가능성을 묻는 지표입니다.",
-            sev,
-        ))
-
-        if prev_a <= 0 or prev_cut <= 0:
-            status, detail, sev = "기준 입력 필요", "전년도 A 비율과 A/B 분할점수를 입력하면 판정합니다.", 0
-            current = "-"
-        else:
-            delta_a = a_pct - prev_a
-            cut_drop = prev_cut - cut_a
-            current = f"A {delta_a:+.1f}%p / A/B {cut_a - prev_cut:+.1f}점"
-            if delta_a >= th_a and cut_drop >= th_cut:
-                status, detail, sev = "특성 발생", "A 비율 증가와 A/B 분할점수 감소가 함께 나타났습니다.", 3
-            elif delta_a >= th_a and cut_drop > 0:
-                status, detail, sev = "Ⅱ 주의", "A 비율 증가와 A/B 분할점수 감소가 함께 보입니다.", 2
-            else:
-                status, detail, sev = "참고 범위", "두 조건이 동시에 충분히 나타나지 않았습니다.", 1
-        rows.append((
-            "특성 6 · A 비율 증가 + A/B 분할점수 감소",
-            current,
-            f"A 증가 ≥ {th_a:.1f}%p, A/B 감소 ≥ {th_cut:.1f}점",
-            status,
-            f"{detail} 쉬워진 평가도구인지, 낮아진 분할점수인지 추가 확인합니다.",
-            sev,
-        ))
-
-        benchmarks = [
-            {
-                "label": "A 비율",
-                "value": a_pct,
-                "ref": self._monitor_value("ref_a_mean") if self._monitor_value("ref_a_mean") > 0 and self._monitor_value("ref_a_sd") > 0 else None,
-                "sd": self._monitor_value("ref_a_sd") if self._monitor_value("ref_a_mean") > 0 and self._monitor_value("ref_a_sd") > 0 else None,
-                "color": "#ef4444",
-            },
-            {
-                "label": "과목 평균",
-                "value": mean,
-                "ref": self._monitor_value("ref_mean_mean") if self._monitor_value("ref_mean_mean") > 0 and self._monitor_value("ref_mean_sd") > 0 else None,
-                "sd": self._monitor_value("ref_mean_sd") if self._monitor_value("ref_mean_mean") > 0 and self._monitor_value("ref_mean_sd") > 0 else None,
-                "color": "#f59e0b",
-            },
-            {
-                "label": "A/B 분할점수",
-                "value": cut_a,
-                "ref": self._monitor_value("ref_cut_mean") if self._monitor_value("ref_cut_mean") > 0 and self._monitor_value("ref_cut_sd") > 0 else None,
-                "sd": self._monitor_value("ref_cut_sd") if self._monitor_value("ref_cut_mean") > 0 and self._monitor_value("ref_cut_sd") > 0 else None,
-                "color": "#2a7770",
-            },
-        ]
-        return rows, benchmarks
+        return monitor_tab.rows_and_benchmarks(self)
 
     def _render_monitor_tab(self):
-        if not hasattr(self, "table_monitor"):
-            return
-        if self.exam is None or self.overall is None:
-            for card in getattr(self, "monitor_current_cards", {}).values():
-                card.value_label.setText("-")
-            self.table_monitor.setRowCount(0)
-            if hasattr(self, "canvas_monitor"):
-                self.canvas_monitor.set_placeholder("분석자료를 불러오면 기준 비교 그래프를 표시합니다.")
-            if hasattr(self, "canvas_monitor_trend"):
-                self.canvas_monitor_trend.set_placeholder("분석한 회차의 추이를 표시합니다.")
-            return
-
-        a_pct = float(self.overall.level_dist_pct.get("A", 0.0))
-        self.monitor_current_cards["a_pct"].value_label.setText(f"{a_pct:.1f}%")
-        self.monitor_current_cards["mean"].value_label.setText(f"{self.overall.mean:.1f}점")
-        self.monitor_current_cards["std"].value_label.setText(f"{self.overall.std:.1f}점")
-        self.monitor_current_cards["cut_a"].value_label.setText(f"{self.exam.cut_scores.get('A', 0):.1f}점")
-
-        rows, benchmarks = self._monitor_rows_and_benchmarks()
-        self.canvas_monitor.set_figure(charts.fig_monitoring_benchmarks(benchmarks))
-        if hasattr(self, "canvas_monitor_trend"):
-            try:
-                course = self._course_round_records()
-            except Exception:
-                course = []
-            self.canvas_monitor_trend.set_figure(charts.fig_round_trend(round_history.trend(course) if course else None))
-
-        self.table_monitor.setSortingEnabled(False)
-        self.table_monitor.setRowCount(len(rows))
-        colors = self.theme.colors if self.theme else {}
-        shade = QColor(colors.get("shade", "#e1e6ee"))
-        warn = QColor("#f8dfa3"); warn.setAlpha(150)
-        danger = QColor("#f5b5b5"); danger.setAlpha(165)
-        ok = QColor(colors.get("card", "#f4f7f8"))
-        for r, row in enumerate(rows):
-            bg = danger if row[5] >= 3 else warn if row[5] == 2 else shade if row[5] == 0 else ok
-            for c, value in enumerate(row[:5]):
-                _set_item(
-                    self.table_monitor,
-                    r,
-                    c,
-                    value,
-                    align_left=(c in (0, 4)),
-                    bg=bg if c == 3 else None,
-                    bold=(c == 3),
-                    tooltip=str(value),
-                )
-        self.table_monitor.setSortingEnabled(False)
-        for col, width in enumerate([250, 180, 260, 120, 520]):
-            self._set_scaled_column_width(self.table_monitor, col, width)
-        self._apply_zoom_to_surfaces()
+        monitor_tab.render_monitor_tab(self)
 
     def _relayout_kpis(self, cols: int):
         """KPI 카드들을 cols 개수만큼 한 행에 배치."""

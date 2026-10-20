@@ -1,4 +1,8 @@
-"""User-sized native table columns, with explicit fit/reset actions."""
+"""User-sized native table columns, with explicit fit/reset actions.
+
+Double-clicking a column boundary fits that column to its contents. A table with the
+``fillColumns`` property spreads its columns over the visible width until the user sizes one.
+"""
 from PySide6.QtCore import QObject, QEvent, QTimer, Qt, Slot, QPoint
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QTableWidget, QHeaderView, QMenu, QToolButton, QTabWidget, QHBoxLayout, QSplitter
@@ -14,12 +18,16 @@ class TableColumnControls(QObject):
         header.installEventFilter(self); header.viewport().installEventFilter(self)
         table.installEventFilter(self)
         header.sectionResized.connect(self.resized)
+        # QTableView already connects this to resizeColumnToContents; ours runs after it, caps
+        # wrapped text and keeps the result as the user's width.
+        header.sectionHandleDoubleClicked.connect(self.fit_column)
         for signal in (table.model().modelReset,table.model().columnsInserted,table.model().columnsRemoved):
             signal.connect(self.schedule)
-        header.setToolTip('열 경계를 끌어 너비 조절 · 우클릭: 화면에 맞춤 / 초기 너비')
+        header.setToolTip('열 경계를 끌어 너비 조절 · 경계 더블클릭: 내용에 맞춤 · 우클릭: 화면에 맞춤 / 내용에 맞춤 / 초기 너비')
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self.menu)
         self.fit_action=QAction('화면에 맞춤',header);self.fit_action.triggered.connect(self.fit)
+        self.contents_action=QAction('모든 열 내용에 맞춤',header);self.contents_action.triggered.connect(self.fit_contents)
         self.reset_action=QAction('초기 너비로 되돌리기',header);self.reset_action.triggered.connect(self.reset)
         self.add_visible_menu()
         self.schedule()
@@ -35,12 +43,12 @@ class TableColumnControls(QObject):
                 menu.clear();current=tabs.currentWidget()
                 if isinstance(current,QTableWidget):
                     control=enable_table_columns(current)
-                    menu.addAction(control.fit_action);menu.addAction(control.reset_action)
+                    menu.addAction(control.fit_action);menu.addAction(control.contents_action);menu.addAction(control.reset_action)
             menu.aboutToShow.connect(populate)
             tabs.setCornerWidget(button,Qt.TopRightCorner);tabs._column_menu_button=button
         elif parent is not None and getattr(parent,"body",None) is table and hasattr(parent,"toggle"):
             button=QToolButton(parent);button.setText("열 너비");button.setPopupMode(QToolButton.InstantPopup)
-            menu=QMenu(button);menu.addAction(self.fit_action);menu.addAction(self.reset_action);button.setMenu(menu)
+            menu=QMenu(button);menu.addAction(self.fit_action);menu.addAction(self.contents_action);menu.addAction(self.reset_action);button.setMenu(menu)
             layout=parent.layout();layout.removeWidget(parent.toggle)
             row=QHBoxLayout();row.setContentsMargins(0,0,0,0);row.addWidget(parent.toggle);row.addStretch();row.addWidget(button)
             layout.insertLayout(0,row);self.menu_button=button
@@ -66,10 +74,36 @@ class TableColumnControls(QObject):
                 self.defaults=[table.columnWidth(c) for c in range(table.columnCount())]
             header.setStretchLastSection(False)
             header.setSectionResizeMode(QHeaderView.Interactive)
-            for c,width in self.manual.items():
-                if c<table.columnCount():table.setColumnWidth(c,width)
+            if self.manual:
+                for c,width in self.manual.items():
+                    if c<table.columnCount():table.setColumnWidth(c,width)
+            elif table.property('fillColumns'):self.fill_width()
             self.sync_frozen()
         finally:self.busy=False
+
+    def fill_width(self):
+        table=self.table;count=table.columnCount()
+        shares=[max(1,w) for w in self.defaults[:count]]+[1]*max(0,count-len(self.defaults))
+        available=table.viewport().width();total=sum(shares)
+        if available<=count*28 or total<=0:return
+        widths=[max(28,int(available*share/total)) for share in shares]
+        widths[-1]+=available-sum(widths)
+        for c,width in enumerate(widths):table.setColumnWidth(c,max(28,width))
+
+    def content_width(self,column):
+        table=self.table
+        width=max(table.sizeHintForColumn(column),table.horizontalHeader().sectionSizeHint(column))+12
+        return max(40,min(width,int(table.viewport().width()*0.6)))
+
+    @Slot(int)
+    def fit_column(self,column):
+        if 0<=column<self.table.columnCount():self.remember_width(column,self.content_width(column))
+
+    @Slot()
+    def fit_contents(self):
+        self.apply()
+        self.manual={c:self.content_width(c) for c in range(self.table.columnCount())}
+        self.apply()
 
     def sync_frozen(self):
         table=self.table;frozen=getattr(table,'frozenView',None)
@@ -112,12 +146,13 @@ class TableColumnControls(QObject):
 
     @Slot()
     def reset(self):
-        self.manual={c:width for c,width in enumerate(self.defaults)}
+        # A filling table's initial width is "fill the table", not the widths at fill time.
+        self.manual={} if self.table.property('fillColumns') else {c:width for c,width in enumerate(self.defaults)}
         self.apply()
 
     @Slot(QPoint)
     def menu(self,pos):
-        menu=QMenu(self.table);menu.addAction(self.fit_action);menu.addAction(self.reset_action)
+        menu=QMenu(self.table);menu.addAction(self.fit_action);menu.addAction(self.contents_action);menu.addAction(self.reset_action)
         menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
 
     def eventFilter(self,obj,event):
