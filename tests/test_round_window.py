@@ -46,8 +46,14 @@ class RoundWindowTests(unittest.TestCase):
         exam, _levels = _exam()
         for student in exam.students:
             student.final_score = student.total = student.final_score + mean_shift
+        # The mocked parser still needs a real, isolated source artifact for
+        # provenance verification; a nonexistent path is deliberately unverified.
+        source = self.tmp / response
+        source.write_text(json.dumps({"synthetic": True, "mean_shift": mean_shift}), encoding="utf-8")
+        exam.source_files["responses"] = str(source)
+        exam.semester = "2026학년도"
         with patch("app.main_window.load_exam", return_value=exam):
-            self.window.fs_response.path_edit.setText("/합성/" + response)
+            self.window.fs_response.path_edit.setText(str(source))
             self.window.fs_iteminfo.path_edit.setText("/합성/문항정보표.xlsx")
             self.window.fs_cuts.path_edit.setText(("/합성/" + cuts) if cuts else "")
             self.window.run_analysis()
@@ -56,9 +62,51 @@ class RoundWindowTests(unittest.TestCase):
     def records(self):
         return rounds.RoundStore(self.tmp / "appdata" / "round_history").load_all()
 
+    def test_performance_errors_preserve_analysis_snapshot_and_round_files(self):
+        from app.perform_loader import PerformData
+        from unittest.mock import Mock
+        self.analyze()
+        previous = (self.window.exam, self.window.overall, self.window.item_stats, self.window.perform_data)
+        history = self.tmp / 'appdata' / 'round_history'
+        files = {p.name: p.read_bytes() for p in history.glob('*.json')}
+        # Missing performance input now permits pencil-only analysis; covered
+        # separately in test_partial_round_window. Explicit invalid data must
+        # still preserve the prior successful result and saved history.
+        for case in ('bad_file', 'missing_students'):
+            with self.subTest(case=case):
+                self.window.chk_perform.setChecked(True)
+                self.window.fs_perform.path_edit.setText('/synthetic/performance.xlsx')
+                self.window.spin_pencil_ratio.setValue(60)
+                self.window.spin_perform_ratio.setValue(40)
+                exam, _ = _exam()
+                loader = Mock(side_effect=ValueError('synthetic bad file')) if case == 'bad_file' else Mock(return_value=PerformData())
+                with patch('app.main_window.load_exam', return_value=exam), \
+                     patch('app.main_window.load_perform_many', loader), \
+                     patch.object(self.window, '_snapshot_inputs') as snapshot, \
+                     patch.object(self.window, '_save_round_history') as save, \
+                     patch.object(QMessageBox, 'warning') as warning:
+                    self.window.run_analysis()
+                self.assertTrue(warning.called)
+                snapshot.assert_not_called()
+                save.assert_not_called()
+                for current, old in zip((self.window.exam, self.window.overall, self.window.item_stats,
+                                         self.window.perform_data), previous):
+                    self.assertIs(current, old)
+                self.assertEqual(files, {p.name: p.read_bytes() for p in history.glob('*.json')})
+
+    def test_unchecked_performance_ignores_stale_path(self):
+        self.window.chk_perform.setChecked(False)
+        self.window.fs_perform.path_edit.setText('/synthetic/missing-performance.xlsx')
+        with patch('app.main_window.load_perform_many') as loader:
+            self.analyze()
+        loader.assert_not_called()
+        self.assertFalse(self.window.exam.use_perform)
+        self.assertIsNone(self.window.perform_data)
+        self.assertTrue(all(s.final_score == s.total for s in self.window.exam.students))
+
     def test_every_analysis_leaves_one_record_per_round_without_names(self):
         self.analyze("1학기 1차 정오표(1-1).xlsx")
-        self.analyze("1학기 1차 정오표(1-1).xlsx", mean_shift=1.0)     # same round again: replaced, not added
+        self.analyze("1학기 1차 정오표(1-1).xlsx", mean_shift=1.0)     # same round: latest displayed, prior file retained
         self.analyze("1학기 2차 정오표(1-1).xlsx", mean_shift=-3.0)
         records = self.records()
         self.assertEqual(["1학기 1차", "1학기 2차"], [rounds.round_name(r["semester_no"], r["round_no"]) for r in records])
@@ -70,10 +118,11 @@ class RoundWindowTests(unittest.TestCase):
         self.assertTrue((self.tmp / "appdata" / "round_history").is_dir())
         self.assertEqual([], list((self.tmp / "appdata" / "subject_snapshots").glob("*.json")))   # the portfolio is untouched
 
-    def test_manual_round_overrides_the_file_name(self):
+    def test_written_round_ignores_stale_manual_override(self):
         self.window.cmb_round.setEditText("2학기 2차")
         self.analyze("1학기 1차 정오표(1-1).xlsx")
-        self.assertEqual([(2, 2)], [(r["semester_no"], r["round_no"]) for r in self.records()])
+        self.assertEqual([(1, 1)], [(r["semester_no"], r["round_no"]) for r in self.records()])
+        self.assertEqual((2026, 1, 1), self.window._detect_exam_round())
 
     def test_hint_warns_when_files_belong_to_different_exams(self):
         self.analyze("1차 정오표(1-1).xlsx", cuts="예상추정분할점수조회 2차.xlsx")
@@ -102,12 +151,15 @@ class RoundWindowTests(unittest.TestCase):
 
     def test_compare_tab_and_monitor_trend_use_the_saved_rounds(self):
         self.analyze("1학기 1차 정오표(1-1).xlsx")
-        self.assertIn("아직 1개", self.window.lbl_round_status.text())                       # one round: nothing to compare
+        self.assertEqual(1, len(self.records()))
+        self.assertEqual(0, self.window.table_round_metrics.rowCount())
+        self.assertIsNone(self.window.cmb_round_other.currentData())
+        self.assertIn("입력 출처가 확인된", self.window.lbl_round_status.text())
         self.analyze("1학기 2차 정오표(1-1).xlsx", mean_shift=5.0)
         window = self.window
         self.assertEqual(2, window.cmb_round_base.count())
-        self.assertEqual("1학기 1차", window.cmb_round_base.currentText().split(" (")[0])
-        self.assertEqual("1학기 2차", window.cmb_round_other.currentText().split(" (")[0])
+        self.assertEqual("2026학년도 1학기 1차", window.cmb_round_base.currentText().split(" (")[0])
+        self.assertEqual("2026학년도 1학기 2차", window.cmb_round_other.currentText().split(" (")[0])
         metrics = {window.table_round_metrics.item(r, 0).text(): window.table_round_metrics.item(r, 3).text()
                    for r in range(window.table_round_metrics.rowCount())}
         self.assertEqual("+5", metrics["평균(점)"])

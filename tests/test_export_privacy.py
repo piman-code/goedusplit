@@ -151,16 +151,64 @@ class ExportPrivacyHelperTests(unittest.TestCase):
 
 @unittest.skipIf(MainWindow is None, f"app.main_window unavailable: {MAIN_WINDOW_IMPORT_ERROR}")
 class ExportPrivacyWindowTests(unittest.TestCase):
-    def _export_csv(self, directory, *, check_real: bool, confirm: bool):
+    def _export_csv(self, directory, *, check_real: bool, confirm: bool, graphs=False):
         window = _window()
         with patch("app.main_window.QMessageBox") as messages, \
              patch("app.main_window.QCheckBox") as checkbox, \
              patch("app.main_window.QFileDialog.getExistingDirectory", return_value=directory):
-            messages.return_value.exec.return_value = messages.No  # CSV만
+            messages.return_value.exec.return_value = messages.Yes if graphs else messages.No
             messages.warning.return_value = messages.Yes if confirm else messages.No
             checkbox.return_value.isChecked.return_value = check_real
             window.export_csv()
         return messages
+
+    def test_reexport_preserves_existing_files_and_creates_a_new_bundle(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self._export_csv(directory, check_real=False, confirm=False)
+            original = {p.name: p.read_bytes() for p in root.glob('*.csv')}
+            self.assertEqual(4, len(original))
+            for _ in range(2):
+                messages = self._export_csv(directory, check_real=False, confirm=False)
+                messages.critical.assert_not_called()
+                actual = Path(messages.information.call_args.args[2].split('저장 위치: ', 1)[1])
+                self.assertNotEqual(root, actual)
+                self.assertEqual(root, actual.parent)
+                self.assertEqual(4, len(list(actual.glob('*.csv'))))
+            self.assertEqual(original, {p.name: p.read_bytes() for p in root.glob('*.csv')})
+            bundles = [p for p in root.iterdir() if p.is_dir()]
+            self.assertEqual(2, len(bundles))
+            self.assertTrue(all(len(list(p.glob('*.csv'))) == 4 for p in bundles))
+
+    def test_csv_writer_refuses_existing_file(self):
+        with TemporaryDirectory() as directory:
+            path = Path(directory) / '학생결과.csv'
+            path.write_bytes(b'previous synthetic result')
+            with self.assertRaises(FileExistsError):
+                MainWindow._write_csv(path, ['column'], [['new']])
+            self.assertEqual(b'previous synthetic result', path.read_bytes())
+
+    def test_graph_directory_collision_preserves_old_graphs(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / '그래프').mkdir()
+            original = root / '그래프' / '01_성취수준_도넛.png'
+            original.write_bytes(b'previous synthetic graph')
+            with patch('app.main_window.charts') as charts:
+                def save(path, **kwargs):
+                    if hasattr(path, 'write'):
+                        path.write(b'new synthetic graph')
+                    else:
+                        Path(path).write_bytes(b'new synthetic graph')
+                for name in ('fig_level_donut', 'fig_score_histogram_colored', 'fig_level_means_with_error',
+                             'fig_class_means', 'fig_item_difficulty', 'fig_item_discrimination', 'fig_standard_attainment'):
+                    getattr(charts, name).return_value.savefig.side_effect = save
+                messages = self._export_csv(directory, check_real=False, confirm=False, graphs=True)
+            messages.critical.assert_not_called()
+            self.assertEqual(b'previous synthetic graph', original.read_bytes())
+            bundles = [p for p in root.iterdir() if p.is_dir() and p.name != '그래프']
+            self.assertEqual(1, len(bundles))
+            self.assertEqual(7, len(list((bundles[0] / '그래프').glob('*.png'))))
 
     def test_csv_export_defaults_to_pseudonyms(self):
         with TemporaryDirectory() as directory:

@@ -300,3 +300,26 @@ test("an existing judgment map must contain all project judges and their A throu
     for (const level of levels) assert.equal(loaded.items[0].judgmentsByJudge[judge.id][level].correct.length, 3);
   }
 });
+
+test("full-work roundtrip retains active second item and multiple selections", () => {
+  const input = project();
+  input.items.push({...clone(input.items[0]), id: "item-2", number: 2});
+  input.selectedId = "item-2";
+  input.selectedIds = ["item-2", "item-1"];
+  const loaded = api.goeduReadProject(JSON.parse(api.goeduSerializeProject(input)));
+  assert.equal(loaded.selectedId, "item-2");
+  assert.deepEqual(clone(loaded.selectedIds), ["item-2", "item-1"]);
+  assert.equal(loaded.activeJudgeId, "judge-2");
+  assert.deepEqual(clone(loaded.items), input.items);
+});
+
+test("restored selection removes stale IDs and duplicates without changing items", () => {
+  const input = project();
+  input.items.push({...clone(input.items[0]), id: "item-2", number: 2});
+  input.selectedId = "deleted-item";
+  input.selectedIds = ["deleted-item", "item-2", "item-2"];
+  const loaded = api.goeduReadProject(input);
+  assert.equal(loaded.selectedId, "item-1");
+  assert.deepEqual(clone(loaded.selectedIds), ["item-2"]);
+  assert.deepEqual(clone(loaded.items), input.items);
+});

@@ -8,6 +8,7 @@ from pathlib import Path
 from openpyxl import Workbook
 
 from app.grade_cut_calculator import (
+    _detect_subject,
     grade5_cut_summary,
     load_grade5_cut_reports,
 )
@@ -31,6 +32,26 @@ def _save_report_workbook(path: Path, scores: list[float]) -> None:
 
 
 class GradeCutCalculatorTests(unittest.TestCase):
+    def test_subject_header_category_and_metadata_boundaries(self):
+        import unicodedata
+        cases = [
+            (['교과목 : 합성수학 만점 100'], '합성수학'),
+            (['고사 : 1차 교과목 : 수학:합성수학(4) 만점 : 100'], '합성수학(4)'),
+            (['교과목 ： 수학：합성수학(3) 담당교사 ： 합성교사 만점 ： 100'], '합성수학(3)'),
+            (['교과목 : 미확인:합성수학(4) 만점 : 100'], '미확인:합성수학(4)'),
+            (['교과목 : 합성수학(4)', '고사 : 2차 만점 : 100'], '합성수학(4)'),
+            ([unicodedata.normalize('NFD', '교과목 : 수학:합성수학(4) 만점 : 100')], '합성수학(4)'),
+            (['지필평가 교과목별 일람표', '만점 : 100'], 'sheet1'),
+        ]
+        for lines, expected in cases:
+            with self.subTest(expected=expected):
+                ws=Workbook().active
+                for index,line in enumerate(lines,1):ws.cell(index,1,line)
+                self.assertEqual(_detect_subject(ws,'sheet1'),expected)
+        from app.folder_batch import subjects_compatible
+        self.assertFalse(subjects_compatible('합성수학(4)','합성과학(3)'))
+        self.assertFalse(subjects_compatible('합성수학(4)','합성수학(3)'))
+
     def test_grade_cut_uses_selected_report_only(self):
         with tempfile.TemporaryDirectory() as tmp:
             report_path = Path(tmp) / "지필평가 교과목별 일람표.xlsx"

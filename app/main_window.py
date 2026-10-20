@@ -239,7 +239,7 @@ def build_data_empty_state_html() -> str:
     ]
     # <ol> numbers the steps itself; a number in the title printed "1. 1." and the title ran into the text.
     items = "".join(
-        f"<li><b>{html.escape(title)}</b> — {html.escape(description)}</li>"
+        f"<li style='margin-bottom:8px;'><p style='line-height:160%; margin-bottom:8px;'><b>{html.escape(title)}</b><br>{html.escape(description)}</p></li>"
         for title, description in steps
     )
     return (
@@ -669,7 +669,19 @@ class MainWindow(QMainWindow):
         if self.theme is not None:
             self.theme.changed.connect(self._on_theme_changed)
             charts.set_theme(self.theme.colors)
-        self.statusBar().showMessage("좌측에서 정오표·문항정보표를 지정하고 '분석 실행'을 누르세요.")
+        self.statusBar().showMessage("자료·분석 설정에서 폴더 또는 개별 파일을 지정해 주세요.")
+        from .result_layout import apply_layout
+        apply_layout(self)
+        from .work_session_ui import install_work_sessions
+        install_work_sessions(self)
+        from .portfolio_view import install_portfolio_view
+        install_portfolio_view(self)
+        from .folder_workspace import install_folder_workspace
+        install_folder_workspace(self)
+        from .table_controls import install_table_controls
+        install_table_controls(self)
+        from .input_workspace import install_input_workspace
+        install_input_workspace(self)
 
     def _icon_color(self) -> str:
         if self.theme is not None:
@@ -926,6 +938,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"화면 배율 {pct}% · 글자 {pt}pt", 2500)
 
     def _toggle_sidebar(self):
+        if hasattr(self, "input_workspace"):
+            self.input_workspace.open("folder")
+            return
         sizes = self.splitter.sizes()
         self._sidebar_user_choice = sizes[0] <= 4
         self._sidebar_hidden_for_calculator = False
@@ -944,6 +959,8 @@ class MainWindow(QMainWindow):
         self._apply_responsive_tab_labels()
 
     def _update_responsive_sidebar(self):
+        if hasattr(self, "input_workspace"):
+            return
         if not hasattr(self, "splitter") or len(self.splitter.sizes()) < 2:
             return
         sizes = self.splitter.sizes()
@@ -964,6 +981,9 @@ class MainWindow(QMainWindow):
             self.splitter.setSizes([side_w, max(600, sum(sizes) - side_w)])
 
     def _show_sidebar(self):
+        if hasattr(self, "input_workspace"):
+            self.input_workspace.open("individual")
+            return
         if not hasattr(self, "splitter"):
             return
         self._sidebar_user_choice = True
@@ -1087,6 +1107,7 @@ class MainWindow(QMainWindow):
         outer.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         w = QFrame(); outer.setWidget(w)
         v = QVBoxLayout(w); v.setContentsMargins(12, 12, 12, 12); v.setSpacing(10)
+        self.folder_sidebar_layout = v
 
         title = QLabel("입력 데이터")
         title.setProperty("role", "title")
@@ -1098,6 +1119,7 @@ class MainWindow(QMainWindow):
 
         # 폴더 일괄 업로드 버튼 (가장 위에 강조)
         folder_btn = QPushButton(SIDEBAR_FOLDER_BUTTON_TEXT)
+        self.btn_folder_batch = folder_btn
         folder_btn.setProperty("role", "primary-soft")
         folder_btn.setMinimumHeight(34)
         folder_btn.clicked.connect(self._pick_folder_batch)
@@ -1626,6 +1648,14 @@ class MainWindow(QMainWindow):
         grade9_labels, grade5_labels = self._current_relative_grades()
         key = self._portfolio_hash_key()
         students = []
+        def class_key(student):
+            return str(student.grade_class or (student.class_no.split("/")[0] if "/" in student.class_no else "")).strip()
+        class_scores = {}
+        for student in self.exam.students:
+            group = class_key(student)
+            if group:
+                class_scores.setdefault(group, []).append(float(student.final_score))
+        year, semester_no, round_no = self._detect_exam_round() if hasattr(self, "fs_response") else (None, None, None)
         for idx, st in enumerate(self.exam.students):
             level = self.overall.levels_arr[idx] if idx < len(self.overall.levels_arr) else grade_level(st.final_score, self.exam.cut_scores)
             students.append({
@@ -1634,6 +1664,7 @@ class MainWindow(QMainWindow):
                 "grade9": grade9_labels[idx] if idx < len(grade9_labels) else "",
                 "grade5": grade5_labels[idx] if idx < len(grade5_labels) else "",
                 "final_score": round(float(st.final_score), 2),
+                "class_mean": round(sum(class_scores[class_key(st)]) / len(class_scores[class_key(st)]), 4) if class_key(st) in class_scores else None,
                 "rounded_score": round(float(st.final_score)),
                 "pencil_total": round(float(st.total), 2),
                 "perform_score": round(float(st.perform_score), 2),
@@ -1641,11 +1672,12 @@ class MainWindow(QMainWindow):
         students.sort(key=lambda student: student["student_hash"])  # 목록 순서로 명부 순서가 드러나지 않게
         return {
             "version": 2,
-            "saved_at": datetime.now().isoformat(timespec="seconds"),
+            "saved_at": datetime.now().isoformat(timespec="microseconds"),
             "subject": self.exam.subject or "(과목 미상)",
             "grade": self.exam.grade,
             "semester": self.exam.semester,
-            "round": self._detect_exam_round()[2] if hasattr(self, "fs_response") else None,
+            "round": round_no,
+            "year": year, "semester_no": semester_no, "round_no": round_no,
             "n_students": len(self.exam.students),
             "n_items": len(self.exam.items),
             "cuts": {lv: round(float(self.exam.cut_scores.get(lv, 0)), 2) for lv in ["A", "B", "C", "D", "E"]},
@@ -1685,7 +1717,13 @@ class MainWindow(QMainWindow):
         )
         if self._portfolio_has_preview:
             records.insert(0, (None, current))
+        from .portfolio_details import current_revision, load_work_session_rows
+        live_revision = current_revision(self) if self._portfolio_has_preview else ""
         for path, data in records:
+            try:
+                snapshot_mtime_ns = path.stat().st_mtime_ns if path else 0
+            except OSError:
+                snapshot_mtime_ns = 0
             saved_at = str(data.get("saved_at", "")) if path else "현재 분석 (미저장)"
             subject = str(data.get("subject", ""))
             term = " ".join(str(data.get(field, "")) for field in ("semester", "grade") if data.get(field))
@@ -1710,8 +1748,21 @@ class MainWindow(QMainWindow):
                     "grade5": str(student.get("grade5", "")),
                     "score": float(student.get("final_score", 0) or 0),
                     "snapshot_path": str(path) if path else "",
+                    "snapshot_mtime_ns": snapshot_mtime_ns,
                     "is_current_preview": path is None,
+                    "year": data.get("year") or round_history.parse_year(str(data.get("semester", ""))),
+                    "semester_no": data.get("semester_no") or round_history.parse_round(str(data.get("semester", "")))[0],
+                    "round_no": data.get("round_no") or data.get("round") or round_history.parse_round(str(data.get("semester", "")))[1],
+                    "grade": str(data.get("grade", "")),
+                    "class_mean": student.get("class_mean"),
+                    "rounded_score": student.get("rounded_score"),
+                    "pencil_total": student.get("pencil_total"),
+                    "perform_score": student.get("perform_score"),
+                    "source_kind": "current" if path is None else "summary",
+                    "is_current_analysis": path is None,
+                    "detail_revision": live_revision if path is None else "",
                 })
+        rows.extend(load_work_session_rows(self))
         return rows
 
     def refresh_portfolio_tab(self):
@@ -1810,7 +1861,8 @@ class MainWindow(QMainWindow):
             )
             self.lbl_portfolio_note.setToolTip(f"저장 위치: {self._portfolio_store_dir()}")
         if hasattr(self, "btn_portfolio_save"):
-            self.btn_portfolio_save.setEnabled(self.exam is not None and self.overall is not None)
+            self.btn_portfolio_save.setEnabled(self.exam is not None and self.overall is not None
+                                               and not getattr(getattr(self, "work_sessions", None), "result_only", False))
         if previous_student and self.combo_portfolio_student.currentData():
             self._on_portfolio_student_selected()
 
@@ -1857,6 +1909,8 @@ class MainWindow(QMainWindow):
                 visible_rows.append(r)
         self._apply_portfolio_privacy_masks()
         self._update_portfolio_summary(visible_rows, terms)
+        if hasattr(self, "portfolio_view"):
+            self.portfolio_view.sync()
 
     def _update_portfolio_summary(self, visible_rows: list[int], terms: list[str]):
         if not hasattr(self, "lbl_portfolio_summary") or not hasattr(self, "table_portfolio"):
@@ -1931,6 +1985,8 @@ class MainWindow(QMainWindow):
         return next(iter(keys)) if len(keys) == 1 else ""
 
     def _portfolio_report_html(self, rows: list[dict]) -> str:
+        if self._counseling_mode_enabled():
+            rows = [dict(row, name="상담 학생", class_no="비공개") for row in rows]
         ordered = sorted(rows, key=lambda row: str(row.get("saved_at", "")))
         first = ordered[0]
         name = html.escape(str(first.get("name") or "이름 없음"))
@@ -2100,7 +2156,126 @@ class MainWindow(QMainWindow):
             self.tabs.setCurrentWidget(self.tab_monitor)
             self._render_monitor_tab()
 
-    def _pick_folder_batch(self):
+    def _pick_folder_batch(self, directory=None):
+        if not directory:
+            directory = QFileDialog.getExistingDirectory(self, "성취평가 자료가 들어있는 폴더 선택")
+        if not directory:
+            return
+        from .folder_batch import discover_round_groups
+        groups = discover_round_groups(directory, self.cmb_round.currentText())
+        if not groups:
+            self._pick_folder_batch_legacy(directory)
+            return
+        selected = self._choose_folder_rounds(groups)
+        if selected:
+            self._analyze_folder_groups(selected)
+
+    def _choose_folder_rounds(self, groups):
+        from .analysis_preparation import AnalysisPreparationDialog
+        dialog = AnalysisPreparationDialog(self, groups)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return []
+        skipped = getattr(dialog, 'skipped_groups', [])
+        if skipped:
+            details = '\n'.join(f"{item['label']}: {item['reason']}" for item in skipped)
+            QMessageBox.information(self, '분석 가능한 회차만 진행',
+                f"{len(dialog.result_groups)}개 회차를 분석합니다. 다음 회차는 자료 확인이 필요해 이번 분석에서 제외합니다.\n\n{details}\n\n기존 저장 자료는 삭제하지 않습니다.")
+        return dialog.result_groups
+
+    def _analyze_folder_groups(self, groups):
+        import copy
+        import uuid
+        from types import SimpleNamespace
+        from .folder_batch import prepare_round_groups
+        from .work_sessions import build_session, prepare_session
+        from .work_session_ui import capture_ui_state, apply_python_state
+        try:
+            # Complete all parsing/analysis before changing any input or visible result.
+            analyses = []
+            for entry in groups:
+                analyses.extend(prepare_round_groups([entry], entry.get('manual_cut_scores', self._current_cut_scores_from_inputs()),
+                    entry.get('pencil_weight', self.spin_pencil_ratio.value()),
+                    entry.get('perform_weight', self.spin_perform_ratio.value())))
+            if not analyses:
+                return False
+            state = capture_ui_state(self)
+            sessions = copy.deepcopy(state.get('portfolio_analysis_sessions', {}))
+            if self.exam is not None:
+                old_ui = {'inputs': {'fs_response': self.exam.source_files.get('responses', '')},
+                          'widgets': {'cmb_round': {'text': self.cmb_round.currentText()}}}
+                old = build_session(self.exam, self.perform_data, old_ui, None)
+                if not any(p['domain'] == old['domain'] and p['ui_state'] == old['ui_state'] for p in sessions.values()):
+                    sessions[uuid.uuid4().hex] = old
+            records = []
+            for group, exam, perform in analyses:
+                label = round_history.round_name(group['key'][1], group['key'][2])
+                minimal = {'inputs': {'fs_response': exam.source_files['responses']},
+                           'widgets': {'cmb_round': {'text': label}}}
+                payload = build_session(exam, perform, minimal, None, metadata={
+                    'analysis_preparation': {
+                        'cuts_source': group['cuts'] or 'current-settings',
+                        'grade5_report': group['grade5_report'],
+                        'grade5_reports': copy.deepcopy(group.get('prepared_grade5_reports')),
+                        'grade5_info': group.get('prepared_grade5_info', '지필평가 1~5등급 컷 · 미계산'),
+                    }})
+                # A successful new batch is a new analysis revision. Keep older
+                # revisions, even when their numeric/domain values are identical.
+                payload['saved_at'] = datetime.now().isoformat(timespec='microseconds')
+                prepared = prepare_session(payload)
+                sessions[uuid.uuid4().hex] = payload
+                proxy = SimpleNamespace(exam=exam, overall=prepared['overall'],
+                    _detect_exam_round=lambda key=group['key']: key[:3],
+                    _portfolio_hash_key=self._portfolio_hash_key)
+                records.append(MainWindow._current_round_record(proxy))
+            # Show the round the user was reviewing in preparation, rather than
+            # silently replacing it with the last (possibly incomplete) round.
+            group, exam, perform = next((entry for entry in analyses if entry[0].get('preferred_display')), analyses[-1])
+            label = round_history.round_name(group['key'][1], group['key'][2])
+            state['portfolio_analysis_sessions'] = sessions
+            state['inputs'] = dict(fs_response=PATH_SEPARATOR.join(group['response']), fs_iteminfo=group['iteminfo'],
+                                   fs_cuts=group['cuts'], fs_perform=PATH_SEPARATOR.join(group['perform']),
+                                   fs_grade5_report=group['grade5_report'])
+            state['cuts'] = dict(exam.cut_scores)
+            state['weights'] = [exam.weight_pencil, exam.weight_perform]
+            state['widgets']['chk_perform'] = perform is not None
+            state['widgets']['cmb_round'] = {'text': label, 'data': None}
+            state['grade5_reports'] = copy.deepcopy(group.get('prepared_grade5_reports'))
+            state['grade5_info'] = group.get('prepared_grade5_info', '지필평가 1~5등급 컷 · 미계산')
+            final = prepare_session(build_session(exam, perform, state, None))
+            apply_python_state(self, final)
+        except Exception as exc:
+            QMessageBox.warning(self, "회차별 분석 중단", f"자료를 확인해 주세요. 기존 작업은 유지합니다.\n{exc}")
+            return False
+        failures = 0
+        for record in records:
+            try:
+                self._round_store().save_revision(record)
+            except Exception:
+                failures += 1
+        self._snapshot_inputs()
+        self._refresh_rounds_tab()
+        self.refresh_portfolio_tab()
+        # Only a newly imported batch resets the old detail-version selection.
+        # Ordinary browsing and full-work restoration still preserve it.
+        view = getattr(self, 'portfolio_view', None)
+        if view is not None:
+            from PySide6.QtCore import QSignalBlocker
+            target = (group['key'][0], group['key'][1], group['key'][2])
+            points = view.model.get('points', []) + view.model.get('unknown_points', [])
+            index = next((i for i,p in enumerate(points)
+                          if (p.get('year'),p.get('semester_no'),p.get('round_no')) == target
+                          and p.get('subject') == exam.subject), -1)
+            if index >= 0:
+                view.round_combo.setCurrentIndex(index)
+                blocker = QSignalBlocker(view.version_combo)
+                view.version_combo.setCurrentIndex(-1)
+                del blocker
+                view._render_selected_details()
+        self.statusBar().showMessage(f"{len(analyses)}개 회차 분석 완료 · 현재 표시: {label} · 전체 작업 저장 시 모두 보존" +
+                                     (f" · 회차 요약 {failures}개 파일 저장 실패(작업 내 자료는 유지)" if failures else ''))
+        return True
+
+    def _pick_folder_batch_legacy(self, directory):
         """폴더를 선택하면 안의 .xlsx 파일들을 이름 패턴으로 자동 분류해 채운다.
 
         매칭 점수 방식:
@@ -2108,9 +2283,6 @@ class MainWindow(QMainWindow):
           - 같은 파일이 여러 카테고리에 걸리면 더 높은 점수 카테고리에 배정.
           - 카테고리별 후보 중 최고 점수가 같으면 가장 최근 수정된 파일 우선.
         """
-        directory = QFileDialog.getExistingDirectory(self, "성취평가 자료가 들어있는 폴더 선택")
-        if not directory:
-            return
         from pathlib import Path
         folder = Path(directory)
         files = sorted([p for p in folder.glob("*.xlsx") if not p.name.startswith("~")])
@@ -2314,15 +2486,14 @@ class MainWindow(QMainWindow):
         }
 
     def _detect_exam_round(self) -> tuple[int | None, int | None, int | None]:
-        """(학년도, 학기, 차수). 직접 적은 값이 있으면 그것을, 없으면 파일 이름과 정오표 머리글에서 찾는다."""
+        """현재 정오표의 명시 회차를 우선하고, 수행 파일은 시험 식별에 쓰지 않는다."""
         manual = self.cmb_round.currentText().strip() if hasattr(self, "cmb_round") else ""
-        semester, round_no = round_history.parse_round(manual) if manual else (None, None)
-        header = (getattr(self.exam, "semester", "") or "") if getattr(self, "exam", None) is not None else ""
-        if semester is None and round_no is None:
-            names = self._round_file_names()
-            semester, round_no = round_history.parse_round(
-                names["정오표"], names["분할점수"], names["일람표"], names["수행평가"], header)
-        return round_history.parse_year(header), semester, round_no
+        exam = getattr(self, "exam", None)
+        header = getattr(exam, "semester", "") or ""
+        response = getattr(exam, "source_files", {}).get("responses", "") if exam else ""
+        if not response:
+            response = self._round_file_names().get("정오표", "")
+        return round_history.identify_exam_round(header, response, manual)
 
     def _update_round_hint(self, *_args):
         if not hasattr(self, "lbl_round_hint"):
@@ -2355,19 +2526,25 @@ class MainWindow(QMainWindow):
             level = overall.levels_arr[idx] if idx < len(overall.levels_arr) else grade_level(st.final_score, exam.cut_scores)
             students[student_hash(key, st.sid, st.class_no, st.name)] = {
                 "level": level, "score": round(float(st.final_score), 2)}
-        return round_history.build_record(
+        record = round_history.build_record(
             subject=exam.subject or "(과목 미상)", grade=exam.grade, year=year, semester=semester, round_no=round_no,
             n_students=len(exam.students), mean=overall.mean, std=overall.std,
             level_pct=overall.level_dist_pct, level_n=overall.level_dist, cuts=exam.cut_scores, students=students,
             weights={"pencil": exam.weight_pencil, "perform": exam.weight_perform})
 
+        record["response_fingerprint"] = round_history.response_fingerprint(exam)
+        record["round_provenance"] = "written-response-v1"
+        return record
+
     def _save_round_history(self):
         """분석할 때마다 회차 기록을 남긴다. 실패해도 분석은 그대로 진행한다."""
         try:
+            from .portfolio_details import remember_analysis
+            remember_analysis(self)
             record = self._current_round_record()
             if record is None:
                 return
-            self._round_store().save(record)
+            self._round_store().save_revision(record)
         except Exception as exc:  # 기록을 못 남겨도 분석 결과는 보여 준다
             self.statusBar().showMessage(f"회차 기록을 저장하지 못했습니다: {exc}", 6000)
             return
@@ -3809,7 +3986,13 @@ class MainWindow(QMainWindow):
         self.lbl_data_empty_state = QLabel(build_data_empty_state_html())
         self.lbl_data_empty_state.setWordWrap(True)
         self.lbl_data_empty_state.setTextFormat(Qt.RichText)
-        empty_layout.addWidget(self.lbl_data_empty_state)
+        self.data_start_guide_scroll = QScrollArea()
+        self.data_start_guide_scroll.setWidgetResizable(True)
+        self.data_start_guide_scroll.setFrameShape(QFrame.NoFrame)
+        self.data_start_guide_scroll.setMinimumHeight(160)
+        self.data_start_guide_scroll.setWidget(self.lbl_data_empty_state)
+        self.lbl_data_empty_state.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        empty_layout.addWidget(self.data_start_guide_scroll, 1)
         empty_buttons = QHBoxLayout()
         btn_show_input = QPushButton("입력 패널 열기")
         btn_show_input.setToolTip("왼쪽 입력 패널이 접혀 있으면 다시 펼칩니다.")
@@ -4139,7 +4322,8 @@ class MainWindow(QMainWindow):
             box.clear()
             for index, record in enumerate(records):
                 prefix = f"{record.get('subject')} · " if multi_subject else ""
-                box.addItem(f"{prefix}{record['label']} ({record['n_students']}명)", index)
+                caution = "" if record.get("round_provenance") == "written-response-v1" and record.get("response_fingerprint") else " · 입력 출처 미확인"
+                box.addItem(f"{prefix}{record['label']} ({record['n_students']}명){caution}", index)
             box.blockSignals(False)
         if records:
             def pick(box, wanted, default):
@@ -4147,8 +4331,16 @@ class MainWindow(QMainWindow):
                 box.setCurrentIndex(found if found >= 0 else default)
             # 새 회차가 쌓였거나 두 칸이 같아지면 가장 최근 두 회차를 고른다. 아니면 고르던 것을 유지한다.
             changed = len(records) != getattr(self, "_round_count_seen", None) or keep[0] == keep[1]
-            pick(self.cmb_round_base, None if changed else keep[0], max(0, len(records) - 2))
-            pick(self.cmb_round_other, None if changed else keep[1], len(records) - 1)
+            verified = [i for i,r in enumerate(records) if r.get("round_provenance")=="written-response-v1"
+                        and r.get("response_fingerprint") and all(r.get(k) is not None for k in ("year","semester_no","round_no"))]
+            unique = {}
+            for index in verified:
+                unique[records[index]["response_fingerprint"]] = index
+            verified = sorted(unique.values())
+            # Legacy summaries stay selectable, but never become verified inputs by default.
+            defaults = (verified[-2],verified[-1]) if len(verified)>1 else ((verified[0],-1) if verified else (-1,-1))
+            pick(self.cmb_round_base, None if changed else keep[0], defaults[0])
+            pick(self.cmb_round_other, None if changed else keep[1], defaults[1])
         self._round_count_seen = len(records)
         self._render_rounds_compare()
 
@@ -4163,7 +4355,7 @@ class MainWindow(QMainWindow):
             self.canvas_round_compare.set_placeholder("서로 다른 두 회차를 분석하면 비교 그래프를 표시합니다.")
             self.lbl_round_moves.setText("")
             self.lbl_round_status.setText(
-                "저장된 회차가 아직 %d개입니다. 서로 다른 시험(예: 1학기 1차, 1학기 2차)을 분석하면 비교할 수 있습니다. "
+                "저장 기록 %d개 · 입력 출처가 확인된 서로 다른 두 회차를 분석하면 자동 비교합니다. 미확인 옛 기록은 직접 선택할 수 있습니다. "
                 "분석 전에 '시험 구분'을 확인하세요." % len(records))
             return
         if base_i == other_i:
@@ -4171,8 +4363,17 @@ class MainWindow(QMainWindow):
             self.lbl_round_status.setText("기준과 비교에 서로 다른 회차를 골라 주세요.")
             return
         base, other = records[base_i], records[other_i]
+        if any(record.get(key) is None for record in (base,other) for key in ("year","semester_no","round_no")):
+            self.canvas_round_compare.set_placeholder("회차 미확인 기록은 비교하지 않습니다. 원래 기록은 보존됩니다.")
+            self.lbl_round_status.setText("학년도·학기·차수가 확인된 기록을 선택하세요.")
+            return
+        if base.get("response_fingerprint") and base.get("response_fingerprint")==other.get("response_fingerprint"):
+            self.canvas_round_compare.set_placeholder("두 기록의 정오표 입력이 같습니다. 다른 시험 입력을 확인하세요.")
+            self.lbl_round_status.setText("동일 입력의 회차 표기만 다른 기록 · 원래 기록 보존")
+            return
         result = round_history.compare(base, other)
-        self.lbl_round_status.setText(f"{base['label']} → {other['label']}")
+        warning = " · 입력 출처 미확인 옛 기록 포함" if any(not record.get("response_fingerprint") for record in (base,other)) else ""
+        self.lbl_round_status.setText(f"{base['label']} → {other['label']}{warning}")
         if not getattr(self, "_startup_building", False):
             self.canvas_round_compare.set_figure(charts.fig_round_compare(base, other))
 
@@ -9411,9 +9612,9 @@ codex login status</pre>
 
     # --------------------------------------------------------- 분석 실행
     def run_analysis(self):
-        if not self.fs_response.path() or not self.fs_iteminfo.path():
+        if not self.fs_response.path():
             QMessageBox.warning(self, "입력 부족",
-                                "정오표와 문항정보표 두 파일을 먼저 지정해 주세요.")
+                                "분석할 회차의 정오표를 지정해 주세요. 문항정보가 없으면 학생 점수만 표시합니다.")
             return
         try:
             exam = load_exam(self.fs_iteminfo.path(), self.fs_response.path())
@@ -9430,12 +9631,18 @@ codex login status</pre>
                 perform_data = load_perform_many(self.fs_perform.path())
             except Exception as e:
                 QMessageBox.warning(self, "수행평가 파일 오류",
-                                    f"수행평가 파일을 읽지 못했습니다. 정기시험만 분석합니다.\n{e}")
-        apply_perform(
-            exam, perform_data,
-            float(self.spin_pencil_ratio.value()),
-            float(self.spin_perform_ratio.value()),
-        )
+                                    f"수행평가 파일을 읽지 못했습니다. 이전 분석 결과를 유지합니다.\n{e}")
+                return
+        try:
+            apply_perform(
+                exam, perform_data,
+                float(self.spin_pencil_ratio.value()) if perform_data is not None else 100.0,
+                float(self.spin_perform_ratio.value()) if perform_data is not None else 0.0,
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "수행평가 결합 오류",
+                                f"이전 분석 결과를 유지합니다.\n{e}")
+            return
 
         try:
             score_mat, _, _ = build_score_matrix(exam)
@@ -9477,6 +9684,14 @@ codex login status</pre>
             f"분할점수 A≥{int(exam.cut_scores['A'])} B≥{int(exam.cut_scores['B'])} "
             f"C≥{int(exam.cut_scores['C'])} D≥{int(exam.cut_scores['D'])} E≥{int(exam.cut_scores['E'])}"
         )
+
+        if not exam.items or perform_data is None:
+            missing = []
+            if not exam.items: missing.append('문항정보 없음: 문항·답지반응·성취기준 분석 미표시')
+            if perform_data is None: missing.append('수행 자료 없음: 현재 회차 지필 원점수만 표시 (학기 총점 아님)')
+            self.statusBar().showMessage('분석 완료 · ' + ' · '.join(missing))
+        if hasattr(self, "folder_workspace"):
+            self.folder_workspace.after_analysis()
 
     # ------------------------------------------------------------- 렌더링
     def _render_data_tab(self):
@@ -9839,8 +10054,9 @@ codex login status</pre>
 
     def _render_items(self):
         ov = self.overall
-        self.lbl_alpha.setText(f"정기시험 신뢰도 (Cronbach's alpha): {ov.cronbach_alpha:.3f} "
-                               f"({reliability_label(ov.cronbach_alpha)})")
+        self.lbl_alpha.setText(
+            f"정기시험 신뢰도 (Cronbach's alpha): {ov.cronbach_alpha:.3f} ({reliability_label(ov.cronbach_alpha)})"
+            if self.exam.select_items else '문항정보 자료 없음 · 문항 분석과 신뢰도는 표시하지 않습니다.')
 
         self.canvas_pvalue.set_figure(charts.fig_item_difficulty(self.item_stats))
         self.canvas_discr.set_figure(charts.fig_item_discrimination(self.item_stats))
@@ -9945,6 +10161,10 @@ codex login status</pre>
 
     def _refresh_choice(self):
         if self.combo_item.count() == 0:
+            self.lbl_choice_info.setText('문항정보 자료 없음 · 답지반응 분석을 표시하지 않습니다.')
+            self.table_choice.setRowCount(0)
+            from matplotlib.figure import Figure
+            self.canvas_choice.set_figure(Figure())
             return
         s = self.combo_item.currentData()
         if s is None:
@@ -12030,6 +12250,13 @@ codex login status</pre>
         out = Path(directory)
         ov = self.overall
         try:
+            targets = [out / name for name in (
+                "학생결과.csv", "문항분석.csv", "성취기준별.csv", "성취수준분포.csv")]
+            if with_graphs:
+                targets.append(out / "그래프")
+            if any(path.exists() or path.is_symlink() for path in targets):
+                out = Path(tempfile.mkdtemp(
+                    prefix=f"분석결과-{datetime.now():%Y%m%d-%H%M%S}-", dir=out))
             self._write_csv(out / "학생결과.csv", *student_result_table(
                 self.exam.students, ov.levels_arr, include_identity=include_identity,
                 pseudonyms=None if include_identity else self._student_pseudonyms()))
@@ -12057,34 +12284,41 @@ codex login status</pre>
             saved_pngs = []
             if with_graphs:
                 graph_dir = out / "그래프"
-                graph_dir.mkdir(exist_ok=True)
+                graph_dir.mkdir(exist_ok=False)
                 # 도넛
                 f = charts.fig_level_donut(ov.level_dist_pct, ov.level_dist)
-                f.savefig(graph_dir / "01_성취수준_도넛.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "01_성취수준_도넛.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("01_성취수준_도넛.png")
                 # 환산점수 히스토그램
                 f = charts.fig_score_histogram_colored(
                     [s.final_score for s in self.exam.students], ov.levels_arr)
-                f.savefig(graph_dir / "02_환산점수_분포.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "02_환산점수_분포.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("02_환산점수_분포.png")
                 # 평균±표준편차
                 f = charts.fig_level_means_with_error(ov.level_mean, ov.level_std)
-                f.savefig(graph_dir / "03_성취수준별_평균.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "03_성취수준별_평균.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("03_성취수준별_평균.png")
                 # 학급별 평균
                 f = charts.fig_class_means(ov.by_class)
-                f.savefig(graph_dir / "04_학급별_평균.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "04_학급별_평균.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("04_학급별_평균.png")
                 # 문항별 정답률/변별도
                 f = charts.fig_item_difficulty(self.item_stats)
-                f.savefig(graph_dir / "05_문항_정답률.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "05_문항_정답률.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("05_문항_정답률.png")
                 f = charts.fig_item_discrimination(self.item_stats)
-                f.savefig(graph_dir / "06_문항_변별도.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "06_문항_변별도.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("06_문항_변별도.png")
                 # 성취기준
                 f = charts.fig_standard_attainment(ov.by_standard)
-                f.savefig(graph_dir / "07_성취기준별_정답률.png", dpi=150, bbox_inches="tight")
+                with (graph_dir / "07_성취기준별_정답률.png").open("xb") as image_file:
+                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
                 saved_pngs.append("07_성취기준별_정답률.png")
 
             extra = f"\n그래프 {len(saved_pngs)}장 → 그래프/ 폴더" if saved_pngs else ""
@@ -12096,7 +12330,7 @@ codex login status</pre>
 
     @staticmethod
     def _write_csv(path: Path, headers, rows):
-        with open(path, "w", encoding="utf-8-sig", newline="") as f:
+        with open(path, "x", encoding="utf-8-sig", newline="") as f:
             w = csv.writer(f)
             w.writerow([csv_safe_cell(value) for value in headers])
             w.writerows([csv_safe_cell(value) for value in row] for row in rows)

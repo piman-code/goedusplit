@@ -29,6 +29,14 @@ def _configure_frozen_webengine() -> None:
 _configure_frozen_webengine()
 
 if __name__ == "__main__":
+    if "--actual-data-review" in sys.argv:
+        sys.argv.remove("--actual-data-review")
+        from app.actual_data_review import main
+        raise SystemExit(main())
+    if "--workspace-review" in sys.argv:
+        sys.argv.remove("--workspace-review")
+        from app.workspace_review import main
+        raise SystemExit(main())
     if "--synthetic-qa" in sys.argv:
         from app.synthetic_qa import main
         raise SystemExit(main())

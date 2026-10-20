@@ -14,6 +14,7 @@ NEIS 정기시험 정오표, 문항정보표, (선택) 수행평가 결과 엑�
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
@@ -409,6 +410,19 @@ def apply_perform(exam: "ExamData", perform_data, weight_pencil: float, weight_p
     환산점수 = 정기시험 점수(100점) × 정기시험 반영비율 + 수행평가(100점환산) × 수행반영비율
     반영비율은 합 100을 가정. 0이거나 합이 100이 아닐 때 자동 정규화.
     """
+    use_perform = perform_data is not None and weight_perform > 0
+    matched = [
+        (perform_data.records.get(st.sid) or perform_data.by_classno.get(st.class_no))
+        if perform_data is not None else None
+        for st in exam.students
+    ]
+    missing = sum(rec is None for rec in matched)
+    if use_perform and missing:
+        raise ValueError(
+            f"수행평가 자료에서 학생 {missing}명의 점수를 찾지 못했습니다. "
+            "모든 반의 수행평가 파일과 학생 식별정보를 확인해 주세요. "
+            "누락된 점수를 0점으로 처리하지 않았습니다."
+        )
     total_w = float(weight_pencil) + float(weight_perform)
     if total_w <= 0:
         wp, ws = 1.0, 0.0
@@ -417,18 +431,9 @@ def apply_perform(exam: "ExamData", perform_data, weight_pencil: float, weight_p
         ws = float(weight_perform) / total_w
     exam.weight_pencil = float(weight_pencil)
     exam.weight_perform = float(weight_perform)
-    exam.use_perform = perform_data is not None and weight_perform > 0
+    exam.use_perform = use_perform
 
-    name_idx = {}
-    if perform_data is not None:
-        for sid, rec in perform_data.records.items():
-            name_idx[(sid, rec.class_no, rec.name)] = rec
-            name_idx[(sid,)] = rec
-
-    for st in exam.students:
-        rec = None
-        if perform_data is not None:
-            rec = perform_data.records.get(st.sid) or perform_data.by_classno.get(st.class_no)
+    for st, rec in zip(exam.students, matched):
         if rec is not None:
             st.perform_score = rec.pct100
             # 정오표에 이름이 비어있다면 수행평가 이름으로 보충
@@ -452,6 +457,33 @@ def split_paths(value) -> list[str]:
     return [p.strip() for p in str(value).split(PATH_SEPARATOR) if p.strip()]
 
 
+def _response_exam_evidence(text: str) -> dict[str, set]:
+    """Only explicit labels count; class labels such as '(1-2)' are not exam metadata."""
+    text = unicodedata.normalize("NFC", text)
+    patterns = {
+        "학년도": r"(?<!\d)(20\d{2})\s*학년도",
+        "학기": r"(?<!\d)([12])\s*학기",
+        "차수": r"(?<![0-9-])([1-4])\s*차(?!이|원|시)",
+        "학년": r"(?<!\d)(\d{1,2})\s*학년(?!도)",
+    }
+    evidence = {field: {int(value) for value in re.findall(pattern, text)}
+                for field, pattern in patterns.items()}
+    subject = re.search(r"(?:교과목|과목)\s*[:：]\s*([^\n,]+)", text)
+    if subject is None:
+        subject = re.search(r"수학\s*[:：]\s*([^\n,]+)", text)
+    if subject:
+        # A title may put class/exam fields after the subject. Preserve digits in
+        # names such as '공통수학1', but stop at a separately labelled field.
+        value = re.split(
+            r"\s+(?=\d+\s*(?:학년도|학년|학기|차(?!이|원|시)|반)(?![가-힣]))",
+            subject.group(1), maxsplit=1,
+        )[0]
+        value = re.sub(r"\s+", "", value)
+        value = re.sub(r"^수학[:：]", "", value)
+        evidence["과목"] = {value}
+    return evidence
+
+
 def load_student_responses_many(paths) -> tuple[list[StudentResponse], dict, dict]:
     """Merge one 정오표 file per class into a single student list (the whole grade/subject).
 
@@ -464,9 +496,19 @@ def load_student_responses_many(paths) -> tuple[list[StudentResponse], dict, dic
     answers: dict = {}
     meta: dict = {}
     seen: dict[str, str] = {}
+    known_exam: dict[str, set] = {}
     for index, path in enumerate(paths):
         part, part_answers, part_meta = load_student_responses(path)
         name = Path(path).name
+        for source in (Path(path).stem, part_meta.get("info_text", "")):
+            for field, values in _response_exam_evidence(source).items():
+                known = known_exam.setdefault(field, set())
+                if len(known | values) > 1:
+                    raise ValueError(
+                        f"정오표 시험 정보({field})가 서로 다릅니다. "
+                        "같은 시험(같은 학년도·학기·차수·학년·과목)의 반별 파일만 선택해 주세요."
+                    )
+                known.update(values)
         if index == 0:
             answers, meta = part_answers, part_meta
         elif part_answers != answers:
@@ -483,7 +525,8 @@ def load_student_responses_many(paths) -> tuple[list[StudentResponse], dict, dic
 
 def load_exam(item_info_path, response_path) -> ExamData:
     """response_path: one 정오표 file, a list of them, or 'a.xlsx|b.xlsx' (one file per class)."""
-    items, item_meta = load_item_info(item_info_path)
+    # Missing optional item metadata permits real student totals, never invented items.
+    items, item_meta = load_item_info(item_info_path) if item_info_path else ([], {})
     response_paths = split_paths(response_path)
     if len(response_paths) > 1:
         students, answers, resp_meta = load_student_responses_many(response_paths)
@@ -499,7 +542,7 @@ def load_exam(item_info_path, response_path) -> ExamData:
                 it.answer = ans_from_resp
 
     exam = ExamData(items=items, students=students)
-    exam.source_files["item_info"] = str(item_info_path)
+    exam.source_files["item_info"] = str(item_info_path) if item_info_path else ""
     exam.source_files["responses"] = str(response_path)
 
     info_text = resp_meta.get("info_text", "")

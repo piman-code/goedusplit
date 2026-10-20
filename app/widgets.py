@@ -193,6 +193,9 @@ def install_frozen_columns(table, frozen_count: int):
     frozen.setModel(table.model())
     frozen.setSelectionModel(table.selectionModel())
     frozen.setFocusPolicy(Qt.NoFocus)
+    # Both scrollbars must express the same unit (pixels or rows).
+    frozen.setVerticalScrollMode(table.verticalScrollMode())
+    frozen.setFrameShape(QTableView.NoFrame)
     frozen.verticalHeader().hide()
     frozen.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
     frozen.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -226,19 +229,30 @@ def install_frozen_columns(table, frozen_count: int):
         # 메인 헤더 indicator도 동기화
         table.horizontalHeader().setSortIndicator(idx, order)
     frozen.horizontalHeader().sortIndicatorChanged.connect(_on_frozen_sort)
+    def _on_frozen_width(column, _old, width):
+        from PySide6.QtWidgets import QApplication
+        if column < frozen_count and QApplication.mouseButtons() & Qt.LeftButton:
+            control = getattr(table, '_column_controls', None)
+            if control is not None:
+                control.remember_width(column, width)
+            else:
+                table.setColumnWidth(column, width)
+                table.frozenWidths[column] = width
+                _sync_geometry()
+    frozen.horizontalHeader().sectionResized.connect(_on_frozen_width)
 
-    # 메인 표 스크롤 동기화 (vertical만)
+    # Wheel input on either viewport must move the same rows.
     table.verticalScrollBar().valueChanged.connect(frozen.verticalScrollBar().setValue)
+    frozen.verticalScrollBar().valueChanged.connect(table.verticalScrollBar().setValue)
+    table.verticalHeader().sectionResized.connect(
+        lambda row, _old, height: frozen.setRowHeight(row, height))
 
     def _sync_geometry():
-        # frozen 폭 = 고정 컬럼들의 합 + verticalHeader 폭 (선택적)
-        vh_w = table.verticalHeader().width() if table.verticalHeader().isVisible() else 0
         cols_w = sum(getattr(table, "frozenWidths", frozen_widths))
-        total_w = vh_w + cols_w
-        # frozen 위치: 표 frame 안쪽, 헤더 + 본문 높이 모두 포함
         header_h = table.horizontalHeader().height()
-        frozen.setGeometry(table.frameWidth(), table.frameWidth(),
-                           total_w, table.viewport().height() + header_h)
+        frozen.horizontalHeader().setFixedHeight(header_h)
+        frozen.setGeometry(table.viewport().x(), table.viewport().y() - header_h,
+                           cols_w, table.viewport().height() + header_h)
 
     def _on_main_resize(event):
         QTableWidget.resizeEvent(table, event)
@@ -248,6 +262,7 @@ def install_frozen_columns(table, frozen_count: int):
     table.frozenView = frozen
     table.frozenCount = frozen_count
     table.frozenWidths = frozen_widths
+    table._sync_frozen_geometry = _sync_geometry
     refresh_frozen_columns(table)
     frozen.show()
     return frozen
@@ -277,12 +292,11 @@ def refresh_frozen_columns(table):
             table.setColumnHidden(c, False)
     for r in range(table.rowCount()):
         fv.setRowHeight(r, table.rowHeight(r))
+        fv.setRowHidden(r, table.isRowHidden(r))
     # 메인 viewport 좌측 마진과 frozen 위치 재계산
-    cols_w = sum(widths)
-    vh_w = table.verticalHeader().width() if table.verticalHeader().isVisible() else 0
-    header_h = table.horizontalHeader().height()
-    fv.setGeometry(table.frameWidth(), table.frameWidth(),
-                   vh_w + cols_w, table.viewport().height() + header_h)
+    fv.setVerticalScrollMode(table.verticalScrollMode())
+    table._sync_frozen_geometry()
+    fv.verticalScrollBar().setValue(table.verticalScrollBar().value())
     fv.show()
     fv.raise_()
 

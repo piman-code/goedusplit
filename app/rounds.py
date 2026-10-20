@@ -7,8 +7,10 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import unicodedata
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -44,6 +46,40 @@ def parse_year(*texts) -> int | None:
     return None
 
 
+def identify_exam_round(header, response_paths, manual=''):
+    """Written-response evidence wins; auxiliary assessment files are excluded.
+
+    Conflicting explicit evidence stays unknown. Manual text fills only absent
+    components and never overrides or resolves a written-input conflict.
+    """
+    from .data_loader import split_paths
+    texts=[str(header or '')]+[Path(path).name for path in split_paths(response_paths)]
+    years={parse_year(text) for text in texts}-{None}
+    semesters={parse_round(text)[0] for text in texts}-{None}
+    numbers={parse_round(text)[1] for text in texts}-{None}
+    manual_semester,manual_round=parse_round(manual)
+    def choose(values,fallback=None):
+        return next(iter(values)) if len(values)==1 else (fallback if not values else None)
+    return choose(years),choose(semesters,manual_semester),choose(numbers,manual_round)
+
+
+def response_fingerprint(exam):
+    """Hash actual loaded response-file bytes; never infer equivalence from scores."""
+    from .data_loader import split_paths
+    paths=split_paths(getattr(exam,'source_files',{}).get('responses',''))
+    if not paths: return None
+    digests=[]
+    try:
+        for name in paths:
+            digest=hashlib.sha256()
+            with Path(name).open('rb') as stream:
+                for block in iter(lambda:stream.read(1024*1024),b''): digest.update(block)
+            digests.append(digest.hexdigest())
+    except OSError:
+        return None
+    return hashlib.sha256('|'.join(sorted(digests)).encode()).hexdigest()
+
+
 def round_name(semester: int | None, round_no: int | None) -> str:
     """'1학기 1차' / '1학기' / '1차' / '회차 미지정'."""
     parts = []
@@ -70,7 +106,10 @@ def tags_conflict(a: tuple, b: tuple) -> bool:
 
 
 def record_key(subject: str, grade: str, year, semester, round_no) -> str:
-    return "|".join(str(part or "") for part in (_nfc(subject), _nfc(grade), year, semester, round_no))
+    # Keep field boundaries even when a subject itself contains a separator.
+    return json.dumps(
+        [str(part or "") for part in (_nfc(subject), _nfc(grade), year, semester, round_no)],
+        ensure_ascii=False, separators=(",", ":"))
 
 
 def sort_key(record: dict):
@@ -104,27 +143,56 @@ class RoundStore:
     def path_for(self, record: dict) -> Path:
         key = record_key(record["subject"], record["grade"], record.get("year"), record.get("semester_no"),
                          record.get("round_no"))
-        safe = re.sub(r"[\\/:*?\"<>|\s]+", "_", key).strip("_")
-        return self.directory / f"round_{safe}.json"
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return self.directory / f"round_{digest}.json"
 
     def save(self, record: dict) -> Path:
         self.directory.mkdir(parents=True, exist_ok=True)
         path = self.path_for(record)
-        temp = path.with_suffix(".json.tmp")
-        temp.write_text(json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8")
+        content = json.dumps(record, ensure_ascii=False, indent=2, allow_nan=False)
+        temp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+        # Separate writers must never share a temporary file. Failed publication
+        # leaves the prior JSON intact and the temporary evidence untouched.
+        with temp.open("x", encoding="utf-8") as stream:
+            stream.write(content)
         temp.replace(path)
         return path
 
+    def save_revision(self, record: dict) -> Path:
+        """Append a new analysis revision without replacing any previous file."""
+        self.directory.mkdir(parents=True,exist_ok=True)
+        record=dict(record,append_revision=True,saved_at=datetime.now().isoformat(timespec='microseconds'))
+        path=self.path_for(record).with_name(self.path_for(record).stem+'_'+uuid.uuid4().hex+'.json')
+        content=json.dumps(record,ensure_ascii=False,indent=2,allow_nan=False)
+        with path.open('x',encoding='utf-8') as stream:
+            stream.write(content)
+        return path
+
     def load_all(self) -> list[dict]:
-        records = []
+        records = {}
         for path in sorted(self.directory.glob("round_*.json")) if self.directory.exists() else []:
             try:
                 data = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 continue
             if isinstance(data, dict) and data.get("kind") == "round" and isinstance(data.get("students"), dict):
-                records.append(data)
-        return sorted(records, key=sort_key)
+                if "subject" not in data or "grade" not in data:
+                    continue
+                canonical_path = self.path_for(data)
+                key = canonical_path.name
+                # Read legacy names without migrating or deleting them. Once
+                # saved in the new format, that record supersedes its legacy copy.
+                is_current = path == canonical_path
+                previous = records.get(key)
+                appended = bool(data.get("append_revision"))
+                prior_appended = bool(previous and previous[1].get("append_revision"))
+                replace = (previous is None or
+                           (appended and (not prior_appended or sort_key(data)>sort_key(previous[1]))) or
+                           (not appended and not prior_appended and
+                            (is_current or (not previous[0] and sort_key(data)>sort_key(previous[1])))))
+                if replace:
+                    records[key] = (is_current, data)
+        return sorted((data for _, data in records.values()), key=sort_key)
 
 
 def same_course(records: list[dict], subject: str, grade: str) -> list[dict]:

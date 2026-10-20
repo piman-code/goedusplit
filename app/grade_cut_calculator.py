@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import math
 import re
+import unicodedata
 
 
 GRADE5_CUMULATIVE = [("1", 10.0), ("2", 34.0), ("3", 66.0), ("4", 90.0), ("5", 100.0)]
@@ -39,16 +40,19 @@ def _detect_max_score(ws) -> float:
 
 
 def _detect_subject(ws, fallback: str) -> str:
-    joined = []
+    # A NEIS header may use "교과목 : 교과군:과목명(학점)".
+    # Read each row independently so later headers never become subject text.
     for row in ws.iter_rows(min_row=1, max_row=min(ws.max_row, 8), values_only=True):
-        joined.append(" ".join(str(v) for v in row if v not in (None, "")))
-    text = " ".join(joined)
-    match = re.search(r"교과목\s*[:：]\s*(.*?)\s+만점", text)
-    if match and match.group(1).strip():
-        return match.group(1).strip()
-    for line in joined:
-        if "교과목" in line:
-            return line.strip()
+        text = unicodedata.normalize("NFC", " ".join(str(v) for v in row if v not in (None, "")))
+        match = re.search(r"교과목\s*[:：]\s*(.+)", text)
+        if not match:
+            continue
+        value = re.split(r"\s+(?:만점(?=\s*[:：]|\s+\d)|(?:담당교사|지도교사|교사|고사|학년|학기)\s*[:：])", match.group(1), maxsplit=1)[0].strip()
+        # Match the response loader's known NEIS mathematics category rule.
+        # Unknown colon-bearing names remain intact rather than guessing a course.
+        value = re.sub(r"^수학\s*[:：]\s*", "", value)
+        if value:
+            return value
     return fallback
 
 

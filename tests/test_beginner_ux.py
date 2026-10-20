@@ -29,7 +29,9 @@ class BeginnerTextTests(unittest.TestCase):
     def test_start_guide_numbers_once_and_separates_title_from_text(self):
         html = build_data_empty_state_html()
         self.assertNotIn("1. 입력 데이터", html)          # <ol> numbers the steps
-        self.assertIn("<b>입력 데이터</b> — 왼쪽에서", html)
+        self.assertIn("<b>입력 데이터</b><br>왼쪽에서", html)
+        self.assertIn("line-height:160%", html)
+        self.assertIn("margin-bottom:8px", html)
         self.assertIn("시험지에서 문항 가져오기", html)   # no longer says paper import is a later version
 
     def test_comparison_headline_names_the_largest_misses_in_plain_words(self):
@@ -150,6 +152,7 @@ class WindowTests(unittest.TestCase):
         self.assertEqual(self.window.tabs.tabText(1), "포트폴리오")   # not the tiny "학생"
 
     def test_run_button_is_outside_the_scrolling_panel(self):
+        self.window.input_workspace.open('individual');self.settle()
         button = self.window.btn_run_analysis
         parent = button.parentWidget()
         while parent is not None:
@@ -167,7 +170,7 @@ class WindowTests(unittest.TestCase):
         self.window._refresh_header_icons()
         self.assertEqual(self.window.btn_counsel_mode.text(), "상담 모드")
         self.assertEqual(self.window.btn_zoom_reset.text(), "기본")
-        self.assertEqual(self.window.btn_sidebar.text(), "입력 패널")
+        self.assertEqual(self.window.btn_sidebar.text(), "자료·분석 설정")
 
     def test_answer_marks_are_explained(self):
         self.analyze()

@@ -42,7 +42,17 @@ REQUIRED_CHECKS = (
     'portfolio consultation report opens and captures',
     'portfolio records reload with isolated settings and recover names',
     'portfolio malformed file is preserved and diagnosed',
+    'full work captures and saves analysis and calculator together',
+    'full work QA establishes a different B state',
+    'full work restore returns native edits and exact calculator state to A',
+    'failed full work restore preserves current native and calculator state',
 )
+
+
+from .portfolio_ui_qa import REQUIRED_CHECKS as PORTFOLIO_UI_CHECKS
+from .scroll_ui_qa import REQUIRED_CHECKS as SCROLL_UI_CHECKS
+from .batch_ui_qa import REQUIRED_CHECKS as BATCH_UI_CHECKS
+REQUIRED_CHECKS += PORTFOLIO_UI_CHECKS + SCROLL_UI_CHECKS + BATCH_UI_CHECKS
 
 
 def project_fixture():
@@ -231,7 +241,9 @@ def run(output):
          patch.object(ui.QMessageBox,'warning',side_effect=lambda *a,**k:report['errors'].append('warning: '+str(a[2]))), \
          patch.object(ui.QMessageBox,'critical',side_effect=lambda *a,**k:report['errors'].append('critical: '+str(a[2]))):
         try:
-            window=ui.MainWindow();window.resize(1280,800);window.show()
+            from .theme import ThemeManager
+            theme=ThemeManager(application);theme.set_mode("light")
+            window=ui.MainWindow(theme_manager=theme);window.resize(1280,800);window.show()
             QTest.qWait(500)
             initial_window_id=int(window.winId())
             watcher=SurfaceWatch()
@@ -310,9 +322,20 @@ def run(output):
             window.combo_portfolio_student.setCurrentIndex(1)
             selected_key=window.combo_portfolio_student.currentData()
             selected=window._portfolio_rows_for_key(selected_key)
-            visible=sum(not window.table_portfolio.isRowHidden(r) for r in range(window.table_portfolio.rowCount()))
+            from .main_window import PORTFOLIO_STUDENT_KEY_ROLE
+            visible_rows=[r for r in range(window.table_portfolio.rowCount())
+                          if not window.table_portfolio.isRowHidden(r)]
+            summaries=[row for row in selected if row.get('source_kind')=='summary']
+            source_counts={kind:sum(row.get('source_kind')==kind for row in selected)
+                           for kind in sorted({row.get('source_kind','') for row in selected})}
+            report['portfolio_filter_sources']=source_counts
             check('portfolio links two subjects and filters selected student',
-                  len(selected)==3 and visible==3 and {row['subject'] for row in selected}=={original_subject,'합성영어'})
+                  len(summaries)==3 and len(visible_rows)==len(selected)
+                  and {row['subject'] for row in summaries}=={original_subject,'합성영어'}
+                  and all(window._portfolio_student_key(row)==selected_key for row in selected)
+                  and all(window.table_portfolio.item(r,0).data(PORTFOLIO_STUDENT_KEY_ROLE)==selected_key
+                          for r in visible_rows)
+                  and all(row.get('source_kind') in {'summary','analysis-session'} for row in selected))
             captured=[]
             def capture_report():
                 dialog=application.activeModalWidget()
@@ -331,27 +354,42 @@ def run(output):
             reloaded_settings=QSettings(settings.fileName(),QSettings.IniFormat)
             reloaded_settings.setFallbacksEnabled(False)
             original_hash=settings.value('privacy/portfolio_hash_key')
+            # Reopening saved summaries has no process-local analysis cache.
+            retained_sessions=getattr(window,'_portfolio_analysis_sessions',{})
+            window._portfolio_analysis_sessions={}
             window.settings=reloaded_settings;window.exam=None;window.overall=None
             window.refresh_portfolio_tab()
             anonymous=window.table_portfolio.rowCount()==15 and all(
                 row['name'].startswith('학생#') for row in window._portfolio_rows_cache)
             window.exam,window.overall=current_exam,current_overall
+            window._portfolio_analysis_sessions=retained_sessions
             window.refresh_portfolio_tab()
             restored=window._portfolio_rows_for_key(selected_key)
+            restored_summaries=[row for row in restored if row.get('source_kind')=='summary']
+            restored_visible=[r for r in range(window.table_portfolio.rowCount())
+                              if not window.table_portfolio.isRowHidden(r)]
             check('portfolio records reload with isolated settings and recover names',
                   anonymous and reloaded_settings.value('privacy/portfolio_hash_key')==original_hash
-                  and len(restored)==3 and visible==sum(not window.table_portfolio.isRowHidden(r)
-                      for r in range(window.table_portfolio.rowCount()))
+                  and len(restored_summaries)==3 and len(restored_visible)==len(restored)==len(selected)
+                  and all(window.table_portfolio.item(r,0).data(PORTFOLIO_STUDENT_KEY_ROLE)==selected_key
+                          for r in restored_visible)
+                  and {row['subject'] for row in restored_summaries}=={original_subject,'합성영어'}
                   and all(not row['name'].startswith('학생#') for row in restored)
                   and all((store/name).read_bytes()==data for name,data in retained.items()))
+            valid_rows_before_malformed=copy.deepcopy(window._portfolio_rows_cache)
             malformed=store/'synthetic-malformed.json';malformed.write_text('{}',encoding='utf-8')
             window.refresh_portfolio_tab();QTest.qWait(50)  # let the longer note re-layout before capture
             check('portfolio malformed file is preserved and diagnosed',
-                  window.table_portfolio.rowCount()==15 and len(window._portfolio_load_errors)==1
+                  window._portfolio_rows_cache==valid_rows_before_malformed
+                  and window.table_portfolio.rowCount()==len(valid_rows_before_malformed)
+                  and sum(row.get('source_kind')=='summary' for row in window._portfolio_rows_cache)==15
+                  and len(window._portfolio_load_errors)==1
                   and '읽지 못한 저장 파일 1개' in window.lbl_portfolio_note.text()
                   and malformed.read_text(encoding='utf-8')=='{}'
                   and window.grab().save(str(output/'portfolio-window.png')))
             report['portfolio']={'saved_files':len(retained),'records':15,'selected_student_records':3,
+                                 'analysis_session_rows':sum(row.get('source_kind')=='analysis-session'
+                                                            for row in window._portfolio_rows_cache),
                                  'subjects':2,'stored_identity':'keyed hashes only','malformed_files_preserved':1}
             window.exam.subject=original_subject
             window.combo_portfolio_student.setCurrentIndex(0)
@@ -380,6 +418,72 @@ def run(output):
                   and len(window._round_records)==2 and window.table_round_metrics.rowCount()>0
                   and window.canvas_round_compare._canvas is not None)
             window.canvas_round_compare._canvas.figure.savefig(charts_dir/'round-comparison.png')
+            # Exercise the packaged full-work codec/controller after both rounds.
+            # All records and identities are synthetic and stay under this QA root.
+            from .work_sessions import WorkSessionStore
+            controller=window.work_sessions
+            window.le_search.setText('합성')
+            window.monitor_spins['ref_a_mean'].setValue(21.5)
+            captured_work=[]
+            controller.capture(lambda payload,error:captured_work.append((payload,error)))
+            wait(lambda:bool(captured_work))
+            if captured_work[0][1] is not None:
+                raise AssertionError('Full work capture: '+str(captured_work[0][1]))
+            work_a=captured_work[0][0]
+            project_a=copy.deepcopy(work_a['calculator_project'])
+            full_store=WorkSessionStore(output/'full-work')
+            full_path=full_store.save(work_a)
+            full_bytes=full_path.read_bytes()
+            saved_work=full_store.read(full_path)
+            check('full work captures and saves analysis and calculator together',
+                  saved_work==work_a and bool(project_a and project_a.get('items'))
+                  and full_path.is_relative_to(output/'full-work'))
+            project_b=copy.deepcopy(project_a)
+            project_b['items'][0]['note']='합성 B 작업 · 저장 A와 달라야 함'
+            controller._post_project(project_b)
+            wait(lambda:js(window,'window.__GOEDUSPLIT_GET_PROJECT__()')==project_b)
+            window.le_search.setText('B')
+            window.monitor_spins['ref_a_mean'].setValue(95)
+            window.exam.subject='합성 다른 과목 B'
+            check('full work QA establishes a different B state',
+                  js(window,'window.__GOEDUSPLIT_GET_PROJECT__()')!=project_a
+                  and window.exam.subject!=work_a['metadata']['subject']
+                  and window.le_search.text()=='B'
+                  and window.monitor_spins['ref_a_mean'].value()==95)
+            restored_work=[]
+            controller.restore(saved_work,lambda ok,error:restored_work.append((ok,error)))
+            wait(lambda:bool(restored_work))
+            if restored_work[0][1] is not None:
+                raise AssertionError('Full work restore: '+str(restored_work[0][1]))
+            check('full work restore returns native edits and exact calculator state to A',
+                  restored_work[0][0] and js(window,'window.__GOEDUSPLIT_GET_PROJECT__()')==project_a
+                  and window.exam.subject==work_a['metadata']['subject']
+                  and window.le_search.text()=='합성'
+                  and window.monitor_spins['ref_a_mean'].value()==21.5
+                  and len(window.exam.students)==5 and window.table_data.rowCount()==5
+                  and full_path.read_bytes()==full_bytes)
+            broken_work=copy.deepcopy(saved_work)
+            broken_work['domain']['exam']['fields']['students']=[]
+            rejected_work=[]
+            controller.restore(broken_work,lambda ok,error:rejected_work.append((ok,error)))
+            wait(lambda:bool(rejected_work))
+            check('failed full work restore preserves current native and calculator state',
+                  not rejected_work[0][0] and rejected_work[0][1] is not None
+                  and js(window,'window.__GOEDUSPLIT_GET_PROJECT__()')==project_a
+                  and window.exam.subject==work_a['metadata']['subject']
+                  and window.le_search.text()=='합성'
+                  and window.monitor_spins['ref_a_mean'].value()==21.5
+                  and full_path.read_bytes()==full_bytes
+                  and window.isEnabled() and not controller.busy)
+            report['full_work']={'record':str(full_path.relative_to(output)),
+                                 'students':len(window.exam.students),
+                                 'calculator_exact_equal':True,'failed_restore_preserved':True}
+            from .portfolio_ui_qa import verify as verify_portfolio_ui
+            verify_portfolio_ui(window,output,check,wait,report)
+            from .scroll_ui_qa import verify as verify_scroll_ui
+            verify_scroll_ui(window,output,check,wait,report)
+            from .batch_ui_qa import verify as verify_batch_ui
+            verify_batch_ui(window,output,check,wait,report)
             report['analysis']={'students':5,'classes':2,'items':2,'combined_scores_first_round':combined,
                                 'chart_files':chart_files+['round-comparison.png'],'rounds':len(window._round_records)}
             report['unexpected_chart_windows']=unexpected_chart_windows

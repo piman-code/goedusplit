@@ -13,6 +13,7 @@ import tempfile
 import unittest
 from build_scripts.release_manifest import digest, filenames, verify_pair, validate_platform, validate_qa
 from app.synthetic_qa import REQUIRED_CHECKS
+from app import __version__
 from build_scripts.repair_qtwebengine_macos import repair
 from build_scripts.build_identity import record, verify
 from unittest.mock import patch
@@ -135,10 +136,12 @@ class CandidateGates(unittest.TestCase):
         identity={'source_commit':self.commit,'source_clean':True}
         with patch('build_scripts.build_identity.source_identity',return_value=identity):
             record(self.root,app,'windows')
-            verify(self.root,app,'windows','1.0.6')
-            with self.assertRaises(ValueError): verify(self.root,app,'windows','1.0.7')
-            binary.write_bytes(b'replaced executable')
+            verify(self.root,app,'windows',__version__)
+            # An older release must still be rejected after the product version changes.
+            self.assertNotEqual(__version__, '1.0.6')
             with self.assertRaises(ValueError): verify(self.root,app,'windows','1.0.6')
+            binary.write_bytes(b'replaced executable')
+            with self.assertRaises(ValueError): verify(self.root,app,'windows',__version__)
 
 
 def shutil_available_bash():

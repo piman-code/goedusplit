@@ -2,7 +2,10 @@ from tests.runtime_isolation import ensure_isolated
 ensure_isolated()
 
 import tempfile
+import json
+import re
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from app import rounds
@@ -55,6 +58,60 @@ class RoundStoreTests(unittest.TestCase):
         (self.store.directory / "round_other.json").write_text('{"kind": "snapshot"}', encoding="utf-8")
         self.assertEqual(1, len(self.store.load_all()))
         self.assertEqual([], rounds.RoundStore(Path(self.tmp.name) / "missing").load_all())
+
+    def test_distinct_keys_survive_filename_and_delimiter_collisions(self):
+        records = [
+            _record(2026, 1, 1, {}, subject="공통 수학"),
+            _record(2026, 1, 1, {}, subject="공통_수학"),
+            _record(2026, 1, 1, {}, subject="수학|심화", grade="1"),
+            _record(2026, 1, 1, {}, subject="수학", grade="심화|1"),
+        ]
+        paths = [self.store.save(record) for record in records]
+        self.assertEqual(4, len(set(paths)))
+        self.assertEqual(4, len(self.store.load_all()))
+
+    def test_legacy_record_preserved_and_new_record_takes_precedence(self):
+        old = _record(2026, 1, 1, {}, mean=50)
+        key = "|".join(str(part or "") for part in (
+            old["subject"], old["grade"], 2026, 1, 1))
+        safe = re.sub(r'[\\/:*?"<>|\s]+', "_", key).strip("_")
+        self.store.directory.mkdir()
+        legacy = self.store.directory / f"round_{safe}.json"
+        original = json.dumps(old, ensure_ascii=False).encode("utf-8")
+        legacy.write_bytes(original)
+        self.assertEqual([old], self.store.load_all())
+        new = dict(old, mean=75)
+        new_path = self.store.save(new)
+        self.assertNotEqual(legacy, new_path)
+        self.assertEqual(original, legacy.read_bytes())
+        self.assertEqual([new], self.store.load_all())
+
+    def test_failed_atomic_publish_preserves_existing_record(self):
+        record = _record(2026, 1, 1, {}, mean=50)
+        path = self.store.save(record)
+        original = path.read_bytes()
+        with patch.object(Path, "replace", side_effect=OSError("synthetic failure")):
+            with self.assertRaises(OSError):
+                self.store.save(dict(record, mean=80))
+        self.assertEqual(original, path.read_bytes())
+        self.assertEqual([record], self.store.load_all())
+
+    def test_existing_temporary_file_is_not_reused(self):
+        record = _record(2026, 1, 1, {})
+        path = self.store.save(record)
+        old_temp = path.with_suffix(".json.tmp")
+        old_temp.write_text("pending synthetic writer", encoding="utf-8")
+        self.store.save(dict(record, mean=80))
+        self.assertEqual("pending synthetic writer", old_temp.read_text(encoding="utf-8"))
+        self.assertEqual(80, self.store.load_all()[0]["mean"])
+
+    def test_invalid_serialization_preserves_existing_record(self):
+        record = _record(2026, 1, 1, {})
+        path = self.store.save(record)
+        original = path.read_bytes()
+        with self.assertRaises(ValueError):
+            self.store.save(dict(record, mean=float("nan")))
+        self.assertEqual(original, path.read_bytes())
 
     def test_previous_year_and_same_course(self):
         for year in (2025, 2026):

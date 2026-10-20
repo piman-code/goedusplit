@@ -122,6 +122,72 @@ class MultiClassTests(unittest.TestCase):
         self.assertEqual(["a.xlsx"], split_paths(" a.xlsx "))
         self.assertEqual(["a", "b"], split_paths(["a", "b"]))
 
+    def test_missing_perform_student_rejects_without_partial_mutation(self):
+        exam = load_exam(self.item, [self.c1, self.c2])
+        perform = load_perform_many(self.p1)
+        before = [(s.name, s.perform_score, s.final_score) for s in exam.students]
+        weights = (exam.weight_pencil, exam.weight_perform)
+        with self.assertRaisesRegex(ValueError, "수행평가.*3명"):
+            apply_perform(exam, perform, 60, 40)
+        self.assertEqual(before, [(s.name, s.perform_score, s.final_score) for s in exam.students])
+        self.assertFalse(exam.use_perform)
+        self.assertEqual(weights, (exam.weight_pencil, exam.weight_perform))
+
+    def test_zero_perform_score_is_valid_and_no_perform_keeps_total(self):
+        exam = load_exam(self.item, self.c2)
+        apply_perform(exam, load_perform_many(self.p2), 60, 40)
+        self.assertEqual(0.0, exam.students[-1].perform_score)
+        self.assertEqual(90.0, exam.students[1].final_score)
+        apply_perform(exam, None, 60, 40)
+        self.assertEqual([s.total for s in exam.students], [s.final_score for s in exam.students])
+        apply_perform(exam, load_perform_many(self.p1), 100, 0)
+        self.assertEqual([s.total for s in exam.students], [s.final_score for s in exam.students])
+
+    def test_exam_metadata_conflicts_even_when_answer_keys_match(self):
+        cases = [
+            ("1차 정오표.xlsx", "2차 정오표.xlsx", None),
+            ("정오표(1-1).xlsx", "정오표(1-2).xlsx", "2025학년도 1학기 1학년 수학:합성수학"),
+            ("정오표(1-1).xlsx", "정오표(1-2).xlsx", "2026학년도 2학기 1학년 수학:합성수학"),
+            ("정오표(1-1).xlsx", "정오표(1-2).xlsx", "2026학년도 1학기 2학년 수학:합성수학"),
+            ("정오표(1-1).xlsx", "정오표(1-2).xlsx", "2026학년도 1학기 1학년 수학:다른과목"),
+            ("1차 정오표.xlsx", "정오표(1-2).xlsx", "2026학년도 1학기 1학년 2차 수학:합성수학"),
+        ]
+        for first, second, title in cases:
+            with self.subTest(title=title, second=second):
+                a, b = Path(self.tmp.name) / first, Path(self.tmp.name) / second
+                _responses(a, 1, [(1, ".", ".", 100)])
+                _responses(b, 2, [(1, ".", ".", 100)])
+                if title:
+                    wb = openpyxl.load_workbook(b)
+                    wb.active["A3"] = title
+                    wb.save(b)
+                with self.assertRaisesRegex(ValueError, "시험 정보"):
+                    load_exam(self.item, [a, b])
+
+    def test_unknown_first_metadata_does_not_hide_later_conflict(self):
+        paths = []
+        for klass, name in enumerate(("정오표.xlsx", "1차 정오표.xlsx", "2차 정오표.xlsx"), 1):
+            path = Path(self.tmp.name) / name
+            _responses(path, klass, [(1, ".", ".", 100)])
+            paths.append(path)
+        with self.assertRaisesRegex(ValueError, "시험 정보"):
+            load_exam(self.item, paths)
+
+    def test_unknown_metadata_and_class_labels_remain_compatible(self):
+        wb = openpyxl.load_workbook(self.c1)
+        wb.active["A3"] = "합성 검증 전용"
+        wb.save(self.c1)
+        self.assertEqual(5, len(load_exam(self.item, [self.c1, self.c2]).students))
+
+    def test_subject_name_excludes_following_exam_and_class_fields(self):
+        for label in ("과목:", "교과목 : 수학:", "수학:"):
+            with self.subTest(label=label):
+                for path, suffix in ((self.c1, "1반 1차"), (self.c2, "1학년 1학기 2반 1차")):
+                    wb = openpyxl.load_workbook(path)
+                    wb.active["A3"] = f"2026학년도 1학기 1학년 {label} 공통수학1 {suffix}"
+                    wb.save(path)
+                self.assertEqual(5, len(load_exam(self.item, [self.c1, self.c2]).students))
+
 
 class MultiClassWindowTests(unittest.TestCase):
     @classmethod
