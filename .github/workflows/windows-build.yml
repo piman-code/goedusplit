@@ -110,10 +110,22 @@ jobs:
           GOEDUSPLIT_QA_HANG_DUMP_SECONDS: 780
         run: |
           set +e
-          dist/Goedu-Split.app/Contents/MacOS/Goedu-Split --synthetic-qa "$RUNNER_TEMP/goedusplit-candidate-qa"
+          qaRoot="$RUNNER_TEMP/goedusplit-candidate-qa"
+          dist/Goedu-Split.app/Contents/MacOS/Goedu-Split --synthetic-qa "$qaRoot" &
+          qaPid=$!
+          # Still running after 13 minutes: record the native (Qt/Cocoa) stacks with macOS sample,
+          # stop the app and fail here, so the failure artifact says where it waited.
+          for _ in $(seq 1 156); do kill -0 "$qaPid" 2>/dev/null || break; sleep 5; done
+          if kill -0 "$qaPid" 2>/dev/null; then
+            sleep 20  # QA_HANG_STACKS.log (Python side) is written at 780 s
+            sample "$qaPid" 5 -file "$qaRoot/NATIVE_SAMPLE.txt" > /dev/null 2>&1 || echo "sample failed"
+            kill "$qaPid" 2>/dev/null
+          fi
+          wait "$qaPid"
           qaExit=$?
-          if [ -f "$RUNNER_TEMP/goedusplit-candidate-qa/NATIVE_CRASH.log" ]; then cat "$RUNNER_TEMP/goedusplit-candidate-qa/NATIVE_CRASH.log"; fi
-          if [ -s "$RUNNER_TEMP/goedusplit-candidate-qa/QA_HANG_STACKS.log" ]; then cat "$RUNNER_TEMP/goedusplit-candidate-qa/QA_HANG_STACKS.log"; fi
+          if [ -f "$qaRoot/NATIVE_CRASH.log" ]; then cat "$qaRoot/NATIVE_CRASH.log"; fi
+          if [ -s "$qaRoot/QA_HANG_STACKS.log" ]; then cat "$qaRoot/QA_HANG_STACKS.log"; fi
+          if [ -s "$qaRoot/NATIVE_SAMPLE.txt" ]; then head -n 250 "$qaRoot/NATIVE_SAMPLE.txt"; fi
           exit "$qaExit"
       - name: Build Windows candidate
         if: needs.source.outputs.candidate == 'true' && matrix.target == 'windows'
