@@ -8,7 +8,7 @@ from PySide6.QtCore import QSettings, Qt, QMimeData, QUrl, QPoint, QPointF
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import QApplication
 from app.main_window import MainWindow
-from app.folder_workspace import KEY, SELECTED, folder_from_mime
+from app.folder_workspace import KEY, SELECTED, canonical_folder, folder_from_mime
 
 
 class FolderWorkspaceTests(unittest.TestCase):
@@ -43,7 +43,7 @@ class FolderWorkspaceTests(unittest.TestCase):
         self.assertEqual('untouched',self.settings.value('existing/keep'))
         fresh=MainWindow();self.addCleanup(fresh.close)
         self.assertEqual(self.c.favorites,fresh.folder_workspace.favorites)
-        self.assertEqual(str(folders[5]),fresh.folder_workspace.selected)
+        self.assertEqual(canonical_folder(folders[5]),fresh.folder_workspace.selected)
         self.assertEqual(6,fresh.folder_workspace.favorite_combo.count())
         self.assertFalse(self.c.register(self.root/'absent'))
 
@@ -54,8 +54,8 @@ class FolderWorkspaceTests(unittest.TestCase):
         with patch.object(self.w,'_pick_folder_batch') as analyze:
             self.app.sendEvent(self.w,enter);self.app.sendEvent(self.w,drop)
             self.assertTrue(enter.isAccepted());self.assertTrue(drop.isAccepted())
-            self.assertEqual(str(folder),self.c.selected);analyze.assert_not_called()
-            self.c.prepare();analyze.assert_called_once_with(str(folder))
+            self.assertEqual(canonical_folder(folder),self.c.selected);analyze.assert_not_called()
+            self.c.prepare();analyze.assert_called_once_with(canonical_folder(folder))
         file=self.root/'file.txt';file.write_text('synthetic')
         mime.setUrls([QUrl.fromLocalFile(str(file))]);self.assertIsNone(folder_from_mime(mime))
         mime.setUrls([QUrl('https://example.invalid/folder')]);self.assertIsNone(folder_from_mime(mime))
@@ -71,9 +71,9 @@ class FolderWorkspaceTests(unittest.TestCase):
         self.w._show_sidebar();self.c.sync_location()
         self.assertEqual(self.w.splitter.sizes()[0],0)
         self.assertTrue(self.w.input_workspace.dialog.isVisible())
-        self.assertEqual(str(folder),self.c.selected)
+        self.assertEqual(canonical_folder(folder),self.c.selected)
         self.w.exam=None;self.w.overall=None;self.w.input_workspace.dialog.close();self.c.sync_location()
         self.assertGreaterEqual(self.c.start_layout.indexOf(card),0)
-        self.assertEqual([str(folder)],self.c.favorites)
+        self.assertEqual([canonical_folder(folder)],self.c.favorites)
 
 if __name__=='__main__': unittest.main()

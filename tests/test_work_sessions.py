@@ -4,6 +4,7 @@ ensure_isolated()
 
 import copy
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -95,7 +96,8 @@ class WorkSessionCodecTests(unittest.TestCase):
         second = store.save(payload)
         self.assertNotEqual(first, second)
         self.assertEqual(before, first.read_bytes())
-        self.assertEqual(0o600, first.stat().st_mode & 0o777)
+        if os.name != 'nt':  # Windows has no POSIX permission bits; os.open's mode is ignored there
+            self.assertEqual(0o600, first.stat().st_mode & 0o777)
         self.assertEqual(2, len(store.list_sessions()))
         self.assertEqual(payload, store.read(second))
 

@@ -170,7 +170,13 @@ class TableControlTests(unittest.TestCase):
         dialog=QDialog();self.addCleanup(dialog.close)
         table=QTableWidget(2,2);layout=QVBoxLayout(dialog);layout.addWidget(table)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Fixed)
-        dialog.show();QTest.qWait(550)
+        dialog.show()
+        # The scan runs every 500 ms; wait for its result rather than a fixed time (CI runners are slow).
+        ready=lambda:(getattr(table,'_column_controls',None) is not None
+                      and table.horizontalHeader().sectionResizeMode(0)==QHeaderView.Interactive)
+        for _ in range(60):
+            if ready():break
+            QTest.qWait(50)
         self.assertIsNotNone(getattr(table,'_column_controls',None))
         self.assertEqual(QHeaderView.Interactive,table.horizontalHeader().sectionResizeMode(0))
         self.assertEqual(500,installer.scan_timer.interval())
