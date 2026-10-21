@@ -323,6 +323,14 @@ class ThemeManager(QObject):
         self._effective = eff
         c = self.colors
         self.app.setPalette(_build_palette(c))
+        # The stylesheet names "NanumGothic". Register the bundled fonts first: otherwise Core Text
+        # treats the name as a downloadable system font and, offline (school Macs, CI), the first
+        # text layout waits forever for that download. register_fonts is idempotent.
+        try:
+            from . import fonts
+            fonts.register_fonts(matplotlib_fonts=False)
+        except Exception:
+            pass
         self.app.setStyleSheet(_build_qss(c, self._base_pt))
         # QApplication 기본 폰트도 함께 업데이트해 다이얼로그/툴팁까지 반영
         try:
