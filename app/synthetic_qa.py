@@ -510,6 +510,13 @@ def run(output):
     return 0 if report['status']=='passed' else 1
 
 
+def _hang_dump_seconds():
+    try:
+        return max(1.0, float(os.environ.get('GOEDUSPLIT_QA_HANG_DUMP_SECONDS', '240')))
+    except ValueError:
+        return 240.0
+
+
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--synthetic-qa',type=Path,required=True,help='New directory for synthetic QA only')
@@ -517,9 +524,14 @@ def main():
     output=args.synthetic_qa.expanduser().resolve()
     output.mkdir(parents=True,exist_ok=False)
     # Windowed PyInstaller builds may have sys.stderr=None. Use an explicit file.
-    with (output / 'NATIVE_CRASH.log').open('xb') as crash_log:
+    with (output / 'NATIVE_CRASH.log').open('xb') as crash_log, \
+         (output / 'QA_HANG_STACKS.log').open('xb') as hang_log:
         faulthandler.enable(file=crash_log, all_threads=True)
+        # A run still going after this long writes every thread's stack to its own file (not a
+        # crash; checks keep reading NATIVE_CRASH.log), so a CI step timeout shows where it waited.
+        faulthandler.dump_traceback_later(_hang_dump_seconds(), file=hang_log)
         try:
             return run(output)
         finally:
+            faulthandler.cancel_dump_traceback_later()
             faulthandler.disable()
