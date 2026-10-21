@@ -120,8 +120,13 @@ def capture_ui_state(window):
                 # just as it appears after the next event-loop iteration.
                 control.apply()
             header = table.horizontalHeader()
-            state["table_headers"][name] = {"state": [{"visual": header.visualIndex(c), "mode": header.sectionResizeMode(c).value,
-                    "width": header.sectionSize(c) if header.sectionResizeMode(c).value in (0, 2) else None,
+            # A table the teacher never sized is saved as "fit to the screen" (Stretch, no width),
+            # so restoring it - including folder batch analysis - fits it again instead of freezing
+            # whatever width a never-shown tab had. Older versions read it as Stretch, too.
+            fit = control is not None and control.fills() and not control.user_sized
+            state["table_headers"][name] = {"state": [{"visual": header.visualIndex(c),
+                    "mode": QHeaderView.Stretch.value if fit else header.sectionResizeMode(c).value,
+                    "width": None if fit else (header.sectionSize(c) if header.sectionResizeMode(c).value in (0, 2) else None),
                     "hidden": header.isSectionHidden(c)} for c in range(table.columnCount())],
                 "sort": header.sortIndicatorSection(), "order": header.sortIndicatorOrder().value,
                 "row": table.currentRow(), "column": table.currentColumn()}
@@ -350,9 +355,13 @@ def _apply_python(window, prepared):
                     header.setSectionHidden(logical, column["hidden"])
                 control = getattr(table, "_column_controls", None)
                 if control is not None:
-                    # The restored snapshot, rather than a previous work's
-                    # drag widths, becomes the current width preference.
-                    control.adopt_current_widths()
+                    if control.fills() and data["state"] and all(
+                            column["mode"] == QHeaderView.Stretch.value and column["width"] is None for column in data["state"]):
+                        control.refit()
+                    else:
+                        # The restored snapshot, rather than a previous work's
+                        # drag widths, becomes the current width preference.
+                        control.adopt_current_widths()
             if table.isSortingEnabled() and 0 <= data["sort"] < table.columnCount():
                 table.sortItems(data["sort"], Qt.SortOrder(data["order"]))
             if 0 <= data["row"] < table.rowCount() and 0 <= data["column"] < table.columnCount():
@@ -368,7 +377,7 @@ def _column_control_state(table):
     control = getattr(table, "_column_controls", None)
     if control is None:
         return None
-    return (control.schema, list(control.defaults), dict(control.manual), list(control.base))
+    return (control.schema, list(control.defaults), dict(control.manual), list(control.base), control.user_sized)
 
 
 def _restore_column_control_state(table, state):
@@ -377,6 +386,7 @@ def _restore_column_control_state(table, state):
     if control is None or state is None:
         return
     control.schema, control.defaults, control.manual, control.base = state[0], list(state[1]), dict(state[2]), list(state[3])
+    control.user_sized = state[4]
 
 
 def _empty_view_checkpoint(window):

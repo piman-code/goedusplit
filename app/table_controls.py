@@ -22,6 +22,8 @@ class TableColumnControls(QObject):
     def __init__(self, table):
         super().__init__(table)
         self.table=table; self.schema=None; self.defaults=[]; self.manual={}; self.base=[]
+        # True only after the teacher sized a column (drag, double-click, content fit, saved work).
+        self.user_sized=False
         self.busy=False; self.pending=False; self.dragging=False
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.apply)
         header=table.horizontalHeader()
@@ -80,6 +82,7 @@ class TableColumnControls(QObject):
         try:
             if schema!=self.schema:
                 self.schema=schema;self.defaults=[table.columnWidth(c) for c in range(table.columnCount())];self.manual={}
+                self.user_sized=False
                 # The widths the app chose; filling scales these, never its own earlier result.
                 self.base=list(self.defaults)
             if not self.manual:
@@ -105,11 +108,13 @@ class TableColumnControls(QObject):
         table=self.table;count=table.columnCount()
         base=[max(1,w) for w in self.base[:count]]+[max(1,table.columnWidth(c)) for c in range(len(self.base),count)]
         available=table.viewport().width();total=sum(base)
-        if available<=count*28 or total<=0:return
+        if total<=0:return
         # Every column first gets room for its header and short cells; the rest is shared by the
         # app's own proportions, so widening never leaves a narrow column showing "10…".
         need=[max(28,self.readable_width(c)) for c in range(count)]
-        if sum(need)<=available:
+        if available<=count*28 and not self.table.property('fillColumns'):
+            widths=[max(base[c],need[c]) for c in range(count)]  # no room to fit at all: scroll
+        elif sum(need)<=available:
             spare=available-sum(need)
             widths=[need[c]+int(spare*base[c]/total) for c in range(count)]
             widths[-1]+=available-sum(widths)
@@ -117,7 +122,8 @@ class TableColumnControls(QObject):
             widths=[max(28,int(available*width/total)) for width in base]  # wrapped text: always fit
             widths[-1]+=available-sum(widths)
         else:
-            widths=base  # too narrow to read: keep the app's widths and scroll instead
+            # Too many columns to fit: scroll, but never narrower than the text ("…" or blank cells).
+            widths=[max(base[c],need[c]) for c in range(count)]
         for c,width in enumerate(widths):table.setColumnWidth(c,max(28,width))
 
     def content_width(self,column):
@@ -132,7 +138,7 @@ class TableColumnControls(QObject):
     @Slot()
     def fit_contents(self):
         self.apply()
-        self.manual={c:self.content_width(c) for c in range(self.table.columnCount())}
+        self.manual={c:self.content_width(c) for c in range(self.table.columnCount())};self.user_sized=True
         self.apply()
 
     def sync_frozen(self):
@@ -148,7 +154,7 @@ class TableColumnControls(QObject):
     def resized(self,column,_old,width):
         if self.busy:return
         if self.dragging:
-            self.manual[column]=width
+            self.manual[column]=width;self.user_sized=True
             self.busy=True
             try:self.sync_frozen()
             finally:self.busy=False
@@ -158,19 +164,26 @@ class TableColumnControls(QObject):
             self.schedule()
 
     def adopt_current_widths(self):
-        table=self.table
+        """Widths restored from saved work that the teacher had sized."""
+        table=self.table;self.user_sized=True
         self.schema=tuple(table.horizontalHeaderItem(c).text() if table.horizontalHeaderItem(c) else str(c)
                           for c in range(table.columnCount()))
         self.manual={c:table.columnWidth(c) for c in range(table.columnCount())}
         self.apply()
 
+    def refit(self):
+        """Back to the app's widths fitted to the screen, as if never sized."""
+        self.manual={};self.user_sized=False
+        self.apply()
+
     def remember_width(self,column,width):
-        self.manual[column]=width
+        self.manual[column]=width;self.user_sized=True
         self.table.setColumnWidth(column,width)
         self.schedule()
 
     @Slot()
     def fit(self):
+        if self.fills():return self.refit()
         self.apply();table=self.table
         widths=[max(1,table.columnWidth(c)) for c in range(table.columnCount())]
         available=max(1,table.viewport().width());total=max(1,sum(widths))
@@ -180,7 +193,8 @@ class TableColumnControls(QObject):
     @Slot()
     def reset(self):
         # A filling table's initial width is "fill the table", not the widths at fill time.
-        self.manual={} if self.fills() else {c:width for c,width in enumerate(self.defaults)}
+        if self.fills():return self.refit()
+        self.manual={c:width for c,width in enumerate(self.defaults)};self.user_sized=False
         self.apply()
 
     @Slot(QPoint)

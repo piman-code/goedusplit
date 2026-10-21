@@ -129,6 +129,24 @@ class MonitorLayoutTests(unittest.TestCase):
         labels = [a.text() for a in buttons[0].menu().actions()]
         self.assertEqual(["화면에 맞춤", "모든 열 내용에 맞춤", "초기 너비로 되돌리기"], labels)
 
+    def test_restoring_work_refits_tables_the_teacher_did_not_size(self):
+        # Folder batch analysis captures and re-applies the whole UI; widths of never-shown tables
+        # must not come back as the teacher's own choice.
+        from app.work_session_ui import apply_python_state, capture_ui_state
+        from app.work_sessions import build_session, prepare_session
+        from tests.test_work_sessions import synthetic_domain
+        window = self.window
+        window.resize(1312, 810); self.app.processEvents(); QTest.qWait(1)
+        state = capture_ui_state(window)
+        self.assertTrue(all(c["mode"] == 1 and c["width"] is None for c in state["table_headers"]["table_monitor"]["state"]))
+        self.assertTrue(all(c["mode"] == 0 for c in state["table_headers"]["table_data"]["state"]))
+        exam, perform = synthetic_domain()
+        apply_python_state(window, prepare_session(build_session(exam, perform, state, None)))
+        self.app.processEvents(); QTest.qWait(1)
+        table = window.table_monitor
+        self.assertEqual({}, table._column_controls.manual)
+        self.assertLessEqual(abs(sum(table.columnWidth(c) for c in range(5)) - table.viewport().width()), 5)
+
     def test_tall_window_still_fills_without_scrolling(self):
         self.assert_areas_do_not_overlap(1600, 1200)
 

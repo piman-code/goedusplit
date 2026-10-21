@@ -105,6 +105,25 @@ class TableControlTests(unittest.TestCase):
         enable_table_columns(frozen_table);self.app.processEvents()
         self.assertLessEqual(abs(sum(frozen_table.columnWidth(c) for c in range(10))-frozen_table.viewport().width()),10)
         self.assertEqual(frozen_table.columnWidth(0),frozen.columnWidth(0))
+    def test_user_sizing_is_remembered_and_fit_returns_to_filling(self):
+        table=self.table();control=enable_table_columns(table);self.app.processEvents()
+        self.assertFalse(control.user_sized)
+        self.drag(table,0,30)
+        self.assertTrue(control.user_sized)
+        control.fit_action.trigger();self.app.processEvents()
+        self.assertFalse(control.user_sized);self.assertEqual({},control.manual)
+        self.double_click_handle(table,1)
+        self.assertTrue(control.user_sized)
+        control.reset_action.trigger();self.app.processEvents()
+        self.assertFalse(control.user_sized)
+    def test_wide_table_still_gives_each_column_room_to_read(self):
+        table=self.table();table.setColumnCount(30)
+        table.setHorizontalHeaderLabels([str(c) for c in range(30)])
+        for r in range(10):
+            for c in range(30):table.setItem(r,c,QTableWidgetItem('100.0'))
+        for c in range(30):table.setColumnWidth(c,20)
+        enable_table_columns(table);self.app.processEvents()
+        self.assertTrue(all(table.columnWidth(c)>=table.sizeHintForColumn(c) for c in range(30)))
     def test_frozen_header_drag_syncs_main_and_other_rows(self):
         table=self.table();frozen=install_frozen_columns(table,2)
         control=enable_table_columns(table);self.app.processEvents()
