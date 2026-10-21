@@ -36,5 +36,16 @@ class ThemeFontOrderTests(unittest.TestCase):
         self.assertEqual({"matplotlib_fonts": False}, register.call_args.kwargs)
 
 
+    def test_macos_names_a_font_every_mac_has(self):
+        # "NanumGothic" is also an Apple downloadable font: Core Text tries to download it when
+        # Qt asks for fallbacks by name, and offline that wait never ends. Windows has no such
+        # catalog and keeps the bundled NanumGothic.
+        from app.theme import LIGHT, _build_qss, ui_font_family
+        self.assertEqual("Apple SD Gothic Neo", ui_font_family("darwin"))
+        self.assertEqual("NanumGothic", ui_font_family("win32"))
+        qss = _build_qss(LIGHT)
+        self.assertIn(f'font-family: "{ui_font_family()}";', qss)
+
+
 if __name__ == "__main__":
     unittest.main()

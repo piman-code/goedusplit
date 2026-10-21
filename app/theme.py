@@ -43,13 +43,20 @@ def _arrow_data_url(direction: str, color: str) -> str:
     return f"data:image/svg+xml;base64,{b64}"
 
 
+def ui_font_family(platform: str = sys.platform) -> str:
+    """Screen font. On macOS "NanumGothic" is also an Apple downloadable font: when Qt asks Core
+    Text for fallbacks by that name, Core Text starts a download, and offline (school Macs, CI)
+    the first text layout waits forever. Every Mac has Apple SD Gothic Neo installed."""
+    return "Apple SD Gothic Neo" if platform == "darwin" else "NanumGothic"
+
+
 def _build_qss(c: dict, base_pt: int = 13) -> str:
     arrow_color = c['text']
     return f"""
-    /* 한글이 섞인 환경에서 자연스러운 글꼴을 우선순위로 적용
-       (앱 시작 시 fonts.register_fonts()가 번들 폰트를 등록한다) */
+    /* 한글 화면 글꼴: Windows는 번들 나눔고딕, macOS는 기본 설치된 Apple SD Gothic Neo
+       (ui_font_family 참고. 번들 폰트는 fonts.register_fonts()가 등록한다) */
     * {{
-        font-family: "NanumGothic";
+        font-family: "{ui_font_family()}";
         font-size: {base_pt}px;
     }}
     QWidget {{
@@ -323,9 +330,8 @@ class ThemeManager(QObject):
         self._effective = eff
         c = self.colors
         self.app.setPalette(_build_palette(c))
-        # The stylesheet names "NanumGothic". Register the bundled fonts first: otherwise Core Text
-        # treats the name as a downloadable system font and, offline (school Macs, CI), the first
-        # text layout waits forever for that download. register_fonts is idempotent.
+        # Register the bundled fonts before the stylesheet names a family (idempotent), so
+        # NanumGothic on Windows resolves to the bundled file from the first layout.
         try:
             from . import fonts
             fonts.register_fonts(matplotlib_fonts=False)
