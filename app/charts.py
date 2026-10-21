@@ -152,7 +152,7 @@ def fig_level_donut(level_pct: dict, level_n: dict, title: str = "성취수준 �
         y = 0.79 * np.sin(np.deg2rad(ang))
         lum = _luminance(colors[idx])
         inner_text_color = "#ffffff" if lum < 0.5 else "#1f2933"
-        inner_font = 14 if sz >= 8 else 11
+        inner_font = 12 if sz >= 8 else 9.5
         ax.text(x, y, lv, ha="center", va="center",
                 fontsize=inner_font, color=inner_text_color, fontweight="bold")
     # 바깥 라벨은 좌/우 컬럼에 정렬해 좁은 패널에서도 잘리지 않게 배치한다.
@@ -201,11 +201,10 @@ def fig_level_donut(level_pct: dict, level_n: dict, title: str = "성취수준 �
 
     # 가운데 총원
     total = sum(counts)
-    total_font = 22 if total < 1000 else 18
-    ax.text(0, 0.08, f"{total}", ha="center", va="center", fontsize=total_font,
+    # One line that fits inside the hole: "103명" used to be a 22 pt number with "명" drawn over it.
+    total_font = {1: 17, 2: 17, 3: 15}.get(len(str(total)), 13)
+    ax.text(0, 0, f"{total}명", ha="center", va="center", fontsize=total_font,
             fontweight="bold", color=text_color)
-    ax.text(0, -0.13, "명", ha="center", va="center", fontsize=max(9, total_font - 11),
-            color=text_color)
     title_font = 13 if len(pairs) >= 6 else 14
     ax.set_title(title, pad=18, color=text_color, fontsize=title_font, fontweight="bold")
     ax.set_aspect("equal")
@@ -549,22 +548,26 @@ def fig_round_trend(trend: dict | None, title: str = "회차별 추이") -> Figu
 
     mean, std = trend["mean"], trend["std"]
     axes[0].errorbar(x, mean, yerr=std, fmt="o-", color=THEME_COLORS["highlight"], ecolor="#94a3b8", capsize=3)
+    def beside(i):
+        # Right of the point (left for the last one), so error bars and lines stay visible.
+        last = i == len(x) - 1
+        return {"xytext": (-6 if last else 6, 3), "ha": "right" if last else "left"}
     for i, v in enumerate(mean):
-        axes[0].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", xytext=(0, 7), ha="center",
-                         fontsize=8, color=text_color)
+        axes[0].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", **beside(i),
+                         fontsize=7.5, color=text_color)
     finish(axes[0], "평균 ± 표준편차", "점")
     axes[1].plot(x, trend["a_pct"], "o-", color=COLOR_LEVELS["A"], label="A")
     axes[1].plot(x, trend["ab_pct"], "s--", color=COLOR_LEVELS["B"], label="A+B")
     for series in (trend["a_pct"], trend["ab_pct"]):
         for i, v in enumerate(series):
-            axes[1].annotate(f"{v:.0f}", (x[i], v), textcoords="offset points", xytext=(0, 6), ha="center",
-                             fontsize=7.5, color=text_color)
+            axes[1].annotate(f"{v:.0f}", (x[i], v), textcoords="offset points", **beside(i),
+                             fontsize=7, color=text_color)
     axes[1].legend(frameon=False, fontsize=8)
     finish(axes[1], "A · A+B 비율", "%")
     axes[2].plot(x, trend["cut_a"], "o-", color=THEME_COLORS["highlight"])
     for i, v in enumerate(trend["cut_a"]):
-        axes[2].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", xytext=(0, 7), ha="center",
-                         fontsize=8, color=text_color)
+        axes[2].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", **beside(i),
+                         fontsize=7.5, color=text_color)
     finish(axes[2], "A/B 분할점수", "점")
     fig.suptitle(title, fontsize=10.5)
     fig.subplots_adjust(left=0.07, right=0.99, top=0.82, bottom=0.2, wspace=0.32)
@@ -679,11 +682,11 @@ def fig_level_means_with_error(level_mean: dict, level_std: dict, title: str = "
                   error_kw={"ecolor": "#f4b942", "elinewidth": 2})
     for b, m, s in zip(bars, means, stds):
         ax.text(b.get_x() + b.get_width()/2,
-                min(110, b.get_height() + s + 2.5),
-                f"{m:.1f}", ha="center", va="bottom", fontsize=9.5,
+                min(112, b.get_height() + s + 4),
+                f"{m:.1f}", ha="center", va="bottom", fontsize=8.5,
                 color=THEME_COLORS["chart_text"])
     ax.set_ylabel("평균 (환산점수)")
-    ax.set_ylim(0, 115)
+    ax.set_ylim(0, 120)
     ax.set_title(title)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", linestyle=":", alpha=0.4)

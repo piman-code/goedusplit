@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QApplication, QFormLayout, QFr
 from . import lazy_charts as charts
 from . import rounds as round_history
 from .widgets import StepperSpinBox
+from .table_controls import column_menu_button
 
 
 def build_monitor_tab(window):
@@ -114,6 +115,7 @@ def build_monitor_tab(window):
     note_row.addWidget(btn_copy)
     table_layout.addLayout(note_row)
     window.table_monitor = QTableWidget(0, 5)
+    note_row.addWidget(column_menu_button(window.table_monitor, table_wrap))
     window.table_monitor.setHorizontalHeaderLabels(["지표", "현재/변화", "기준", "판정", "해석·질문"])
     _setup_table(window.table_monitor, word_wrap=True, horizontal_scroll=True, row_height=42)
     window.table_monitor.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)

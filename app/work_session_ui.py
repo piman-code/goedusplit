@@ -364,6 +364,21 @@ def _apply_python(window, prepared):
                                 f"{html.escape(exam.grade)}<br>학생 {len(exam.students)}명 · 문항 {len(exam.items)}문항")
 
 
+def _column_control_state(table):
+    control = getattr(table, "_column_controls", None)
+    if control is None:
+        return None
+    return (control.schema, list(control.defaults), dict(control.manual), list(control.base))
+
+
+def _restore_column_control_state(table, state):
+    # The failed restore adopted its own widths as the user's; give back the earlier preference.
+    control = getattr(table, "_column_controls", None)
+    if control is None or state is None:
+        return
+    control.schema, control.defaults, control.manual, control.base = state[0], list(state[1]), dict(state[2]), list(state[3])
+
+
 def _empty_view_checkpoint(window):
     """Keep the empty view independently of analysis renderers for rollback."""
     from .main_window import CanvasHolder
@@ -391,7 +406,8 @@ def _empty_view_checkpoint(window):
                             for r in range(widget.rowCount())],
                            [clone(widget.horizontalHeaderItem(c)) for c in range(widget.columnCount())],
                            [clone(widget.verticalHeaderItem(r)) for r in range(widget.rowCount())],
-                           widget.horizontalHeader().saveState(), widget.isSortingEnabled()))
+                           widget.horizontalHeader().saveState(), widget.isSortingEnabled(),
+                           _column_control_state(widget)))
         elif isinstance(widget, CanvasHolder):
             charts.append((widget, widget._canvas.figure if widget._canvas is not None else None,
                            widget._placeholder.text()))
@@ -417,7 +433,7 @@ def _empty_view_checkpoint(window):
             setattr(window, name, value)
         blockers = [QSignalBlocker(widget) for widget, _, _ in values]
         blockers += [QSignalBlocker(table) for table, *_ in tables]
-        for table, rows, columns, items, horizontal, vertical, header, sorting in tables:
+        for table, rows, columns, items, horizontal, vertical, header, sorting, control in tables:
             table.setSortingEnabled(False)
             table.clear()
             table.setColumnCount(columns)
@@ -434,6 +450,7 @@ def _empty_view_checkpoint(window):
                         table.setItem(r, c, item)
             table.horizontalHeader().restoreState(header)
             table.setSortingEnabled(sorting)
+            _restore_column_control_state(table, control)
         for widget, kind, value in values:
             if kind == "combo":
                 items, index, text = value

@@ -1,17 +1,27 @@
 """User-sized native table columns, with explicit fit/reset actions.
 
-Double-clicking a column boundary fits that column to its contents. A table with the
-``fillColumns`` property spreads its columns over the visible width until the user sizes one.
+Double-clicking a column boundary fits that column to its contents. Until the user sizes a
+column, a table spreads its columns over the visible width ("화면에 맞춤"), unless shrinking
+would cut a header or short cell; then it keeps its own widths and scrolls. The ``fillColumns``
+property forces this on (True: always fill, for wrapped text) or off (False: the per-student
+results table).
 """
 from PySide6.QtCore import QObject, QEvent, QTimer, Qt, Slot, QPoint
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QTableWidget, QHeaderView, QMenu, QToolButton, QTabWidget, QHBoxLayout, QSplitter
 
 
+def _menu_button_label(button):
+    # The style's own menu arrow was painted over the last letter; draw the arrow as text instead.
+    button.setText("열 너비 ▾");button.setPopupMode(QToolButton.InstantPopup)
+    button.setStyleSheet("QToolButton::menu-indicator { image: none; width: 0px; }")
+    button.setToolTip("열 너비: 화면에 맞춤 · 모든 열 내용에 맞춤 · 초기 너비로 되돌리기")
+
+
 class TableColumnControls(QObject):
     def __init__(self, table):
         super().__init__(table)
-        self.table=table; self.schema=None; self.defaults=[]; self.manual={}
+        self.table=table; self.schema=None; self.defaults=[]; self.manual={}; self.base=[]
         self.busy=False; self.pending=False; self.dragging=False
         self.timer=QTimer(self);self.timer.setSingleShot(True);self.timer.timeout.connect(self.apply)
         header=table.horizontalHeader()
@@ -37,7 +47,7 @@ class TableColumnControls(QObject):
         tabs=parent.parentWidget() if parent is not None else None
         if isinstance(tabs,QTabWidget):
             if getattr(tabs,"_column_menu_button",None) is not None:return
-            button=QToolButton(tabs);button.setText("열 너비");button.setPopupMode(QToolButton.InstantPopup)
+            button=QToolButton(tabs);_menu_button_label(button)
             menu=QMenu(button);button.setMenu(menu)
             def populate():
                 menu.clear();current=tabs.currentWidget()
@@ -47,7 +57,7 @@ class TableColumnControls(QObject):
             menu.aboutToShow.connect(populate)
             tabs.setCornerWidget(button,Qt.TopRightCorner);tabs._column_menu_button=button
         elif parent is not None and getattr(parent,"body",None) is table and hasattr(parent,"toggle"):
-            button=QToolButton(parent);button.setText("열 너비");button.setPopupMode(QToolButton.InstantPopup)
+            button=QToolButton(parent);_menu_button_label(button)
             menu=QMenu(button);menu.addAction(self.fit_action);menu.addAction(self.contents_action);menu.addAction(self.reset_action);button.setMenu(menu)
             layout=parent.layout();layout.removeWidget(parent.toggle)
             row=QHBoxLayout();row.setContentsMargins(0,0,0,0);row.addWidget(parent.toggle);row.addStretch();row.addWidget(button)
@@ -70,6 +80,8 @@ class TableColumnControls(QObject):
         try:
             if schema!=self.schema:
                 self.schema=schema;self.defaults=[table.columnWidth(c) for c in range(table.columnCount())];self.manual={}
+                # The widths the app chose; filling scales these, never its own earlier result.
+                self.base=list(self.defaults)
             if not self.manual:
                 self.defaults=[table.columnWidth(c) for c in range(table.columnCount())]
             header.setStretchLastSection(False)
@@ -77,17 +89,35 @@ class TableColumnControls(QObject):
             if self.manual:
                 for c,width in self.manual.items():
                     if c<table.columnCount():table.setColumnWidth(c,width)
-            elif table.property('fillColumns'):self.fill_width()
+            elif self.fills():self.fill_width()
             self.sync_frozen()
         finally:self.busy=False
 
+    def fills(self):
+        forced=self.table.property('fillColumns')
+        return True if forced is None else bool(forced)
+
+    def readable_width(self,column):
+        table=self.table
+        return max(table.horizontalHeader().sectionSizeHint(column),min(table.sizeHintForColumn(column),160))
+
     def fill_width(self):
         table=self.table;count=table.columnCount()
-        shares=[max(1,w) for w in self.defaults[:count]]+[1]*max(0,count-len(self.defaults))
-        available=table.viewport().width();total=sum(shares)
+        base=[max(1,w) for w in self.base[:count]]+[max(1,table.columnWidth(c)) for c in range(len(self.base),count)]
+        available=table.viewport().width();total=sum(base)
         if available<=count*28 or total<=0:return
-        widths=[max(28,int(available*share/total)) for share in shares]
-        widths[-1]+=available-sum(widths)
+        # Every column first gets room for its header and short cells; the rest is shared by the
+        # app's own proportions, so widening never leaves a narrow column showing "10…".
+        need=[max(28,self.readable_width(c)) for c in range(count)]
+        if sum(need)<=available:
+            spare=available-sum(need)
+            widths=[need[c]+int(spare*base[c]/total) for c in range(count)]
+            widths[-1]+=available-sum(widths)
+        elif self.table.property('fillColumns'):
+            widths=[max(28,int(available*width/total)) for width in base]  # wrapped text: always fit
+            widths[-1]+=available-sum(widths)
+        else:
+            widths=base  # too narrow to read: keep the app's widths and scroll instead
         for c,width in enumerate(widths):table.setColumnWidth(c,max(28,width))
 
     def content_width(self,column):
@@ -122,7 +152,10 @@ class TableColumnControls(QObject):
             self.busy=True
             try:self.sync_frozen()
             finally:self.busy=False
-        else:self.schedule()
+        else:
+            # A width the app set (render, zoom) becomes the new base for filling.
+            if not self.manual and column<len(self.base):self.base[column]=width
+            self.schedule()
 
     def adopt_current_widths(self):
         table=self.table
@@ -147,7 +180,7 @@ class TableColumnControls(QObject):
     @Slot()
     def reset(self):
         # A filling table's initial width is "fill the table", not the widths at fill time.
-        self.manual={} if self.table.property('fillColumns') else {c:width for c,width in enumerate(self.defaults)}
+        self.manual={} if self.fills() else {c:width for c,width in enumerate(self.defaults)}
         self.apply()
 
     @Slot(QPoint)
@@ -161,6 +194,15 @@ class TableColumnControls(QObject):
         elif event.type()==QEvent.MouseButtonRelease:self.dragging=False
         elif obj is self.table and event.type() in (QEvent.Show,QEvent.Resize,QEvent.LayoutRequest):self.schedule()
         return False
+
+
+def column_menu_button(table,parent):
+    """A '열 너비 ▾' menu for a table placed where add_visible_menu cannot find a header row."""
+    control=enable_table_columns(table)
+    button=QToolButton(parent);_menu_button_label(button)
+    menu=QMenu(button);menu.addAction(control.fit_action);menu.addAction(control.contents_action)
+    menu.addAction(control.reset_action);button.setMenu(menu)
+    return button
 
 
 def enable_table_columns(table):

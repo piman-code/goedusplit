@@ -83,6 +83,7 @@ class MonitorLayoutTests(unittest.TestCase):
         self.window.tabs.setCurrentWidget(self.window.tab_monitor)
 
     def close_window(self):
+        self.app.processEvents()  # let queued relayouts run while the window still exists
         self.window.close()
         self.window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -120,6 +121,13 @@ class MonitorLayoutTests(unittest.TestCase):
         copy_monitor_table(window)
         self.assertEqual("지표\t현재/변화\t기준\t판정\t해석·질문\n필수 1\t20.0%\t기준 두 줄\t참고 범위\t설명",
                          QApplication.clipboard().text())
+
+    def test_check_table_has_column_width_menu(self):
+        from PySide6.QtWidgets import QToolButton
+        buttons = [b for b in self.window.tab_monitor.findChildren(QToolButton) if b.text() == "열 너비 ▾"]
+        self.assertEqual(1, len(buttons))
+        labels = [a.text() for a in buttons[0].menu().actions()]
+        self.assertEqual(["화면에 맞춤", "모든 열 내용에 맞춤", "초기 너비로 되돌리기"], labels)
 
     def test_tall_window_still_fills_without_scrolling(self):
         self.assert_areas_do_not_overlap(1600, 1200)
