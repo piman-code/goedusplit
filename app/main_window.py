@@ -94,7 +94,7 @@ from .ai_review_logic import (
     ai_review_target_threshold,
 )
 from .widgets import (
-    StepperSpinBox, ItemBarDelegate, attach_wheel_zoom, NaturalItem,
+    StepperSpinBox, ItemBarDelegate, attach_wheel_zoom, NaturalItem, make_scroll_page,
     install_frozen_columns, refresh_frozen_columns,
 )
 from . import __version__
@@ -685,6 +685,10 @@ class MainWindow(QMainWindow):
         install_table_controls(self)
         from .input_workspace import install_input_workspace
         install_input_workspace(self)
+        # Short windows: scroll these tabs as pages instead of squeezing their areas
+        # (tests/manual_screen_audit.py "칸 겹침" at 1100x700).
+        for tab in (self.tab_data, self.tab_overview, self.tab_items):
+            make_scroll_page(tab)
 
     def _icon_color(self) -> str:
         if self.theme is not None:

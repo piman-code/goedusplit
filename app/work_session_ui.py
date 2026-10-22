@@ -61,19 +61,35 @@ def _state_tables(window):
     return tables
 
 
+def _collapses_an_area(window, splitter, sizes):
+    """A 0 for an area that is not hidden: a never-shown tab's provisional sizes, not a choice.
+    Restoring it made areas disappear (monitoring "전년도·판정 기준", rounds "학생 이동").
+    The main splitter is exempt: its 0 is the folded input sidebar."""
+    return splitter is not getattr(window, "splitter", None) and any(
+        size == 0 and not splitter.widget(i).isHidden() for i, size in enumerate(sizes))
+
+
+def _splitter_sizes_to_save(window, splitter):
+    sizes = splitter.sizes()
+    # An empty list keeps the saved format (and older versions skip it: length mismatch).
+    return [] if _collapses_an_area(window, splitter, sizes) else sizes
+
+
 def capture_ui_state(window):
     _initialize_tab_ids(window)
     # Ask Qt to settle initial/stale splitter sizes with the active style's
     # handle widths and minimum hints. This is idempotent on laid-out splitters.
     for splitter in window.findChildren(QSplitter):
-        splitter.setSizes(splitter.sizes())
+        # Not a never-shown tab's provisional sizes: setting those made a 0 permanent.
+        if not _collapses_an_area(window, splitter, splitter.sizes()):
+            splitter.setSizes(splitter.sizes())
     state = {"inputs": {name: getattr(window, name).path() for name in SELECTORS if hasattr(window, name)},
              "widgets": {}, "cuts": window._current_cut_scores_from_inputs(),
              "weights": [window.spin_pencil_ratio.value(), window.spin_perform_ratio.value()],
              "monitor": {key: spin.value() for key, spin in getattr(window, "monitor_spins", {}).items()},
              "perform_recalc_dirty": window._perform_recalc_dirty,
              "edit_tables": {}, "tabs": [], "folds": {}, "round_selection": [], "table_headers": {},
-             "splitters": [widget.sizes() for widget in window.findChildren(QSplitter)],
+             "splitters": [_splitter_sizes_to_save(window, widget) for widget in window.findChildren(QSplitter)],
              "portfolio_analysis_sessions": copy.deepcopy(getattr(window, "_portfolio_analysis_sessions", {})),
              "grade5_reports": copy.deepcopy(getattr(window, "_last_grade5_cut_reports", None)),
              "grade5_info": window.lbl_grade5_cut_info.text() if hasattr(window, "lbl_grade5_cut_info") else ""}
@@ -120,13 +136,14 @@ def capture_ui_state(window):
                 # just as it appears after the next event-loop iteration.
                 control.apply()
             header = table.horizontalHeader()
-            # A table the teacher never sized is saved as "fit to the screen" (Stretch, no width),
-            # so restoring it - including folder batch analysis - fits it again instead of freezing
-            # whatever width a never-shown tab had. Older versions read it as Stretch, too.
-            fit = control is not None and control.fills() and not control.user_sized
+            # A table the teacher never sized is saved without widths (a fitted one as Stretch), so
+            # restoring it - including folder batch analysis - lays it out again instead of freezing
+            # whatever width a never-shown tab or another zoom had. Older versions read it as-is.
+            unsized = control is not None and not control.user_sized
+            fit = unsized and control.fills()
             state["table_headers"][name] = {"state": [{"visual": header.visualIndex(c),
                     "mode": QHeaderView.Stretch.value if fit else header.sectionResizeMode(c).value,
-                    "width": None if fit else (header.sectionSize(c) if header.sectionResizeMode(c).value in (0, 2) else None),
+                    "width": None if unsized else (header.sectionSize(c) if header.sectionResizeMode(c).value in (0, 2) else None),
                     "hidden": header.isSectionHidden(c)} for c in range(table.columnCount())],
                 "sort": header.sortIndicatorSection(), "order": header.sortIndicatorOrder().value,
                 "row": table.currentRow(), "column": table.currentColumn()}
@@ -340,7 +357,7 @@ def _apply_python(window, prepared):
             widget.setCurrentIndex(next(i for i in range(widget.count()) if _tab_identity(window, widget.widget(i)) == data["selected"]))
         del blocker
     for widget, sizes in zip(window.findChildren(QSplitter), state["splitters"]):
-        if len(sizes) == widget.count():
+        if len(sizes) == widget.count() and not _collapses_an_area(window, widget, sizes):
             widget.setSizes(sizes)
     for name, data in state["table_headers"].items():
         table = _state_tables(window).get(name)
@@ -355,9 +372,8 @@ def _apply_python(window, prepared):
                     header.setSectionHidden(logical, column["hidden"])
                 control = getattr(table, "_column_controls", None)
                 if control is not None:
-                    if control.fills() and data["state"] and all(
-                            column["mode"] == QHeaderView.Stretch.value and column["width"] is None for column in data["state"]):
-                        control.refit()
+                    if data["state"] and all(column["width"] is None for column in data["state"]):
+                        control.refit()  # saved without widths: the teacher had not sized it
                     else:
                         # The restored snapshot, rather than a previous work's
                         # drag widths, becomes the current width preference.

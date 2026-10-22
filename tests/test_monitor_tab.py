@@ -146,6 +146,15 @@ class MonitorLayoutTests(unittest.TestCase):
         table = window.table_monitor
         self.assertEqual({}, table._column_controls.manual)
         self.assertLessEqual(abs(sum(table.columnWidth(c) for c in range(5)) - table.viewport().width()), 5)
+        # Splitters of tabs never shown before the capture must not come back collapsed to 0
+        # (the monitoring "전년도·판정 기준" box and the rounds "학생 이동" table disappeared).
+        for tab in (window.tab_monitor, window.tab_rounds):
+            window.tabs.setCurrentWidget(tab); self.app.processEvents(); QTest.qWait(1)
+            for splitter in tab.findChildren(QSplitter):
+                if splitter.isVisible():
+                    with self.subTest(tab=window.tabs.tabText(window.tabs.indexOf(tab)), sizes=splitter.sizes()):
+                        self.assertTrue(all(size > 0 for i, size in enumerate(splitter.sizes())
+                                            if not splitter.widget(i).isHidden()))
 
     def test_tall_window_still_fills_without_scrolling(self):
         self.assert_areas_do_not_overlap(1600, 1200)

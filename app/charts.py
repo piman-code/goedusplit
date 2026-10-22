@@ -270,25 +270,14 @@ def fig_score_histogram_colored(
         bottom += cnt
     ymax = max(1, int(bottom.max()) if bottom.size else 1)
     headroom = 1.3
+    top_labels = []  # (x, text, color, bold): drawn above the plot so close cuts never collide
     if achievement_cuts:
         for i, lv in enumerate(["A", "B", "C", "D", "E"]):
             if lv not in achievement_cuts:
                 continue
             x = float(achievement_cuts[lv])
             ax.axvline(x, color=COLOR_LEVELS.get(lv, "#555"), linestyle="--", linewidth=1.0, alpha=0.72)
-            y = max(0.75, ymax * (0.93 - (i % 2) * 0.12))
-            ax.text(
-                x, y, lv,
-                ha="center", va="center", fontsize=8.0, fontweight="bold",
-                color=COLOR_LEVELS.get(lv, THEME_COLORS["chart_text"]),
-                bbox=dict(
-                    boxstyle="round,pad=0.12",
-                    facecolor=THEME_COLORS["chart_bg"],
-                    edgecolor="none",
-                    alpha=0.70,
-                ),
-            )
-        headroom = max(headroom, 1.5)
+            top_labels.append((x, lv, COLOR_LEVELS.get(lv, THEME_COLORS["chart_text"]), True))
     if grade_cut_points:
         style_by_kind = {
             "9등급": ("#64748b", ":"),
@@ -300,20 +289,7 @@ def fig_score_histogram_colored(
             kind = str(point.get("kind", ""))
             color, linestyle = style_by_kind.get(kind, ("#475569", ":"))
             ax.axvline(x, color=color, linestyle=linestyle, linewidth=0.9, alpha=0.55)
-            if i < 14:
-                y = max(0.75, ymax * (0.92 - (i % 4) * 0.13))
-                ax.text(
-                    x, y, label,
-                    ha="center", va="center", fontsize=6.4, rotation=90,
-                    color=color,
-                    bbox=dict(
-                        boxstyle="round,pad=0.08",
-                        facecolor=THEME_COLORS["chart_bg"],
-                        edgecolor="none",
-                        alpha=0.62,
-                    ),
-                )
-        headroom = max(headroom, 1.7)
+            top_labels.append((x, label, color, False))
     if highlight_scores:
         labels = highlight_labels or ["" for _ in highlight_scores]
         for i, (score, label) in enumerate(zip(highlight_scores, labels)):
@@ -334,7 +310,8 @@ def fig_score_histogram_colored(
     ax.set_xlabel("환산점수 (반올림 정수 원점수)")
     ax.set_ylabel("학생 수")
     ax.set_xlim(-1, 101)
-    ax.set_title(title, pad=10)
+    rows = _place_top_labels(ax, top_labels)
+    ax.set_title(title, pad=8 + rows * _TOP_LABEL_ROW_PT)
     # 범례를 막대와 겹치지 않게 차트 바깥(우측)에 표시
     legend_order = ["A", "B", "C", "D", "E", "미도달"]
     handles = [bar_handles[lv] for lv in legend_order if lv in bar_handles]
@@ -343,8 +320,51 @@ def fig_score_histogram_colored(
               fontsize=8.5, frameon=False, title_fontsize=9)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", linestyle=":", alpha=0.4)
-    fig.subplots_adjust(left=0.08, right=0.86, top=0.82, bottom=0.18)
+    # Room above the plot for the title and the label rows, in points of the designed height.
+    top = 1 - (26 + rows * _TOP_LABEL_ROW_PT) / (fig.get_size_inches()[1] * 72)
+    fig.subplots_adjust(left=0.08, right=0.86, top=min(0.82, top), bottom=0.18)
     return fig
+
+
+_TOP_LABEL_ROW_PT = 11
+_TOP_LABEL_MAX_ROWS = 2
+
+
+def _place_top_labels(ax, items) -> int:
+    """Boundary labels in rows just above the plot, a fixed number of points apart (an axes
+    fraction is only a few pixels on a short chart). Achievement letters (bold) are placed first so
+    they always show; grade labels at the same score merge into one and take the room that is left,
+    in at most two rows, so the plot keeps its height. A label with no room is left out; its dashed
+    line still marks the cut. Returns rows used."""
+    def merge(group):
+        merged = []
+        for x, text, color, bold in sorted(group, key=lambda item: item[0]):
+            if merged and abs(merged[-1][0] - x) < 0.6:
+                px, ptext, _color, pbold = merged[-1]  # same cut score (small classes)
+                merged[-1] = (px, f"{ptext} · {text}", THEME_COLORS["chart_text"], pbold)
+            else:
+                merged.append((x, text, color, bold))
+        return merged
+    rows, placed = [], []  # rows: list of occupied (start, end) spans in score units
+    for x, text, color, bold in merge([i for i in items if i[3]]) + merge([i for i in items if not i[3]]):
+        half = (len(text) * 1.2 + 1.5) / 2  # score units at the chart's usual width
+        span = (x - half, x + half)
+        for row, spans in enumerate(rows):
+            if all(span[1] < a or span[0] > b for a, b in spans):
+                spans.append(span)
+                break
+        else:
+            if len(rows) == _TOP_LABEL_MAX_ROWS:
+                continue
+            row = len(rows)
+            rows.append([span])
+        placed.append((x, text, color, bold, row))
+    for x, text, color, bold, row in placed:
+        ax.annotate(text, (x, 1.0), xycoords=("data", "axes fraction"), textcoords="offset points",
+                    xytext=(0, 3 + row * _TOP_LABEL_ROW_PT), ha="center", va="bottom",
+                    fontsize=7.4, fontweight="bold" if bold else "normal", color=color,
+                    annotation_clip=False)
+    return len(rows)
 
 
 def _normal_cdf(x: float, mean: float, std: float) -> float:
@@ -558,9 +578,12 @@ def fig_round_trend(trend: dict | None, title: str = "회차별 추이") -> Figu
     finish(axes[0], "평균 ± 표준편차", "점")
     axes[1].plot(x, trend["a_pct"], "o-", color=COLOR_LEVELS["A"], label="A")
     axes[1].plot(x, trend["ab_pct"], "s--", color=COLOR_LEVELS["B"], label="A+B")
-    for series in (trend["a_pct"], trend["ab_pct"]):
+    for series, dy, va in ((trend["a_pct"], -4, "top"), (trend["ab_pct"], 4, "bottom")):
+        # A below its point, A+B above: equal values no longer print on top of each other.
         for i, v in enumerate(series):
-            axes[1].annotate(f"{v:.0f}", (x[i], v), textcoords="offset points", **beside(i),
+            place = beside(i)
+            axes[1].annotate(f"{v:.0f}", (x[i], v), textcoords="offset points",
+                             xytext=(place["xytext"][0], dy), ha=place["ha"], va=va,
                              fontsize=7, color=text_color)
     axes[1].legend(frameon=False, fontsize=8)
     finish(axes[1], "A · A+B 비율", "%")
@@ -826,11 +849,12 @@ def fig_choice_dist_by_level(item_stats, title: str = "성취수준별 답지반
     ax.set_xlabel("성취수준")
     ax.set_ylim(0, 105)
     ax.set_title(title)
-    ax.legend(loc="upper center", bbox_to_anchor=(0.5, -0.18), ncol=6,
+    # Beside the plot: below it the legend ran into the "성취수준" axis label at 120 %.
+    ax.legend(loc="center left", bbox_to_anchor=(1.01, 0.5), ncol=1,
               frameon=False, fontsize=8.5)
     ax.spines[["top", "right"]].set_visible(False)
     ax.grid(axis="y", linestyle=":", alpha=0.4)
-    fig.subplots_adjust(left=0.10, right=0.98, top=0.88, bottom=0.26)
+    fig.subplots_adjust(left=0.10, right=0.84, top=0.88, bottom=0.16)
     return fig
 
 

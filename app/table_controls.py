@@ -93,12 +93,21 @@ class TableColumnControls(QObject):
                 for c,width in self.manual.items():
                     if c<table.columnCount():table.setColumnWidth(c,width)
             elif self.fills():self.fill_width()
+            else:self.keep_headers_readable()
             self.sync_frozen()
         finally:self.busy=False
 
     def fills(self):
         forced=self.table.property('fillColumns')
         return True if forced is None else bool(forced)
+
+    def keep_headers_readable(self):
+        """Tables that keep their own widths still show every header in full (zoom changes fonts)."""
+        table=self.table;metrics=table.horizontalHeader().fontMetrics()
+        for c in range(table.columnCount()):
+            item=table.horizontalHeaderItem(c)
+            need=metrics.horizontalAdvance(item.text().replace('\n',' ') if item else str(c))+12
+            if table.columnWidth(c)<need:table.setColumnWidth(c,need)
 
     def readable_width(self,column):
         table=self.table
@@ -172,8 +181,14 @@ class TableColumnControls(QObject):
         self.apply()
 
     def refit(self):
-        """Back to the app's widths fitted to the screen, as if never sized."""
+        """Back to the app's widths (fitted to the screen where the table fills), as if never sized."""
         self.manual={};self.user_sized=False
+        table=self.table
+        if not self.fills() and table.property("baseColumnWidths"):
+            window=table.window()
+            px=getattr(window,"_px",None)
+            for c,width in dict(table.property("baseColumnWidths")).items():
+                if int(c)<table.columnCount():table.setColumnWidth(int(c),px(float(width)) if px else int(width))
         self.apply()
 
     def remember_width(self,column,width):

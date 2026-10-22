@@ -6,7 +6,7 @@ Goedu-Split: a local PySide6 desktop app (macOS/Windows) that analyses NEIS 정�
 
 ## Rules that apply here
 - The parent `AGENTS.md` (in the folder above this repo) and the user's global `~/.claude/CLAUDE.md` apply: no `rm`/`git clean`/force-push etc. (use `/usr/bin/trash <absolute path>` after stating target and reason), no overwriting existing files with `>`/`mv`/`cp`, push/CI/downloads/Release only after explicit approval, no secrets or student data (names, IDs) in output or notes.
-- The canonical project root is this repository; DevDocs lives at `~/DevDocs/10-프로젝트/linked/003-goedusplit/` (read `00-시작.md`, newest card in `90-세션-요약/`). Record substantive work as a new card there; do not rewrite existing DevDocs operating docs.
+- The canonical project root is this repository; DevDocs lives at `~/DevDocs/10-프로젝트/linked/goedusplit/` (read `00-시작.md`, newest card in `90-세션-요약/`). Record substantive work as a new card there; do not rewrite existing DevDocs operating docs.
 - Do not drive the app with Computer Use / accessibility automation (see "Known problems").
 
 ## Commands

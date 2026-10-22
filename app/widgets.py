@@ -356,3 +356,25 @@ def attach_wheel_zoom(canvas):
 
     canvas.mpl_connect("scroll_event", on_scroll)
     canvas.mpl_connect("button_press_event", on_press)
+
+
+def make_scroll_page(tab):
+    """Move ``tab``'s layout onto a page inside a vertical scroll area.
+
+    On a short window the areas' minimums together exceed the tab; a splitter then gives
+    them less than that and paints them over each other and under its handles. The page
+    scrolls instead, and fills the tab as before when it is tall enough.
+    """
+    from PySide6.QtWidgets import QFrame, QScrollArea, QVBoxLayout, QWidget
+    page = QWidget()
+    page.setLayout(tab.layout())  # Qt moves the layout and its widgets from tab to page
+    scroll = QScrollArea()
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    scroll.setWidget(page)
+    outer = QVBoxLayout(tab)
+    outer.setContentsMargins(0, 0, 0, 0)
+    outer.addWidget(scroll)
+    tab.scroll_page = scroll
+    return scroll
