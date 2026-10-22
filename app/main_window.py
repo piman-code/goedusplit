@@ -26,6 +26,7 @@ import threading
 import traceback
 import warnings
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 import xml.etree.ElementTree as ET
@@ -8543,7 +8544,8 @@ codex login status</pre>
         self._activate_spliter_tab_for_pending_payloads()
         self.statusBar().showMessage(f"AI 검토 정기시험 초안 {len(project['items'])}개를 예상정답률 계산기로 보냈습니다.", 5000)
 
-    def _extract_perform_max_score_from_review(self, *texts: str) -> float:
+    def _extract_perform_max_score_from_review(self, *texts: str) -> float | None:
+        """The element's full score from its area name or the last "N점"; None when neither is there."""
         joined = " ".join(texts)
         for area in getattr(self.perform_data, "areas", []) if self.perform_data is not None else []:
             if area.name and area.name in joined:
@@ -8552,9 +8554,9 @@ codex login status</pre>
         if numbers:
             try:
                 return max(1.0, float(numbers[-1]))
-            except Exception:
+            except ValueError:
                 pass
-        return 10.0
+        return None
 
     def _send_ai_review_to_perform_recalc(self):
         rows = [
@@ -8572,18 +8574,22 @@ codex login status</pre>
         self.table_perform_recalc.setRowCount(0)
         self.table_perform_recalc.blockSignals(False)
         self._perform_recalc_dirty = True
+        assumed = 0
         for row in rows:
             name = row.get("번호/요소", "") or f"평가요소 {self.table_perform_recalc.rowCount() + 1}"
             max_score = self._extract_perform_max_score_from_review(
                 name, row.get("성취기준 후보", ""), row.get("근거", ""), row.get("다음 확인", "")
             )
+            notes = [row.get("목표수준 후보", ""), row.get("난이도 후보", ""), row.get("근거", "")]
+            if max_score is None:
+                # Say it: the 10 points used to be filled in without a word (제안 12).
+                max_score = 10.0
+                assumed += 1
+                notes.insert(0, "만점 확인 필요(10점으로 가정)")
             values = {
                 "name": name,
                 "max_score": max_score,
-                "memo": "AI 검토 초안 · " + " · ".join(
-                    part for part in [row.get("목표수준 후보", ""), row.get("난이도 후보", ""), row.get("근거", "")]
-                    if part
-                ),
+                "memo": "AI 검토 초안 · " + " · ".join(part for part in notes if part),
             }
             values.update(self._ai_review_expected_scores_for_perform_row(row, max_score))
             self._add_perform_recalc_row(values)
@@ -8591,7 +8597,8 @@ codex login status</pre>
         self.tabs.setCurrentWidget(self.tab_perform)
         if hasattr(self, "perform_table_tabs"):
             self.perform_table_tabs.setCurrentIndex(2)
-        self.statusBar().showMessage(f"AI 검토 수행 초안 {len(rows)}개를 수행평가 재산정 표로 보냈습니다.", 5000)
+        note = f" · {assumed}개는 만점 확인 필요(10점으로 가정)" if assumed else ""
+        self.statusBar().showMessage(f"AI 검토 수행 초안 {len(rows)}개를 수행평가 재산정 표로 보냈습니다.{note}", 8000)
 
     # ---- 도움말 (안내문은 help_tab.py) ------------------------------
     def _init_tab_help(self):
@@ -8609,7 +8616,7 @@ codex login status</pre>
         a_spliter.triggered.connect(self.export_spliter_evidence); m_file.addAction(a_spliter)
         m_file.addSeparator()
         a_quit = QAction("종료", self); a_quit.setShortcut("Ctrl+Q")
-        a_quit.triggered.connect(self.close); m_file.addAction(a_quit)
+        a_quit.triggered.connect(self._close_by_teacher); m_file.addAction(a_quit)
 
         m_view = self.menuBar().addMenu("보기")
         self._theme_actions = {}
@@ -8703,6 +8710,34 @@ codex login status</pre>
         )
 
     # --------------------------------------------------------- 분석 실행
+    def _close_by_teacher(self):
+        """The 종료 menu: a teacher's close like the window button, so it asks about unsaved work."""
+        self._teacher_close_request = True
+        self.close()
+
+    def closeEvent(self, event):
+        teacher = event.spontaneous() or getattr(self, "_teacher_close_request", False)
+        self._teacher_close_request = False
+        controller = getattr(self, "work_sessions", None)
+        # Only a teacher's close asks; tests and the frozen QA close windows from code.
+        if (teacher and not getattr(self, "_close_confirmed", False) and self.exam is not None
+                and controller is not None and not controller.result_only):
+            event.ignore()
+            controller.confirm_close(self._close_after_confirmation)
+            return
+        super().closeEvent(event)
+
+    def _close_after_confirmation(self):
+        self._close_confirmed = True
+        self.close()
+
+    def _explain_failure(self, title: str, headline: str, error: Exception, hints: list[str]):
+        """A teacher-facing error: what happened, the reason in the loader's words, what to try.
+        The Python traceback goes to the console for developers, not into the dialog."""
+        traceback.print_exc()
+        QMessageBox.critical(self, title, f"{headline}\n\n원인: {error}\n\n다음에 해 볼 일:\n"
+                             + "\n".join(f"· {hint}" for hint in hints))
+
     def run_analysis(self):
         if not self.fs_response.path():
             QMessageBox.warning(self, "입력 부족",
@@ -8711,8 +8746,11 @@ codex login status</pre>
         try:
             exam = load_exam(self.fs_iteminfo.path(), self.fs_response.path())
         except Exception as e:
-            QMessageBox.critical(self, "파싱 오류",
-                                 f"파일을 읽는 중 오류:\n{e}\n\n{traceback.format_exc()}")
+            self._explain_failure("파일을 읽지 못함", "정오표·문항정보표를 읽지 못했습니다.", e, [
+                "NEIS에서 내려받은 엑셀(xlsx) 파일인지 확인하세요.",
+                "같은 시험·같은 과목의 반별 정오표만 함께 넣었는지 확인하세요.",
+                "파일이 엑셀에서 열려 있으면 닫고 다시 '분석 실행'을 누르세요.",
+            ])
             return
         exam.cut_scores = {lv: float(self.spin_cuts[lv].value()) for lv in ["A","B","C","D","E"]}
 
@@ -8741,7 +8779,10 @@ codex login status</pre>
             overall = analyze_overall(exam, score_mat)
             items = analyze_items(exam)[0]
         except Exception as e:
-            QMessageBox.critical(self, "분석 오류", f"{e}\n\n{traceback.format_exc()}")
+            self._explain_failure("분석하지 못함", "파일은 읽었지만 분석 중 문제가 생겼습니다.", e, [
+                "문항정보표의 문항 수·배점과 정오표의 문항이 같은 시험인지 확인하세요.",
+                "계속되면 이 창의 내용을 개발자에게 알려 주세요. 이전 분석 결과는 그대로입니다.",
+            ])
             return
 
         self.exam, self.overall, self.item_stats, self.perform_data = exam, overall, items, perform_data
@@ -8770,18 +8811,18 @@ codex login status</pre>
         if self.spliter_view is not None:
             self._spliter_pending_payload = self._build_spliter_evidence_payload()
             self._flush_spliter_payload()
-        self.statusBar().showMessage(
+        # One message: the summary used to be replaced at once by the missing-data note.
+        parts = [
             f"분석 완료 · N={overall.n_students} · α={overall.cronbach_alpha:.3f} "
             f"({reliability_label(overall.cronbach_alpha)}) · "
             f"분할점수 A≥{int(exam.cut_scores['A'])} B≥{int(exam.cut_scores['B'])} "
             f"C≥{int(exam.cut_scores['C'])} D≥{int(exam.cut_scores['D'])} E≥{int(exam.cut_scores['E'])}"
-        )
-
-        if not exam.items or perform_data is None:
-            missing = []
-            if not exam.items: missing.append('문항정보 없음: 문항·답지반응·성취기준 분석 미표시')
-            if perform_data is None: missing.append('수행 자료 없음: 현재 회차 지필 원점수만 표시 (학기 총점 아님)')
-            self.statusBar().showMessage('분석 완료 · ' + ' · '.join(missing))
+        ]
+        if not exam.items: parts.append('문항정보 없음: 문항·답지반응·성취기준 분석 미표시')
+        if perform_data is None: parts.append('수행 자료 없음: 현재 회차 지필 원점수만 표시 (학기 총점 아님)')
+        parts.append("다음: '성취도' 탭에서 결과를 확인하세요" if exam.items or perform_data is not None
+                     else "다음: 'Data' 탭에서 학생별 점수를 확인하세요")
+        self.statusBar().showMessage(' · '.join(parts))
         if hasattr(self, "folder_workspace"):
             self.folder_workspace.after_analysis()
 
@@ -10780,8 +10821,10 @@ codex login status</pre>
         if path:
             try:
                 candidates.append(load_item_info(path)[0])
-            except Exception:
-                pass
+            except Exception as error:
+                # Falling back to the loaded analysis is fine, but not silently (제안 12).
+                self.statusBar().showMessage(
+                    f"왼쪽에서 고른 문항정보표를 읽지 못해 불러온 분석의 문항정보를 씁니다 ({error}).", 8000)
         if self.exam is not None and self.exam.items:
             candidates.append(self.exam.items)
         return candidates
@@ -11377,48 +11420,68 @@ codex login status</pre>
             if with_graphs:
                 graph_dir = out / "그래프"
                 graph_dir.mkdir(exist_ok=False)
-                # 도넛
-                f = charts.fig_level_donut(ov.level_dist_pct, ov.level_dist)
-                with (graph_dir / "01_성취수준_도넛.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("01_성취수준_도넛.png")
-                # 환산점수 히스토그램
-                f = charts.fig_score_histogram_colored(
-                    [s.final_score for s in self.exam.students], ov.levels_arr)
-                with (graph_dir / "02_환산점수_분포.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("02_환산점수_분포.png")
-                # 평균±표준편차
-                f = charts.fig_level_means_with_error(ov.level_mean, ov.level_std)
-                with (graph_dir / "03_성취수준별_평균.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("03_성취수준별_평균.png")
-                # 학급별 평균
-                f = charts.fig_class_means(ov.by_class)
-                with (graph_dir / "04_학급별_평균.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("04_학급별_평균.png")
-                # 문항별 정답률/변별도
-                f = charts.fig_item_difficulty(self.item_stats)
-                with (graph_dir / "05_문항_정답률.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("05_문항_정답률.png")
-                f = charts.fig_item_discrimination(self.item_stats)
-                with (graph_dir / "06_문항_변별도.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("06_문항_변별도.png")
-                # 성취기준
-                f = charts.fig_standard_attainment(ov.by_standard)
-                with (graph_dir / "07_성취기준별_정답률.png").open("xb") as image_file:
-                    f.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
-                saved_pngs.append("07_성취기준별_정답률.png")
+
+                def save(name, figure):
+                    with (graph_dir / name).open("xb") as image_file:
+                        figure.savefig(image_file, format="png", dpi=150, bbox_inches="tight")
+                    saved_pngs.append(name)
+
+                with self._light_charts_for_export():
+                    save("01_성취수준_도넛.png", charts.fig_level_donut(ov.level_dist_pct, ov.level_dist))
+                    save("02_환산점수_분포.png", charts.fig_score_histogram_colored(
+                        [s.final_score for s in self.exam.students], ov.levels_arr))
+                    save("03_성취수준별_평균.png", charts.fig_level_means_with_error(ov.level_mean, ov.level_std))
+                    save("04_학급별_평균.png", charts.fig_class_means(ov.by_class))
+                    save("05_문항_정답률.png", charts.fig_item_difficulty(self.item_stats))
+                    save("06_문항_변별도.png", charts.fig_item_discrimination(self.item_stats))
+                    save("07_성취기준별_정답률.png", charts.fig_standard_attainment(ov.by_standard))
+                    # Graphs that were only on screen before (제안 9), when their data exist.
+                    save("08_모니터링_기준비교.png",
+                         charts.fig_monitoring_benchmarks(self._monitor_rows_and_benchmarks()[1]))
+                    records = getattr(self, "_round_records", None) or []
+                    if len(records) >= 2:
+                        save("09_회차별_추이.png", charts.fig_round_trend(round_history.trend(records)))
+                    if getattr(self, "perform_data", None) is not None:
+                        matches = self._perform_matches()
+                        save("10_수행평가_영역별.png", charts.fig_perform_area_rates(self._perform_area_rows()))
+                        save("11_정기시험_수행.png", charts.fig_perform_scatter(
+                            [student.total for _, student, _, _ in matches],
+                            [student.perform_score for _, student, _, _ in matches],
+                            [level for _, _, level, _ in matches]))
 
             extra = f"\n그래프 {len(saved_pngs)}장 → 그래프/ 폴더" if saved_pngs else ""
             identity = "학생 실명 포함" if include_identity else "학생은 가명 ID로 저장"
-            QMessageBox.information(self, "완료",
-                                    f"CSV 4개{extra}\n{identity}\n저장 위치: {out}")
+            done = QMessageBox(self)
+            done.setIcon(QMessageBox.Information)
+            done.setWindowTitle("완료")
+            done.setText(f"CSV 4개{extra}\n{identity}\n저장 위치: {out}")
+            # A re-export goes to a new timestamped folder; open it directly from here.
+            open_folder = done.addButton("폴더 열기", QMessageBox.ActionRole)
+            done.addButton(QMessageBox.Ok)
+            done.exec()
+            if done.clickedButton() is open_folder:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(str(out)))
         except Exception as e:
             QMessageBox.critical(self, "오류", f"{e}")
+
+    @contextmanager
+    def _light_charts_for_export(self):
+        """Exported PNGs go into reports and print: draw them with the light palette even when the
+        screen is dark (the auto theme turns dark at 18:00), then give the screen its colors back."""
+        from .palettes import LIGHT
+        from . import theme as theme_module
+        import matplotlib
+        theme = getattr(self, "theme", None)
+        previous_colors = getattr(charts, "_colors", None) or (theme.colors if theme is not None else LIGHT)
+        previous_theme = theme_module._matplotlib_theme
+        with matplotlib.rc_context():  # restores every rcParam the light palette changes
+            charts.set_theme(LIGHT)
+            ThemeManager._apply_matplotlib(LIGHT, getattr(theme, "_base_pt", 13))
+            try:
+                yield
+            finally:
+                charts.set_theme(previous_colors)
+                theme_module._matplotlib_theme = previous_theme
 
     @staticmethod
     def _write_csv(path: Path, headers, rows):

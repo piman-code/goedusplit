@@ -7,8 +7,11 @@ property forces this on (True: always fill, for wrapped text) or off (False: the
 results table).
 """
 from PySide6.QtCore import QObject, QEvent, QTimer, Qt, Slot, QPoint
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QKeySequence
 from PySide6.QtWidgets import QApplication, QTableWidget, QHeaderView, QMenu, QToolButton, QTabWidget, QHBoxLayout, QSplitter
+
+
+IDENTITY_HEADERS={'이름','반/번호','학번','학생ID','가명','가명 ID','성명'}
 
 
 def _menu_button_label(button):
@@ -35,6 +38,13 @@ class TableColumnControls(QObject):
         header.sectionHandleDoubleClicked.connect(self.fit_column)
         for signal in (table.model().modelReset,table.model().columnsInserted,table.model().columnsRemoved):
             signal.connect(self.schedule)
+        # 제안 6: copy to Excel/Hangul. Ctrl+C and a cell menu (only where the table has no menu).
+        self.viewport=table.viewport();self.viewport.installEventFilter(self)
+        self.copy_action=QAction('선택 영역 복사 (Ctrl+C)',table);self.copy_action.triggered.connect(self.copy_selection)
+        self.copy_all_action=QAction('표 전체 복사',table);self.copy_all_action.triggered.connect(self.copy_all)
+        if table.contextMenuPolicy()==Qt.DefaultContextMenu:
+            table.setContextMenuPolicy(Qt.CustomContextMenu)
+            table.customContextMenuRequested.connect(self.cell_menu)
         header.setToolTip('열 경계를 끌어 너비 조절 · 경계 더블클릭: 내용에 맞춤 · 우클릭: 화면에 맞춤 / 내용에 맞춤 / 초기 너비')
         header.setContextMenuPolicy(Qt.CustomContextMenu)
         header.customContextMenuRequested.connect(self.menu)
@@ -217,8 +227,50 @@ class TableColumnControls(QObject):
         menu=QMenu(self.table);menu.addAction(self.fit_action);menu.addAction(self.contents_action);menu.addAction(self.reset_action)
         menu.exec(self.table.horizontalHeader().mapToGlobal(pos))
 
+    @Slot(QPoint)
+    def cell_menu(self,pos):
+        menu=QMenu(self.table);menu.addAction(self.copy_action);menu.addAction(self.copy_all_action)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+
+    @Slot()
+    def copy_all(self):
+        self.copy_rows(range(self.table.rowCount()),range(self.table.columnCount()))
+
+    @Slot()
+    def copy_selection(self):
+        ranges=self.table.selectedRanges()
+        rows=sorted({r for rg in ranges for r in range(rg.topRow(),rg.bottomRow()+1)})
+        cols=sorted({c for rg in ranges for c in range(rg.leftColumn(),rg.rightColumn()+1)})
+        if rows and cols:self.copy_rows(rows,cols)
+
+    def copy_rows(self,rows,cols):
+        """Tab-separated header line and rows, as Excel and Hangul paste a table. A table with
+        student identity columns asks the same real-identity confirmation as exports."""
+        table=self.table
+        cols=[c for c in cols if not table.isColumnHidden(c)]
+        rows=[r for r in rows if not table.isRowHidden(r)]
+        heading=[table.horizontalHeaderItem(c).text().replace('\n',' ') if table.horizontalHeaderItem(c) else '' for c in cols]
+        if IDENTITY_HEADERS.intersection(h.strip() for h in heading):
+            from PySide6.QtWidgets import QMessageBox
+            from .export_privacy import REAL_IDENTITY_WARNING
+            answer=QMessageBox.warning(table.window(),'표 복사',REAL_IDENTITY_WARNING,
+                                       QMessageBox.Yes|QMessageBox.No,QMessageBox.No)
+            if answer!=QMessageBox.Yes:return
+        clean=lambda text:' '.join(str(text).split())
+        lines=['\t'.join(clean(h) for h in heading)]
+        for r in rows:
+            lines.append('\t'.join(clean(table.item(r,c).text() if table.item(r,c) else '') for c in cols))
+        QApplication.clipboard().setText('\n'.join(lines))
+        bar=getattr(table.window(),'statusBar',None)
+        if callable(bar):bar().showMessage(f'표 {len(rows)}줄을 복사했습니다. 엑셀이나 한글에 붙여 넣으세요.',4000)
+
     def eventFilter(self,obj,event):
         if not hasattr(self,'table'):return False
+        # Key events only, and identity checks only: no calls into a table Qt may be destroying.
+        if event.type() in (QEvent.ShortcutOverride,QEvent.KeyPress) and (obj is self.table or obj is self.viewport) \
+                and event.matches(QKeySequence.Copy):
+            if event.type()==QEvent.KeyPress:self.copy_selection()
+            event.accept();return True
         if event.type()==QEvent.MouseButtonPress and event.button()==Qt.LeftButton:self.dragging=True
         elif event.type()==QEvent.MouseButtonRelease:self.dragging=False
         elif obj is self.table and event.type() in (QEvent.Show,QEvent.Resize,QEvent.LayoutRequest):self.schedule()

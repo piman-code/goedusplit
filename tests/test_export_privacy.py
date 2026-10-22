@@ -171,7 +171,7 @@ class ExportPrivacyWindowTests(unittest.TestCase):
             for _ in range(2):
                 messages = self._export_csv(directory, check_real=False, confirm=False)
                 messages.critical.assert_not_called()
-                actual = Path(messages.information.call_args.args[2].split('저장 위치: ', 1)[1])
+                actual = Path(messages.return_value.setText.call_args.args[0].split('저장 위치: ', 1)[1])
                 self.assertNotEqual(root, actual)
                 self.assertEqual(root, actual.parent)
                 self.assertEqual(4, len(list(actual.glob('*.csv'))))
@@ -179,6 +179,29 @@ class ExportPrivacyWindowTests(unittest.TestCase):
             bundles = [p for p in root.iterdir() if p.is_dir()]
             self.assertEqual(2, len(bundles))
             self.assertTrue(all(len(list(p.glob('*.csv'))) == 4 for p in bundles))
+
+    def test_done_message_offers_to_open_the_folder(self):
+        # 제안 9: after export the teacher had to find the (possibly timestamped) folder by hand.
+        with TemporaryDirectory() as directory:
+            messages = self._export_csv(directory, check_real=False, confirm=False)
+        labels = [c.args[0] for c in messages.return_value.addButton.call_args_list if c.args]
+        self.assertIn("폴더 열기", labels)
+
+    def test_graphs_are_exported_on_white_even_in_the_dark_theme(self):
+        # 제안 1: after 18:00 the auto theme is dark and exported PNGs had a black background.
+        from PIL import Image
+        from app import lazy_charts
+        from app.palettes import DARK, LIGHT
+        from app.theme import ThemeManager
+        lazy_charts.set_theme(DARK); ThemeManager._apply_matplotlib(DARK, 13)
+        self.addCleanup(ThemeManager._apply_matplotlib, LIGHT, 13)
+        self.addCleanup(lazy_charts.set_theme, LIGHT)
+        with TemporaryDirectory() as directory:
+            self._export_csv(directory, check_real=False, confirm=False, graphs=True)
+            image = Image.open(Path(directory) / "그래프" / "01_성취수준_도넛.png").convert("RGB")
+            self.assertGreater(min(image.getpixel((2, 2))), 235)
+        import matplotlib
+        self.assertEqual(DARK["chart_bg"].lower(), matplotlib.colors.to_hex(matplotlib.rcParams["savefig.facecolor"]).lower())
 
     def test_csv_writer_refuses_existing_file(self):
         with TemporaryDirectory() as directory:
@@ -201,14 +224,15 @@ class ExportPrivacyWindowTests(unittest.TestCase):
                     else:
                         Path(path).write_bytes(b'new synthetic graph')
                 for name in ('fig_level_donut', 'fig_score_histogram_colored', 'fig_level_means_with_error',
-                             'fig_class_means', 'fig_item_difficulty', 'fig_item_discrimination', 'fig_standard_attainment'):
+                             'fig_class_means', 'fig_item_difficulty', 'fig_item_discrimination', 'fig_standard_attainment',
+                             'fig_monitoring_benchmarks'):
                     getattr(charts, name).return_value.savefig.side_effect = save
                 messages = self._export_csv(directory, check_real=False, confirm=False, graphs=True)
             messages.critical.assert_not_called()
             self.assertEqual(b'previous synthetic graph', original.read_bytes())
             bundles = [p for p in root.iterdir() if p.is_dir() and p.name != '그래프']
             self.assertEqual(1, len(bundles))
-            self.assertEqual(7, len(list((bundles[0] / '그래프').glob('*.png'))))
+            self.assertEqual(8, len(list((bundles[0] / '그래프').glob('*.png'))))  # + monitoring benchmarks
 
     def test_csv_export_defaults_to_pseudonyms(self):
         with TemporaryDirectory() as directory:

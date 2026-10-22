@@ -132,6 +132,7 @@ class WindowTests(unittest.TestCase):
         self.settle()
 
     def close_window(self):
+        self.app.processEvents()  # let queued relayouts run while the window still exists
         self.window.close()
         self.window.deleteLater()
         QCoreApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -147,6 +148,87 @@ class WindowTests(unittest.TestCase):
         self.window.fs_iteminfo.path_edit.setText("/합성/문항정보표.xlsx")
         self.window.run_analysis()
         self.settle()
+
+    def test_unreadable_file_says_what_to_do_without_python_details(self):
+        # 제안 4: a teacher saw an English traceback and could not tell what to fix.
+        self.window.fs_response.path_edit.setText("/합성/정오표.xlsx")
+        with patch("app.main_window.load_exam", side_effect=ValueError("정오표에서 학생 행을 찾지 못했습니다.")), \
+             patch("app.main_window.QMessageBox.critical") as critical:
+            self.window.run_analysis()
+        text = critical.call_args.args[2]
+        self.assertIn("정오표에서 학생 행을 찾지 못했습니다.", text)
+        self.assertIn("다음에 해 볼 일", text)
+        self.assertNotIn("Traceback", text)
+
+    def test_completion_message_keeps_the_numbers_with_the_missing_data_note(self):
+        # 제안 7: the N/alpha/cut summary was replaced at once by the missing-data note.
+        self.analyze()
+        message = self.window.statusBar().currentMessage()
+        self.assertIn("N=", message)
+        self.assertIn("학기 총점 아님", message)
+        self.assertIn("다음:", message)
+
+    def test_unreadable_item_info_for_ai_review_is_announced(self):
+        # 제안 12: the item-info file chosen on the left silently fell back to the analysis items.
+        self.window.fs_iteminfo.path_edit.setText("/합성/깨진_문항정보표.xlsx")
+        with patch("app.main_window.load_item_info", side_effect=ValueError("시트를 찾지 못함")):
+            self.window._item_info_candidates()
+        self.assertIn("문항정보표를 읽지 못해", self.window.statusBar().currentMessage())
+
+    def test_perform_row_without_a_max_score_is_marked_for_checking(self):
+        # 제안 12: an AI review row with no "N점" got 10 points without a word.
+        row = {"평가유형": "수행평가", "번호/요소": "발표", "근거": "채점기준 없음"}
+        with patch.object(self.window, "_ai_review_table_rows", return_value=[row]), \
+             patch.object(self.window, "_ai_review_expected_scores_for_perform_row", return_value={}):
+            self.window._send_ai_review_to_perform_recalc()
+        table = self.window.table_perform_recalc
+        self.assertEqual("10.0", table.item(0, 1).text())
+        self.assertIn("만점 확인 필요", table.item(0, 7).text())
+        self.assertIn("만점 확인 필요", self.window.statusBar().currentMessage())
+
+    def test_closing_by_the_teacher_asks_before_losing_unsaved_work(self):
+        # 제안 5: closing the window dropped recalculation rows, monitoring inputs and AI review text.
+        from unittest.mock import Mock
+        self.analyze()
+        event = Mock(); event.spontaneous.return_value = True
+        with patch.object(self.window.work_sessions, "confirm_close") as confirm:
+            self.window.closeEvent(event)
+        confirm.assert_called_once()
+        event.ignore.assert_called_once()
+
+    def test_menu_quit_asks_too_but_programmatic_close_does_not(self):
+        from PySide6.QtGui import QAction
+        self.analyze()
+        quit_action = next(a for a in self.window.findChildren(QAction) if a.text() == "종료")
+        with patch.object(self.window.work_sessions, "confirm_close") as confirm:
+            quit_action.trigger(); self.settle()
+        confirm.assert_called_once()
+        self.assertTrue(self.window.isVisible())
+        with patch.object(self.window.work_sessions, "confirm_close") as confirm:
+            self.window.close(); self.settle()   # tests and the frozen QA close windows like this
+        confirm.assert_not_called()
+
+    def test_confirm_close_skips_the_question_when_the_work_is_saved(self):
+        from unittest.mock import Mock
+        from app.work_sessions import signature
+        controller = self.window.work_sessions
+        payload = {"domain": {"synthetic": 1}, "metadata": {}}
+        controller.last_saved_signature = signature(payload)
+        after = Mock()
+        with patch.object(controller, "capture", side_effect=lambda callback: callback(payload, None)), \
+             patch("app.work_session_ui.QMessageBox") as box_class:
+            controller.confirm_close(after)
+        after.assert_called_once(); box_class.assert_not_called()
+        controller.last_saved_signature = "older"
+        save_button, discard_button, cancel_button = object(), object(), object()
+        box = box_class.return_value
+        box.addButton.side_effect = [save_button, discard_button, cancel_button]
+        box.clickedButton.return_value = discard_button
+        after = Mock()
+        with patch.object(controller, "capture", side_effect=lambda callback: callback(payload, None)), \
+             patch("app.work_session_ui.QMessageBox", box_class):
+            controller.confirm_close(after)
+        after.assert_called_once()
 
     def test_first_launch_uses_the_readable_tab_names(self):
         self.assertEqual(self.window.tabs.tabText(1), "포트폴리오")   # not the tiny "학생"

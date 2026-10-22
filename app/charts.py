@@ -7,12 +7,15 @@ Matplotlib 기반 차트 헬퍼.
 """
 from __future__ import annotations
 
+import colorsys
 import math
 from typing import Iterable
 
 import matplotlib
 matplotlib.use("Agg")  # GUI에서 FigureCanvasQTAgg가 다시 백엔드를 잡아준다.
 import matplotlib.pyplot as plt
+from matplotlib.artist import Artist
+from matplotlib.colors import to_hex, to_rgb
 from matplotlib.figure import Figure
 from matplotlib import font_manager as fm
 
@@ -109,6 +112,97 @@ def _luminance(hex_color: str) -> float:
     # WCAG luminance
     def _lin(v): return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
     return 0.2126 * _lin(r) + 0.7152 * _lin(g) + 0.0722 * _lin(b)
+
+
+def _contrast(color_a, color_b) -> float:
+    """WCAG 대비율 (1~21). 그래픽 요소는 3, 글자는 4.5 이상이면 또렷하다."""
+    la, lb = _luminance(to_hex(color_a)), _luminance(to_hex(color_b))
+    return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+
+
+def _readable_on_bg(color, min_ratio: float = 3.0) -> str:
+    """색조는 그대로 두고 명도만 바꿔, 차트 배경 위에서 min_ratio 대비가 나오는 색을 돌려준다.
+
+    밝은 테마의 연노랑 강조색(#fff3a4)은 흰 배경에서 선이 거의 사라져서, 같은 색조의 진한 색으로 그린다.
+    """
+    bg = THEME_COLORS.get("chart_bg", "#ffffff")
+    if _contrast(color, bg) >= min_ratio:
+        return to_hex(color)
+    h, l, s = colorsys.rgb_to_hls(*to_rgb(color))
+    step = -0.02 if _luminance(to_hex(bg)) >= 0.5 else 0.02
+    while 0.0 < l < 1.0:
+        l = min(1.0, max(0.0, l + step))
+        candidate = to_hex(colorsys.hls_to_rgb(h, l, s))
+        if _contrast(candidate, bg) >= min_ratio:
+            return candidate
+    return to_hex(THEME_COLORS.get("chart_text", "#222222"))
+
+
+def _text_on(fill) -> str:
+    """막대 안 글자색: 흰색과 진한 회색 중 막대 색과 대비가 큰 쪽."""
+    return max(("#ffffff", "#1f2933"), key=lambda c: _contrast(c, fill))
+
+
+class _BeforeTexts(Artist):
+    """축이 글자를 그리기 직전에, 실제로 그려지는 크기를 보고 callback(renderer)을 부른다.
+
+    그래프는 창 크기에 맞춰 늘고 줄어서, 막대 간격은 그릴 때가 되어야 픽셀로 알 수 있다.
+    """
+
+    def __init__(self, callback):
+        super().__init__()
+        self._callback = callback
+        self.set_zorder(-1e9)  # 축의 다른 요소보다 먼저
+        self.set_in_layout(False)
+
+    def draw(self, renderer):
+        if self.get_visible():
+            self._callback(renderer)
+        self.stale = False
+
+
+def _fit_bar_value_labels(ax, texts, base_size: float, min_size: float = 6.0) -> None:
+    """문항이 많아 막대가 좁으면 막대 위 숫자를 줄이고, 그래도 넘치면 세우고, 마지막엔 건너뛰어 표시."""
+    texts = list(texts)
+    if len(texts) < 2:
+        return
+    gap = 2.0  # 숫자 사이 최소 픽셀
+
+    def fit(renderer):
+        for t in texts:
+            t.set_visible(True)
+            t.set_rotation(0)
+            t.set_fontsize(base_size)
+        xs = sorted(ax.transData.transform([(t.get_position()[0], 0) for t in texts])[:, 0])
+        pitch = float(np.min(np.diff(xs)))
+        # 문항번호 눈금도 같은 간격에 들어가지 않으면 몇 개씩 건너뛴다 (1, 3, 5 … 또는 1, 4, 7 …).
+        ticks = ax.get_xticklabels()
+        for t in ticks:
+            t.set_visible(True)
+        tick_width = max((t.get_window_extent(renderer).width for t in ticks if t.get_text()), default=0.0)
+        tick_step = max(1, math.ceil((tick_width + gap) / max(pitch, 1e-6)))
+        for i, t in enumerate(ticks):
+            t.set_visible(i % tick_step == 0)
+        boxes = [t.get_window_extent(renderer) for t in texts]
+        widest = max(b.width for b in boxes) or 1.0
+        tall = max(b.height for b in boxes) or 1.0
+        if widest + gap <= pitch:
+            return
+        size = base_size * (pitch - gap) / widest
+        rotation, step = 0, 1
+        if size < min_size:
+            # 세워 쓰면 글자 높이만 막대 간격에 들어가면 된다.
+            rotation = 90
+            size = min(base_size, base_size * (pitch - gap) / tall)
+            if size < min_size:
+                size = min_size
+                step = math.ceil((tall * min_size / base_size + gap) / max(pitch, 1e-6))
+        for i, t in enumerate(texts):
+            t.set_fontsize(size)
+            t.set_rotation(rotation)
+            t.set_visible(i % step == 0)
+
+    ax.add_artist(_BeforeTexts(fit))
 
 
 def fig_level_donut(level_pct: dict, level_n: dict, title: str = "성취수준 비율") -> Figure:
@@ -399,6 +493,8 @@ def fig_score_normal_monitoring(
         x = np.linspace(0, 100, 500)
         pdf = (1 / (std * np.sqrt(2 * np.pi))) * np.exp(-0.5 * ((x - mean) / std) ** 2)
         y = pdf * len(arr) * 2
+        # The curve can peak above the tallest bar (small or spread-out groups); keep it under the limit.
+        ymax = max(ymax, float(y.max()))
         ax.plot(x, y, color=THEME_COLORS["chart_text"], linewidth=2.0, label="정규분포 곡선")
         for mul, alpha in ((1, 0.16), (2, 0.08)):
             lo, hi = mean - mul * std, mean + mul * std
@@ -409,7 +505,8 @@ def fig_score_normal_monitoring(
                 label = "평균" if mul == 0 else f"{mul:+d}SD"
                 ax.axvline(x0, color="#f59e0b" if mul else "#ef4444",
                            linestyle=style, linewidth=1.2)
-                ax.text(x0, ymax * 1.05, label, ha="center", va="bottom",
+                # Two rows (±1SD below, mean and ±2SD above): with a small SD five labels in one row touched.
+                ax.text(x0, ymax * (1.03 if abs(mul) == 1 else 1.14), label, ha="center", va="bottom",
                         fontsize=8, color=THEME_COLORS["chart_text"])
 
     for lv, boundary in [("A", cuts.get("A")), ("B", cuts.get("B")), ("C", cuts.get("C")),
@@ -422,18 +519,19 @@ def fig_score_normal_monitoring(
             ax.axvline(x0, color=COLOR_LEVELS.get(lv, "#999999"),
                        linestyle="-", linewidth=0.8, alpha=0.5)
             ax.text(x0, ymax * 0.9, lv, ha="center", va="bottom",
-                    fontsize=8, color=COLOR_LEVELS.get(lv, THEME_COLORS["chart_text"]),
+                    fontsize=8, color=_readable_on_bg(COLOR_LEVELS.get(lv, THEME_COLORS["chart_text"])),
                     fontweight="bold")
 
     expected_a = (1 - _normal_cdf(float(cuts.get("A", 90.0)), mean, std)) * 100 if std > 0 else 0.0
     observed_a = float(level_pct.get("A", 0.0))
     note = (
-        f"평균 {mean:.2f} · 표준편차 {std:.2f}\n"
-        f"실제 A {observed_a:.1f}% · 정규 기대 A {expected_a:.1f}%\n"
+        f"평균 {mean:.2f}\n표준편차 {std:.2f}\n"
+        f"실제 A {observed_a:.1f}%\n정규 기대 A {expected_a:.1f}%\n"
         f"차이 {observed_a - expected_a:+.1f}%p"
     )
+    # Beside the plot, not on it: inside, the box covered the +1SD/+2SD and A/B labels.
     ax.text(
-        0.985, 0.97, note, transform=ax.transAxes, ha="right", va="top",
+        1.03, 1.0, note, transform=ax.transAxes, ha="left", va="top",
         fontsize=8.8, color=THEME_COLORS["chart_text"],
         bbox=dict(boxstyle="round,pad=0.45", facecolor=THEME_COLORS["chart_bg"],
                   edgecolor=THEME_COLORS["chart_grid"], alpha=0.92)
@@ -445,8 +543,8 @@ def fig_score_normal_monitoring(
     ax.set_ylim(0, ymax * 1.28)
     ax.grid(axis="y", linestyle=":", alpha=0.35)
     ax.spines[["top", "right"]].set_visible(False)
-    ax.legend(loc="upper left", frameon=False, fontsize=8.5)
-    fig.subplots_adjust(left=0.08, right=0.96, top=0.88, bottom=0.16)
+    ax.legend(loc="lower left", bbox_to_anchor=(1.01, 0.0), frameon=False, fontsize=8.5)
+    fig.subplots_adjust(left=0.08, right=0.80, top=0.88, bottom=0.16)
     return fig
 
 
@@ -523,8 +621,10 @@ def fig_round_compare(base: dict | None, other: dict | None, title: str = "회�
     width = 0.38
     a_vals = [base["level_pct"].get(lv, 0.0) for lv in levels]
     b_vals = [other["level_pct"].get(lv, 0.0) for lv in levels]
-    bars_a = ax.bar(x - width / 2, a_vals, width, label=base["label"], color="#94a3b8", edgecolor="white")
-    bars_b = ax.bar(x + width / 2, b_vals, width, label=other["label"], color=THEME_COLORS["highlight"], edgecolor="white")
+    edge = THEME_COLORS.get("chart_bg", "#ffffff")
+    bars_a = ax.bar(x - width / 2, a_vals, width, label=base["label"], color=_readable_on_bg("#94a3b8"), edgecolor=edge)
+    bars_b = ax.bar(x + width / 2, b_vals, width, label=other["label"],
+                    color=_readable_on_bg(THEME_COLORS["highlight"]), edgecolor=edge)
     top = max(a_vals + b_vals + [10]) * 1.25 + 4
     for bars in (bars_a, bars_b):
         for bar in bars:
@@ -567,7 +667,8 @@ def fig_round_trend(trend: dict | None, title: str = "회차별 추이") -> Figu
         ax.grid(axis="y", linestyle=":", alpha=0.4)
 
     mean, std = trend["mean"], trend["std"]
-    axes[0].errorbar(x, mean, yerr=std, fmt="o-", color=THEME_COLORS["highlight"], ecolor="#94a3b8", capsize=3)
+    line_color = _readable_on_bg(THEME_COLORS["highlight"])  # 밝은 테마의 연노랑은 흰 배경에서 안 보인다
+    axes[0].errorbar(x, mean, yerr=std, fmt="o-", color=line_color, ecolor="#94a3b8", capsize=3)
     def beside(i):
         # Right of the point (left for the last one), so error bars and lines stay visible.
         last = i == len(x) - 1
@@ -587,7 +688,7 @@ def fig_round_trend(trend: dict | None, title: str = "회차별 추이") -> Figu
                              fontsize=7, color=text_color)
     axes[1].legend(frameon=False, fontsize=8)
     finish(axes[1], "A · A+B 비율", "%")
-    axes[2].plot(x, trend["cut_a"], "o-", color=THEME_COLORS["highlight"])
+    axes[2].plot(x, trend["cut_a"], "o-", color=line_color)
     for i, v in enumerate(trend["cut_a"]):
         axes[2].annotate(f"{v:.1f}", (x[i], v), textcoords="offset points", **beside(i),
                          fontsize=7.5, color=text_color)
@@ -772,10 +873,11 @@ def fig_item_difficulty(items_stats, title: str = "문항별 정답률(난이도
     for thr in (20, 40, 60, 80):
         ax.axhline(thr, color=THEME_COLORS["chart_text"], linestyle=":",
                    linewidth=0.8, alpha=0.2)
-    for b, v in zip(bars, p):
-        ax.text(b.get_x() + b.get_width()/2, b.get_height() + 2.0, f"{v:.0f}",
-                ha="center", va="bottom", fontsize=8.5,
-                color=THEME_COLORS["chart_text"])
+    labels = [ax.text(b.get_x() + b.get_width()/2, b.get_height() + 2.0, f"{v:.0f}",
+                      ha="center", va="bottom", fontsize=8.5,
+                      color=THEME_COLORS["chart_text"])
+              for b, v in zip(bars, p)]
+    _fit_bar_value_labels(ax, labels, 8.5)
     ax.set_xlabel("문항번호")
     ax.set_ylabel("정답률 (%)")
     ax.set_ylim(0, 118)   # 라벨 공간 충분
@@ -795,20 +897,24 @@ def fig_item_discrimination(items_stats, title: str = "문항별 변별도 (0.3 
     bars = ax.bar([str(x) for x in nums], d, color=THEME_COLORS["d_bar"], width=0.66)
     ax.axhline(0.30, color=THEME_COLORS["chart_text"], linestyle=":", linewidth=0.8, alpha=0.4)
     ax.axhline(0.20, color=THEME_COLORS["chart_text"], linestyle=":", linewidth=0.8, alpha=0.25)
-    lo = min(0, min(d) - 0.12) if d else 0
-    hi = max(1.0, max(d) + 0.22) if d else 1.0
+    # 문항이 많으면 숫자가 세워져 길어지므로 위아래 여유를 더 둔다.
+    room = 0.12 if len(d) < 20 else 0.24
+    lo = min(0, min(d) - room) if d else 0
+    hi = max(1.0, max(d) + room + 0.1) if d else 1.0
     # 라벨 위치: 양수면 막대 위, 음수면 막대 아래. 같은 단위로 일정한 거리 두기.
     pad = (hi - lo) * 0.025
+    labels = []
     for b, v in zip(bars, d):
         x = b.get_x() + b.get_width() / 2
         if v >= 0:
-            ax.text(x, v + pad, f"{v:.2f}",
-                    ha="center", va="bottom", fontsize=8,
-                    color=THEME_COLORS["chart_text"])
+            labels.append(ax.text(x, v + pad, f"{v:.2f}",
+                                  ha="center", va="bottom", fontsize=8,
+                                  color=THEME_COLORS["chart_text"]))
         else:
-            ax.text(x, v - pad, f"{v:.2f}",
-                    ha="center", va="top", fontsize=8,
-                    color=THEME_COLORS["chart_text"])
+            labels.append(ax.text(x, v - pad, f"{v:.2f}",
+                                  ha="center", va="top", fontsize=8,
+                                  color=THEME_COLORS["chart_text"]))
+    _fit_bar_value_labels(ax, labels, 8)
     ax.set_xlabel("문항번호")
     ax.set_ylabel("변별도 (r)")
     ax.set_ylim(lo, hi)
@@ -830,7 +936,8 @@ def fig_choice_dist_by_level(item_stats, title: str = "성취수준별 답지반
         return fig
     choices = [1, 2, 3, 4, 5, 0]
     color_choice = {1: "#3da9fc", 2: "#7fc6a4", 3: "#f4b942",
-                    4: "#d9534f", 5: "#9b59b6", 0: "#bbb"}
+                    4: "#cf4440", 5: "#9b59b6", 0: _readable_on_bg("#a3abb3")}
+    edge = THEME_COLORS.get("chart_bg", "#ffffff")  # 칸 구분선은 배경색: 어두운 테마에서 흰 테두리가 번쩍이지 않게
     bottom = np.zeros(len(levels))
     correct = item_stats.item.answer
     for ch in choices:
@@ -839,11 +946,11 @@ def fig_choice_dist_by_level(item_stats, title: str = "성취수준별 답지반
         if str(ch) == str(correct):
             label += " (정답)"
         ax.bar(levels, vals, bottom=bottom, color=color_choice[ch],
-               edgecolor="white", label=label)
+               edgecolor=edge, label=label)
         for i, v in enumerate(vals):
             if v >= 8:
                 ax.text(i, bottom[i] + v / 2, f"{v:.0f}", ha="center", va="center",
-                        fontsize=8.5, color="white" if ch in (1, 4, 5) else "#222")
+                        fontsize=8.5, color=_text_on(color_choice[ch]))
         bottom += vals
     ax.set_ylabel("응답 비율 (%)")
     ax.set_xlabel("성취수준")

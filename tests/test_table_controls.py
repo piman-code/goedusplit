@@ -124,6 +124,38 @@ class TableControlTests(unittest.TestCase):
         for c in range(30):table.setColumnWidth(c,20)
         enable_table_columns(table);self.app.processEvents()
         self.assertTrue(all(table.columnWidth(c)>=table.sizeHintForColumn(c) for c in range(30)))
+    def small_table(self,headers):
+        table=QTableWidget(2,len(headers));self.addCleanup(table.close)
+        table.setHorizontalHeaderLabels(headers)
+        for r in range(2):
+            for c in range(len(headers)):table.setItem(r,c,QTableWidgetItem(f'{r}{c}'))
+        table.resize(500,200);table.show();self.app.processEvents()
+        return table
+    def test_copy_selection_as_tab_separated_text_with_headers(self):
+        # 제안 6: results could not be moved to Excel or Hangul.
+        from PySide6.QtWidgets import QTableWidgetSelectionRange
+        table=self.small_table(['문항','정답률','변별도']);control=enable_table_columns(table)
+        table.setRangeSelected(QTableWidgetSelectionRange(0,0,1,1),True)
+        control.copy_selection()
+        self.assertEqual('문항\t정답률\n00\t01\n10\t11',QApplication.clipboard().text())
+    def test_ctrl_c_copies_the_selection(self):
+        from PySide6.QtGui import QKeySequence
+        table=self.small_table(['문항','정답률']);enable_table_columns(table)
+        table.selectRow(1);QApplication.clipboard().clear()
+        QTest.keySequence(table.viewport(),QKeySequence.Copy);self.app.processEvents()
+        self.assertEqual('문항\t정답률\n10\t11',QApplication.clipboard().text())
+    def test_student_table_copies_only_after_the_real_identity_warning(self):
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QMessageBox
+        table=self.small_table(['반/번호','이름','성취도']);control=enable_table_columns(table)
+        table.selectAll();QApplication.clipboard().setText('before')
+        with patch.object(QMessageBox,'warning',return_value=QMessageBox.No) as warning:
+            control.copy_selection()
+        warning.assert_called_once()
+        self.assertEqual('before',QApplication.clipboard().text())
+        with patch.object(QMessageBox,'warning',return_value=QMessageBox.Yes):
+            control.copy_selection()
+        self.assertTrue(QApplication.clipboard().text().startswith('반/번호\t이름\t성취도'))
     def test_frozen_header_drag_syncs_main_and_other_rows(self):
         table=self.table();frozen=install_frozen_columns(table,2)
         control=enable_table_columns(table);self.app.processEvents()

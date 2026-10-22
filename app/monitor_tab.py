@@ -388,9 +388,14 @@ def render_monitor_tab(window):
     if hasattr(window, "canvas_monitor_trend"):
         try:
             course = window._course_round_records()
-        except Exception:
-            course = []
-        window.canvas_monitor_trend.set_figure(charts.fig_round_trend(round_history.trend(course) if course else None))
+        except Exception as error:
+            # Say so: an empty trend here read as "nothing saved yet" (제안 11). Files are left as they are.
+            message = f"회차 기록을 읽지 못했습니다 ({error}). 기록 파일은 그대로 두었습니다."
+            window.canvas_monitor_trend.set_placeholder(message)
+            window.statusBar().showMessage(message, 8000)
+        else:
+            window.canvas_monitor_trend.set_figure(
+                charts.fig_round_trend(round_history.trend(course) if course else None))
 
     window.table_monitor.setSortingEnabled(False)
     window.table_monitor.setRowCount(len(rows))

@@ -156,6 +156,18 @@ class MonitorLayoutTests(unittest.TestCase):
                         self.assertTrue(all(size > 0 for i, size in enumerate(splitter.sizes())
                                             if not splitter.widget(i).isHidden()))
 
+    def test_unreadable_round_history_is_reported_not_called_empty(self):
+        # 제안 11: a broken round record showed "추이는 회차가 2개 이상이면…" as if nothing was saved.
+        from app.analysis import analyze_overall, build_score_matrix
+        from tests.test_work_sessions import synthetic_domain
+        window = self.window
+        window.exam, _perform = synthetic_domain()
+        window.overall = analyze_overall(window.exam, build_score_matrix(window.exam)[0])
+        with patch.object(window, "_course_round_records", side_effect=OSError("권한 없음")):
+            window._render_monitor_tab()
+        self.assertIn("회차 기록을 읽지 못했습니다", window.canvas_monitor_trend._placeholder.text())
+        self.assertIn("회차 기록을 읽지 못했습니다", window.statusBar().currentMessage())
+
     def test_tall_window_still_fills_without_scrolling(self):
         self.assert_areas_do_not_overlap(1600, 1200)
 

@@ -792,6 +792,24 @@ class WorkSessionController(QObject):
             save()
         self.capture(captured)
 
+    def confirm_close(self, after):
+        """Before the teacher closes the window: compare with the last full-work save as loading
+        does, and ask to save, close anyway or stay (제안 5). ``after`` closes the window."""
+        def inspected(current, error):
+            if error or signature(current) == self.last_saved_signature:
+                after(); return
+            box = QMessageBox(self.window); box.setWindowTitle("닫기 전에")
+            box.setText("저장하지 않은 변경이 있을 수 있습니다.\n"
+                        "(수행평가 재산정 표, 모니터링 기준값, AI 검토 원문 등)\n현재 작업을 저장하고 닫을까요?")
+            save = box.addButton("저장 후 닫기", QMessageBox.AcceptRole)
+            discard = box.addButton("저장하지 않고 닫기", QMessageBox.DestructiveRole)
+            box.addButton("취소", QMessageBox.RejectRole); box.exec()
+            if box.clickedButton() is save:
+                self.save_dialog(after)
+            elif box.clickedButton() is discard:
+                after()
+        self.capture(inspected)
+
     def open_dialog(self):
         try:
             self._idle()
